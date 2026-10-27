@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pivot"
+version = "0.1.0"
+description = "PIVOT: turn a short video of a room into a 3D scene an agent can reason about and rearrange."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Marina Beguin" }]
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "openai>=1.50",
+    "pillow>=10.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "mypy>=1.10", "pylint>=3.2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["pivot"]
+
+[[tool.mypy.overrides]]
+module = ["scipy.*"]
+ignore_missing_imports = true
+
+[tool.pylint.main]
+source-roots = ["src"]
+load-plugins = ["pylint.extensions.docparams"]
+extension-pkg-allow-list = ["scipy"]
+
+[tool.pylint.format]
+max-line-length = 100
+
+[tool.pylint.basic]
+good-names = ["i", "j", "k", "x", "y", "z", "n", "xy", "ax", "ay", "bx", "by", "_"]
+
+[tool.pylint.design]
+max-args = 8
+max-positional-arguments = 8
+max-attributes = 10
+
+[tool.pylint.parameter_documentation]
+accept-no-param-doc = false
+accept-no-raise-doc = false
+accept-no-return-doc = false
+accept-no-yields-doc = false
+default-docstring-type = "google"
+
+[tool.pylint."messages control"]
+disable = ["too-few-public-methods"]

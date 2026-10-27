@@ -1,0 +1,97 @@
+"""Back-projection of depth pixels to world points."""
+
+import numpy as np
+from scipy import ndimage
+
+from pivot.geometry.types import BoolArray, FloatArray
+from pivot.reconstruction.types import Reconstruction
+
+
+def backproject(depth: FloatArray, intrinsics: FloatArray, cam_to_world: FloatArray,
+                mask: BoolArray | None = None, max_depth: float = 8.0) -> FloatArray:
+    """Lifts valid depth pixels to world coordinates.
+
+    Args:
+        depth: (H, W) depth along the optical axis, in meters; 0 is invalid.
+        intrinsics: (3, 3) intrinsics at depth resolution.
+        cam_to_world: (4, 4) camera-to-world transform.
+        mask: Optional (H, W) mask restricting the pixels to lift.
+        max_depth: Depths beyond this are discarded as unreliable.
+
+    Returns:
+        (N, 3) world points.
+    """
+    valid = (depth > 0) & (depth < max_depth)
+    if mask is not None:
+        valid &= mask
+    rows, cols = np.nonzero(valid)
+    z = depth[rows, cols].astype(np.float64)
+    fx, fy, cx, cy = intrinsics[0, 0], intrinsics[1, 1], intrinsics[0, 2], intrinsics[1, 2]
+    # Pixel centers sit at integer + 0.5 in the OpenCV convention used by ScanNet++.
+    camera = np.column_stack([(cols + 0.5 - cx) / fx * z, (rows + 0.5 - cy) / fy * z, z])
+    result: FloatArray = camera @ cam_to_world[:3, :3].T + cam_to_world[:3, 3]
+    return result
+
+
+def resize_mask(mask: BoolArray, size: tuple[int, int]) -> BoolArray:
+    """Resizes a mask with nearest-neighbor sampling.
+
+    Args:
+        mask: (H, W) mask.
+        size: Target ``(width, height)``.
+
+    Returns:
+        The resized (height, width) mask.
+    """
+    width, height = size
+    if mask.shape == (height, width):
+        return mask
+    rows = ((np.arange(height) + 0.5) * mask.shape[0] / height).astype(int)
+    cols = ((np.arange(width) + 0.5) * mask.shape[1] / width).astype(int)
+    result: BoolArray = mask[rows[:, None], cols[None, :]]
+    return result
+
+
+def masked_points(recon: Reconstruction, frame: int, mask: BoolArray,
+                  erode: int = 1, max_depth: float = 8.0) -> FloatArray:
+    """Lifts the pixels of one frame's mask to world points.
+
+    Masks are eroded first: depth at object boundaries mixes foreground and
+    background and would smear the object towards the wall behind it.
+
+    Args:
+        recon: The reconstruction.
+        frame: Frame index.
+        mask: Mask at any resolution.
+        erode: Erosion radius in depth pixels.
+        max_depth: Depths beyond this are discarded.
+
+    Returns:
+        (N, 3) world points.
+    """
+    small = resize_mask(mask, recon.depth_size)
+    if erode > 0:
+        small = ndimage.binary_erosion(small, iterations=erode)
+    return backproject(recon.depths[frame], recon.depth_intrinsics(frame),
+                       recon.cam_to_world[frame], small, max_depth)
+
+
+def scene_points(recon: Reconstruction, pixel_stride: int = 4,
+                 max_depth: float = 8.0) -> FloatArray:
+    """Lifts a subsample of all depth pixels, for whole-scene analysis.
+
+    Args:
+        recon: The reconstruction.
+        pixel_stride: Keep one pixel out of ``pixel_stride`` along each axis.
+        max_depth: Depths beyond this are discarded.
+
+    Returns:
+        (N, 3) world points.
+    """
+    width, height = recon.depth_size
+    grid = np.zeros((height, width), dtype=bool)
+    grid[::pixel_stride, ::pixel_stride] = True
+    clouds = [backproject(recon.depths[frame], recon.depth_intrinsics(frame),
+                          recon.cam_to_world[frame], grid, max_depth)
+              for frame in range(len(recon))]
+    return np.vstack(clouds)
