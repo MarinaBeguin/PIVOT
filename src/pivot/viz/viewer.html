@@ -15,6 +15,8 @@
   #panel { left: 12px; width: 260px; }
   #controls { right: 12px; width: 290px; display: none; }
   .panel h1 { font-size: 15px; margin: 0 0 4px; }
+  #sceneMenu { width: 100%; margin: 4px 0 6px; background: #0006; color: var(--text);
+               border: 1px solid #fff3; border-radius: 4px; padding: 4px 6px; font: inherit; }
   .panel h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
   .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
   .panel label { display: block; margin: 4px 0; cursor: pointer; }
@@ -60,6 +62,7 @@
 <body>
 <div id="panel" class="panel">
   <h1 id="title">PIVOT scene</h1>
+  <select id="sceneMenu" style="display:none" title="Choose a room"></select>
   <div class="meta" id="meta"></div>
   <label><input type="checkbox" id="showPoints" checked> Point cloud</label>
   <label><input type="checkbox" id="showBoxes" checked> Object boxes</label>
@@ -263,6 +266,15 @@ window.addEventListener("keydown", e => {
 });
 
 document.getElementById("title").textContent = data.title;
+// Every request names this page's room; the server keeps one session per room.
+const scoped = path => data.scene
+  ? `${path}${path.includes("?") ? "&" : "?"}scene=${encodeURIComponent(data.scene)}` : path;
+if (data.scenes && data.scenes.length > 1) {
+  const menu = document.getElementById("sceneMenu");
+  for (const room of data.scenes) menu.add(new Option(room.title, room.id, false, room.id === data.scene));
+  menu.onchange = () => { location.href = `/?scene=${encodeURIComponent(menu.value)}`; };
+  menu.style.display = "";
+}
 document.getElementById("meta").textContent =
   `${data.objects.length} objects · ${(positions.length / 3).toLocaleString()} points`;
 for (const [id, group] of [["showPoints", cloud], ["showBoxes", boxGroup],
@@ -377,7 +389,7 @@ renderer.domElement.addEventListener("pointerup", e => {
 });
 
 async function callTool(name, args) {
-  const response = await fetch(`/api/tools/${name}`, {
+  const response = await fetch(scoped(`/api/tools/${name}`), {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args) });
   return response.json();
 }
@@ -484,7 +496,7 @@ document.getElementById("undo").onclick = async () => {
   if (answer.objects) applyObjects(answer.objects);
 };
 document.getElementById("reset").onclick = async () => {
-  const objects = await (await fetch("/api/reset", { method: "POST" })).json();
+  const objects = await (await fetch(scoped("/api/reset"), { method: "POST" })).json();
   applyObjects(objects);
   clearSelection();
   chatLog.textContent = "";  // The server starts a new conversation too.
@@ -548,7 +560,7 @@ function animate(id, carried, waypoints) {
 }
 
 if (data.interactive) document.getElementById("controls").style.display = "block";
-document.getElementById("plan").onclick = () => window.open("/instructions", "_blank");
+document.getElementById("plan").onclick = () => window.open(scoped("/instructions"), "_blank");
 
 // Requests in words: the agent answers, and the moves it made are played back.
 const chatLog = document.getElementById("chatLog");
@@ -569,7 +581,7 @@ async function sendChat() {
   chatLine("user", message);
   const pending = chatLine("agent", "Thinking…");
   try {
-    const answer = await (await fetch("/api/chat", {
+    const answer = await (await fetch(scoped("/api/chat"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }) })).json();
     if (answer.error) { pending.textContent = answer.error; return; }
@@ -591,7 +603,7 @@ async function sendChat() {
 
 // On the public demo, each visitor has a few requests a day: say how many are left.
 async function showLimits() {
-  const limits = await (await fetch("/api/limits")).json();
+  const limits = await (await fetch(scoped("/api/limits"))).json();
   if (!limits.public) return;
   document.getElementById("chatLimits").textContent = limits.budget_spent
     ? "The public demo has used its budget: run PIVOT yourself (see the README)."
@@ -656,7 +668,7 @@ async function stopRecording() {
   mic.textContent = "Transcribing…";
   mic.disabled = true;
   try {
-    const result = await (await fetch("/api/transcribe", {
+    const result = await (await fetch(scoped("/api/transcribe"), {
       method: "POST", headers: { "Content-Type": "audio/wav" },
       body: wavBytes(chunks, context.sampleRate) })).json();
     if (result.error) { chatLine("agent", result.error); return; }

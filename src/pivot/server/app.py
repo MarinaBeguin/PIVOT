@@ -11,6 +11,7 @@ With ``--public``, requests are priced and limited (:mod:`pivot.server.limits`).
 Run locally::
 
     python -m pivot.server --scene-dir outputs/b20a261fdf --port 8000 [--chat]
+    python -m pivot.server --scene-dir Office=outputs/office --scene-dir Classroom=outputs/class
 """
 
 from __future__ import annotations
@@ -20,8 +21,10 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import wave
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -43,7 +46,7 @@ from pivot.server.speech import Transcriber, read_wav, transcriber_from_env
 from pivot.server.visitors import COOKIE, Visitor, Visitors
 from pivot.viz.plan import instructions_page
 from pivot.viz.pointcloud import ColorArray
-from pivot.viz.web import render_viewer
+from pivot.viz.web import RoomMenu, render_viewer
 
 _MUTATING = {"move_object", "make_room_and_move", "undo"}
 # About a minute of 16 kHz 16-bit mono audio.
@@ -139,21 +142,18 @@ def _audio_seconds(audio: bytes) -> float:
 
 # The routes are local functions: each counts as a local variable.
 # pylint: disable-next=too-many-locals
-def create_app(scene: Scene, points: FloatArray, colors: ColorArray,
-               title: str = "PIVOT scene",
+def create_app(rooms: list[Room],
                agent_factory: Callable[[Session], Agent] | None = None,
                transcriber: Transcriber | None = None,
                meter: Meter | None = None) -> FastAPI:
-    """Creates the web application for one scene.
+    """Creates the web application for one or several rooms.
 
-    Each visitor works on their own copy of the scene (see
+    The room of a request is given by its ``scene`` query parameter (the first
+    room by default); each visitor works on their own copy of each room (see
     :mod:`pivot.server.visitors`).
 
     Args:
-        scene: The initial scene.
-        points: (N, 3) point cloud shown in the viewer.
-        colors: (N, 3) RGB colors.
-        title: Page title.
+        rooms: The rooms, the default first; ids must be unique.
         agent_factory: Creates the agent of a session; None disables requests in words.
         transcriber: Turns spoken requests into text; None disables the microphone.
         meter: Prices requests and enforces a budget; None for a private server.
@@ -164,10 +164,14 @@ def create_app(scene: Scene, points: FloatArray, colors: ColorArray,
     app = FastAPI(title="PIVOT")
     # The page carries the point cloud: several megabytes, which compress well.
     app.add_middleware(GZipMiddleware, minimum_size=1000)
-    visitors = Visitors(scene)
-    page = render_viewer(scene, points, colors, title, interactive=True,
-                         chat=agent_factory is not None,
-                         voice=agent_factory is not None and transcriber is not None)
+    by_id = {room.room_id: room for room in rooms}
+    visitors = Visitors({room.room_id: room.scene for room in rooms})
+    menu = [(room.room_id, room.title) for room in rooms]
+    pages = {room.room_id: render_viewer(
+        room.scene, room.points, room.colors, room.title, interactive=True,
+        chat=agent_factory is not None,
+        voice=agent_factory is not None and transcriber is not None,
+        menu=RoomMenu(room.room_id, menu)) for room in rooms}
 
     @app.middleware("http")
     async def visitor_session(request: Request,
@@ -181,8 +185,9 @@ def create_app(scene: Scene, points: FloatArray, colors: ColorArray,
         Returns:
             The route's response.
         """
-        token, request.state.visitor = visitors.get(request.cookies.get(COOKIE))
-        request.state.token = token
+        room = by_id.get(request.query_params.get("scene", ""), rooms[0])
+        token, request.state.visitor = visitors.get(request.cookies.get(COOKIE), room.room_id)
+        request.state.token, request.state.room = token, room
         response = await call_next(request)
         if request.cookies.get(COOKIE) != token:
             response.set_cookie(COOKIE, token, httponly=True, samesite="lax")
@@ -202,13 +207,16 @@ def create_app(scene: Scene, points: FloatArray, colors: ColorArray,
         return meter.visitor(request.headers, request.client.host if request.client else None)
 
     @app.get("/", response_class=HTMLResponse)
-    def viewer() -> str:
-        """Serves the viewer page.
+    def viewer(request: Request) -> str:
+        """Serves the viewer page of the requested room.
+
+        Args:
+            request: The request.
 
         Returns:
             The HTML page.
         """
-        return page
+        return pages[request.state.room.room_id]
 
     @app.get("/instructions", response_class=HTMLResponse)
     def moving_plan(request: Request) -> str:
@@ -222,7 +230,8 @@ def create_app(scene: Scene, points: FloatArray, colors: ColorArray,
         """
         session: Session = request.state.visitor.session
         initial = session.history[0] if session.history else session.scene
-        return instructions_page(session.scene, instructions(initial, session.motions), title)
+        return instructions_page(session.scene, instructions(initial, session.motions),
+                                 request.state.room.title)
 
     @app.get("/api/objects")
     def objects(request: Request) -> list[dict[str, Any]]:
@@ -329,9 +338,28 @@ def create_app(scene: Scene, points: FloatArray, colors: ColorArray,
         Returns:
             The objects, sorted by id.
         """
-        return _objects(visitors.reset(request.state.token).session)
+        return _objects(visitors.reset(request.state.token, request.state.room.room_id).session)
 
     return app
+
+
+@dataclass(frozen=True)
+class Room:
+    """A room the server offers: its scene, the point cloud shown, and its name.
+
+    Attributes:
+        room_id: Short identifier, used in addresses (``?scene=office``).
+        title: Name shown to visitors.
+        scene: The scene every visitor starts from.
+        points: (N, 3) point cloud shown in the viewer.
+        colors: (N, 3) RGB colors.
+    """
+
+    room_id: str
+    title: str
+    scene: Scene
+    points: FloatArray
+    colors: ColorArray
 
 
 def _subsample(points: FloatArray, colors: ColorArray,
@@ -352,42 +380,73 @@ def _subsample(points: FloatArray, colors: ColorArray,
     return points[keep], colors[keep]
 
 
-def load_app(scene_dir: Path, env_file: Path | None = None, max_points: int | None = None,
-             public: bool = False) -> FastAPI:
-    """Creates the application for a directory written by :mod:`pivot.build`.
+def load_room(spec: str, max_points: int | None = None) -> Room:
+    """Loads a room from a directory written by :mod:`pivot.build`.
 
     Args:
-        scene_dir: Directory holding ``scene.json`` and ``cloud.npz``.
-        env_file: API configuration file; requests in words are enabled if given.
+        spec: ``Title=path`` or a bare path; the title defaults to the
+            directory's name, and the room id is the title in lowercase.
         max_points: Most points of the cloud sent to the page; all if None.
+
+    Returns:
+        The room.
+    """
+    title, _, path = spec.rpartition("=")
+    scene_dir = Path(path)
+    title = title or scene_dir.name
+    cloud = np.load(scene_dir / "cloud.npz")
+    points, colors = _subsample(cloud["points"], cloud["colors"], max_points)
+    room_id = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
+    return Room(room_id, title, Scene.load(scene_dir / "scene.json"), points, colors)
+
+
+def _public_meter(config: MetaConfig | None) -> Meter:
+    """Prices and limits the requests of a public server, from the environment.
+
+    The budget comes from :meth:`Budget.from_env`; the ledger is kept at
+    ``PIVOT_LEDGER`` (in memory if unset); the visitor key salt is
+    ``PIVOT_VISITOR_SALT`` or derived from the API key; ``PIVOT_PROXY_HOPS``
+    proxies are trusted. Open-weight models cost nothing.
+
+    Args:
+        config: API configuration, if requests in words are enabled.
+
+    Returns:
+        The meter.
+    """
+    api = config is not None and os.environ.get("PIVOT_BACKEND", "api").lower() != "open"
+    ledger = os.environ.get("PIVOT_LEDGER")
+    salt = os.environ.get("PIVOT_VISITOR_SALT") or hmac.new(
+        (config.api_key if config else "pivot").encode(), b"pivot-visitors",
+        hashlib.sha256).hexdigest()
+    return Meter(SpendLedger(Budget.from_env(), Path(ledger) if ledger else None), salt,
+                 int(os.environ.get("PIVOT_PROXY_HOPS", "1")),
+                 partial(chat_cost, config.agent_model) if api and config else
+                 (lambda usage: 0.0),
+                 TRANSCRIBE_PER_SECOND if api else 0.0)
+
+
+def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: int | None = None,
+             public: bool = False) -> FastAPI:
+    """Creates the application for rooms written by :mod:`pivot.build`.
+
+    Args:
+        scene_dirs: The rooms, as accepted by :func:`load_room`, the default first.
+        env_file: API configuration file; requests in words are enabled if given.
+        max_points: Most points of each cloud sent to the page; all if None.
         public: Whether the server is open to anyone: requests are then priced
-            and limited (:class:`Budget` from the environment; the ledger is kept
-            at ``PIVOT_LEDGER``, the visitor key salt is ``PIVOT_VISITOR_SALT`` or
-            derived from the API key, ``PIVOT_PROXY_HOPS`` trusted proxies).
+            and limited (see :func:`_public_meter`).
 
     Returns:
         The application.
     """
-    cloud = np.load(scene_dir / "cloud.npz")
     config = MetaConfig.from_env(env_file) if env_file else None
     # A conversation may rearrange a whole room: many more steps than one move.
     factory = partial(Agent, config=config, max_steps=40) if config else None
-    meter = None
-    if public:
-        api = config is not None and os.environ.get("PIVOT_BACKEND", "api").lower() != "open"
-        ledger = os.environ.get("PIVOT_LEDGER")
-        salt = os.environ.get("PIVOT_VISITOR_SALT") or hmac.new(
-            (config.api_key if config else "pivot").encode(), b"pivot-visitors",
-            hashlib.sha256).hexdigest()
-        meter = Meter(SpendLedger(Budget.from_env(), Path(ledger) if ledger else None), salt,
-                      int(os.environ.get("PIVOT_PROXY_HOPS", "1")),
-                      partial(chat_cost, config.agent_model) if api and config else
-                      (lambda usage: 0.0),
-                      TRANSCRIBE_PER_SECOND if api else 0.0)
-    points, colors = _subsample(cloud["points"], cloud["colors"], max_points)
-    return create_app(Scene.load(scene_dir / "scene.json"), points, colors,
-                      title=f"PIVOT - {scene_dir.name}", agent_factory=factory,
-                      transcriber=transcriber_from_env(config) if config else None, meter=meter)
+    return create_app([load_room(spec, max_points) for spec in scene_dirs],
+                      agent_factory=factory,
+                      transcriber=transcriber_from_env(config) if config else None,
+                      meter=_public_meter(config) if public else None)
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -397,7 +456,8 @@ def main(argv: list[str] | None = None) -> None:
         argv: Command-line arguments; ``sys.argv`` if None.
     """
     parser = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
-    parser.add_argument("--scene-dir", type=Path, required=True)
+    parser.add_argument("--scene-dir", action="append", required=True,
+                        help="a room: Title=path or a path; repeat for several rooms")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--chat", action="store_true", help="answer requests in words")
