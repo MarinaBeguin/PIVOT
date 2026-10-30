@@ -2,6 +2,7 @@
 
 *From seeing a room to proving how to change it.*
 
+[![Live demo](https://img.shields.io/badge/live%20demo-try%20PIVOT-2f9e6b)](https://marina-beguin--pivot-demo-web.modal.run)
 [![CI](https://github.com/MarinaBeguin/PIVOT/actions/workflows/ci.yml/badge.svg)](https://github.com/MarinaBeguin/PIVOT/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![Meta models](https://img.shields.io/badge/Meta-SAM%203.1%20·%20Muse%20·%20Llama-0866FF)
@@ -19,7 +20,7 @@ reasoning about real space with answers they can prove. The repository was creat
 
 | | |
 |---|---|
-| **Live demo** | *coming soon* |
+| **Live demo** | **[marina-beguin--pivot-demo-web.modal.run](https://marina-beguin--pivot-demo-web.modal.run)**: the scanned office, the agent and the voice, in the browser, nothing to install |
 | **Video walkthrough (3 min)** | *coming soon* |
 
 ![The PIVOT viewer: the reconstructed office, its 23 objects, and the "Ask PIVOT" panel](assets/viewer.jpg)
@@ -225,6 +226,21 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 | `PIVOT_SAM_WORKERS` | 5 (API), 3 (GPU) | Prompts tracked at the same time |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
 | `PORT` | 8765 | Port of the viewer |
+
+### The public demo
+
+The [live demo](https://marina-beguin--pivot-demo-web.modal.run) serves the office of the results above, on Modal. Click an object then a
+spot to move it, or ask PIVOT in words or by voice (button "Speak"; answers can be read aloud);
+"Moving plan" opens the printable steps. Each visitor works on their own copy of the room.
+Requests to the agent cost real API calls, so the demo has a budget: 20 requests per visitor
+per day, and a total cap; the page shows how many are left. The first visit after a quiet
+period takes about 10 seconds, while the server starts.
+
+Deploy your own (needs a Modal account; the key is read from .env):
+
+```bash
+PIVOT_DEMO_SCENE=<out_dir>/scene modal deploy deploy/modal_app.py
+```
 
 ### Docker (serve a built scene)
 
