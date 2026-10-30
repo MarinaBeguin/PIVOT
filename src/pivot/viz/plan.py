@@ -16,6 +16,8 @@ from pivot.planning.access import WALKING_WIDTH, WHEELCHAIR_WIDTH, AccessReport,
 from pivot.planning.instructions import Step
 from pivot.scene.graph import Scene, is_opening
 
+# Opens the print dialog once the page is shown; "Save as PDF" is one of its printers.
+SAVE_PDF_ON_LOAD = " onload='print()'"
 _WIDTH_PX = 640.0
 _PAD_PX = 16.0
 _STYLE = """
@@ -221,13 +223,16 @@ def _access_text(final: Scene) -> tuple[str, bool]:
                "A person walking cannot either."), False)
 
 
-def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT") -> str:
+def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
+                      save_pdf: bool = False) -> str:
     """Builds the printable instructions page.
 
     Args:
         final: The scene after every step.
         steps: The steps, in order.
         title: Name of the scene.
+        save_pdf: Whether the page opens the browser's print dialog as soon as
+            it is loaded, where "Save as PDF" gives the PDF.
 
     Returns:
         A standalone HTML page.
@@ -241,11 +246,12 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT") -> 
             "<p>No move yet: ask PIVOT to rearrange the room, then open this page again.</p>")
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
-            f"<title>Moving plan</title><style>{_STYLE}</style></head><body>"
+            f"<title>Moving plan - {html.escape(title)}</title><style>{_STYLE}</style></head>"
+            f"<body{SAVE_PDF_ON_LOAD if save_pdf else ''}>"
             f"<h1>Moving plan</h1><div class='muted'>{html.escape(title)} · {summary} "
             f"Dashed: where an object starts; orange: where it ends; green: floor a "
             f"wheelchair can reach.</div>"
-            f"<button onclick='print()'>Print or save as PDF</button>"
+            f"<button onclick='print()'>Save as PDF or print</button>"
             f"{plan_svg(final, steps, check_access(final, WHEELCHAIR_WIDTH))}"
             f"<p class='access{'' if accessible else ' no'}'>{html.escape(access_text)}</p>"
             f"{body}</body></html>")

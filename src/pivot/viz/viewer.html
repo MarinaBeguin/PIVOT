@@ -91,7 +91,7 @@
     <button id="reset">Reset</button>
   </div>
   <div class="row">
-    <button id="plan" title="Printable steps and plan of the moves made">Moving plan</button>
+    <button id="plan" title="The moves made so far, as numbered steps and a plan, to save as a PDF">Moving plan (PDF)</button>
   </div>
   <div id="result"></div>
   <div class="row"><button id="makeRoom" class="primary" style="display:none">Make room &amp; move</button></div>
@@ -562,7 +562,7 @@ function animate(id, carried, waypoints) {
 }
 
 if (data.interactive) document.getElementById("controls").style.display = "block";
-document.getElementById("plan").onclick = () => window.open(scoped("/instructions"), "_blank");
+document.getElementById("plan").onclick = () => window.open(scoped("/instructions?pdf=1"), "_blank");
 
 // Requests in words: the agent answers, and the moves it made are played back.
 const chatLog = document.getElementById("chatLog");

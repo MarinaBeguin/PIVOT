@@ -222,6 +222,8 @@ def create_app(rooms: list[Room],
     def moving_plan(request: Request) -> str:
         """Serves the moving instructions of the visitor's moves so far.
 
+        With ``?pdf=1`` the page opens the browser's dialog to save it as a PDF.
+
         Args:
             request: The request.
 
@@ -231,7 +233,8 @@ def create_app(rooms: list[Room],
         session: Session = request.state.visitor.session
         initial = session.history[0] if session.history else session.scene
         return instructions_page(session.scene, instructions(initial, session.motions),
-                                 request.state.room.title)
+                                 request.state.room.title,
+                                 save_pdf=request.query_params.get("pdf") == "1")
 
     @app.get("/api/objects")
     def objects(request: Request) -> list[dict[str, Any]]:
