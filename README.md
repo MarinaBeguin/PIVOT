@@ -11,8 +11,9 @@ rearrange it.** PIVOT rebuilds the room in 3D, finds every object with **SAM 3.1
 collisions on the real shapes, room to pass, ceiling height, a complete collision-free path.
 The language model never makes up geometry: every answer is backed by a computation.
 
-Built for the **Meta Global AI Hackathon 2026** (October 26 – November 4, 2026); the repository
-was created on October 27.
+Built for the **Meta Global AI Hackathon 2026** (October 26 – November 4, 2026) — **Indie
+developer track, "Push the Frontier" theme**: it gives assistants and robots a new capability,
+reasoning about real space with answers they can prove. The repository was created on October 27.
 
 | | |
 |---|---|
@@ -167,7 +168,7 @@ while understanding language. Reproduce with `python -m pivot.eval` (see below).
 
 | | **API version** (`run_api.sh`) | **Open-weight version** (`run_open.sh`) |
 |---|---|---|
-| Needs | A Meta Model API key | GPUs (a Slurm cluster), no key |
+| Needs | A Meta Model API key | An NVIDIA GPU (SAM 3.1 peaked at 45 GB on an A6000), no key |
 | Object list | Muse Spark (up to 20 kinds) | Llama 3.2 Vision (up to 8 kinds) |
 | Segmentation | SAM 3.1 through the API, 5 prompts in parallel | SAM 3.1 self-hosted, 3 GPU jobs in parallel |
 | Agent | Muse Spark | Llama 3.1 8B (vLLM) |
@@ -207,8 +208,7 @@ bash scripts/run_open.sh <scannetpp_scene_dir> <video.mp4> <out_dir>
 
 The Meta Llama and SAM 3.1 weights are gated on Hugging Face: request access to
 `facebook/sam3.1`, `meta-llama/Llama-3.1-8B-Instruct` and `meta-llama/Llama-3.2-11B-Vision-Instruct`
-first. The cluster scripts were written for our university Slurm cluster: paths are set at their
-top and through environment variables (`SCRATCH`, `CONDA_ROOT`, `PIVOT_PYTHON`, `PIVOT_CACHE`).
+first.
 
 ### Options of both scripts
 
