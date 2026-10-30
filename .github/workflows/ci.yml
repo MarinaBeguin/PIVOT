@@ -1,9 +1,10 @@
-# Quality gates on every push and pull request: tests, type checks, lint.
-# Same checks as scripts/check.sh, which is what runs here.
+# Quality gates on every pull request, and on main once merged: tests, type
+# checks, lint. Same checks as scripts/check.sh, which is what runs here.
 name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 jobs:
