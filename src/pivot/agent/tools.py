@@ -21,8 +21,8 @@ import numpy as np
 from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import box_distance, polygon_distance
 from pivot.planning.access import WALKING_WIDTH, check_access
-from pivot.planning.handling import people_needed
-from pivot.planning.lift import plan_carried_motion, resting_box
+from pivot.planning.handling import can_be_carried, people_needed
+from pivot.planning.lift import carry_height, plan_carried_motion, resting_box
 from pivot.planning.motion import MotionOptions, MotionPlan, MotionStatus, plan_motion
 from pivot.planning.placement import check_placement, opening_warnings, propose_placements
 from pivot.planning.rearrange import plan_rearrangement
@@ -98,6 +98,7 @@ def describe_object(scene: Scene, obj: SceneObject) -> JsonDict:
         "resting_on": parents.get(obj.object_id),
         "carries": carried_objects(scene, obj.object_id),
         "people_needed": people_needed(obj),
+        "can_be_carried": can_be_carried(obj),
     }
 
 
@@ -232,6 +233,9 @@ class MoveRequest:
         carry_height_m: Carry the object with its bottom at this height, over
             lower furniture; it can then be put down on a surface. None
             slides it along the floor (unless its height must change).
+        auto_carry: Without a carrying height, decide from the object: slide
+            it, or carry it over the furniture when sliding is blocked or its
+            height changes, if it can be carried (see :func:`can_be_carried`).
     """
 
     object_id: int
@@ -242,6 +246,7 @@ class MoveRequest:
     comfort_m: float = 0.08
     snap_m: float = 0.0
     carry_height_m: float | None = None
+    auto_carry: bool = False
 
     @property
     def options(self) -> MotionOptions:
@@ -263,7 +268,7 @@ def _goal(session: Session, request: MoveRequest) -> tuple[OrientedBox, JsonDict
     object_id = request.object_id
     current = session.scene[object_id].box
     # Surfaces up to the carrying height (or the current one) can receive the object.
-    below = max(current.z_min, request.carry_height_m or 0.0)
+    below = max(current.z_min, request.carry_height_m or _auto_height(session, request) or 0.0)
     goal = resting_box(session.scene, object_id,
                        _pose(session, object_id, request.x, request.y, request.yaw_deg), below)
     snapped = (nearest_feasible_pose(session.scene, object_id, goal, request.snap_m,
@@ -277,6 +282,58 @@ def _goal(session: Session, request: MoveRequest) -> tuple[OrientedBox, JsonDict
         "yaw_deg": _round(math.degrees(snapped.yaw), 1),
         "shift_m": _round(float(np.linalg.norm(snapped.center[:2] - goal.center[:2]))),
         "reason": "The requested pose was infeasible; this is the nearest feasible one."}}
+
+
+def _auto_height(session: Session, request: MoveRequest) -> float | None:
+    """Gives the carrying height chosen automatically, for objects that can be carried.
+
+    Args:
+        session: The session.
+        request: The move.
+
+    Returns:
+        The height, or None if the request does not ask for it or the object
+        cannot be carried.
+    """
+    if not request.auto_carry or request.carry_height_m is not None:
+        return None
+    if not can_be_carried(session.scene[request.object_id]):
+        return None
+    return carry_height(session.scene, request.object_id)
+
+
+def _auto_plan(session: Session, request: MoveRequest, goal: OrientedBox) -> MotionPlan:
+    """Slides an object if it can, else carries it over the furniture if it can be carried.
+
+    Args:
+        session: The session.
+        request: The move, with ``auto_carry``.
+        goal: Its goal pose, resting on its support.
+
+    Returns:
+        The plan.
+    """
+    obj = session.scene[request.object_id]
+    start = obj.box
+    slid = None
+    if abs(goal.z_min - start.z_min) < 1e-3:
+        slid = plan_motion(session.scene, request.object_id, goal, request.options)
+        if slid.status is MotionStatus.SUCCESS:
+            return slid
+    height = _auto_height(session, request)
+    if height is None:
+        return slid or MotionPlan(
+            MotionStatus.INVALID_GOAL, request.object_id,
+            message=f"The {obj.label} is too heavy or too tall to lift: it can only slide "
+                    "along the floor.")
+    carried = plan_carried_motion(session.scene, request.object_id, goal,
+                                  max(height, start.z_min, goal.z_min), request.options)
+    if carried.status is not MotionStatus.SUCCESS and slid is not None:
+        return slid
+    if slid is not None:
+        return dataclasses.replace(carried, message=f"Carried over the furniture, as sliding "
+                                                    f"was blocked. {carried.message}")
+    return carried
 
 
 def _plan(session: Session, request: MoveRequest, goal: OrientedBox) -> MotionPlan:
@@ -293,6 +350,8 @@ def _plan(session: Session, request: MoveRequest, goal: OrientedBox) -> MotionPl
     Returns:
         The plan.
     """
+    if request.auto_carry and request.carry_height_m is None:
+        return _auto_plan(session, request, goal)
     start = session.scene[request.object_id].box
     same_height = abs(goal.z_min - start.z_min) < 1e-3
     if request.carry_height_m is None and same_height:
@@ -483,7 +542,7 @@ _POSE = {
 }
 _COMFORT = {"type": "number", "description": "Extra margin to keep when possible (default 0.08 "
                                              "m); 0 gives the least-effort path."}
-_CARRY = {"type": "number", "description": "Carry the object (light objects only) with its "
+_CARRY = {"type": "number", "description": "Carry the object (only if can_be_carried) with its "
                                            "bottom at this height in meters, over lower "
                                            "furniture; it can then be put down on a table or a "
                                            "shelf. Default: slide it along the floor."}

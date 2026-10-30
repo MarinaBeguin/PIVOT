@@ -75,7 +75,7 @@
 <div id="controls" class="panel">
   <h2>Move an object</h2>
   <div class="hint">Click an object, then click where it should go: under a table, on a desk
-    (with "Carry it"), anywhere. After a move, the next click picks a new object; to change
+    (light objects are carried), anywhere. After a move, the next click picks a new object; to change
     it before, use "Change", the list, Ctrl-click or Esc.
     Every move is planned and checked against the real geometry before it happens.</div>
   <div class="row"><span class="key">Object</span><span id="selected">none</span>
@@ -83,7 +83,6 @@
   <div class="row"><span class="key">Target</span><span id="target">none</span></div>
   <div class="row"><span class="key">Rotation</span>
     <input type="number" id="yaw" step="15" placeholder="keep"><span class="hint">degrees</span></div>
-  <label><input type="checkbox" id="carry"> Carry it, over furniture (light objects)</label>
   <div class="row">
     <button id="check" disabled>Check</button>
     <button id="move" class="primary" disabled>Move</button>
@@ -259,7 +258,6 @@ function clearSelection() {
   document.getElementById("selected").textContent = "none";
   document.getElementById("deselect").style.display = "none";
   // Options apply to one move: the next object starts with the defaults.
-  document.getElementById("carry").checked = false;
   document.getElementById("yaw").value = "";
   setTarget(null);
 }
@@ -399,8 +397,9 @@ async function callTool(name, args) {
 function moveArguments() {
   // A click is approximate: accept the nearest feasible pose within 50 cm.
   const args = { object_id: selectedId, x: target.x, y: target.y, snap_m: 0.5 };
-  // Carried objects travel with their bottom at 90 cm, above desks.
-  if (document.getElementById("carry").checked) args.carry_height_m = 0.9;
+  // PIVOT slides the object, or carries it over the furniture (or onto a desk) when it is
+  // light and small enough: a bin or a chair, not a sofa nor a floor lamp.
+  args.auto_carry = true;
   const yaw = document.getElementById("yaw").value;
   if (yaw !== "") args.yaw_deg = parseFloat(yaw);
   return args;

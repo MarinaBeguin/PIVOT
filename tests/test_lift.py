@@ -81,3 +81,34 @@ def test_nothing_rises_above_the_ceiling() -> None:
     assert session.scene[6].box.z_min == 0.0
     high = Session(dataclasses.replace(room, ceiling=2.6))
     assert call(high, "move_object", object_id=6, x=2.0, y=2.6, carry_height_m=0.8)["moved"]
+
+
+def test_light_objects_are_carried_when_sliding_is_blocked() -> None:
+    session = Session(office())
+    # Sliding is walled off by the desks (see above): the carton is carried over them.
+    result = call(session, "move_object", object_id=5, x=3.4, y=2.4, auto_carry=True)
+    assert result["moved"], result
+    assert result["plan"]["message"].startswith("Carried over the furniture")
+    assert session.scene[5].box.z_min == 0.0
+    # Where sliding works, the object slides.
+    result = call(session, "move_object", object_id=5, x=3.4, y=1.2, auto_carry=True)
+    assert result["moved"] and max(w[3] for w in result["plan"]["waypoints"]) == 0.0
+
+
+def test_light_objects_go_onto_a_desk_and_tall_ones_do_not() -> None:
+    session = Session(office())
+    result = call(session, "move_object", object_id=3, x=2.0, y=2.6, auto_carry=True)
+    assert result["moved"], result
+    assert abs(session.scene[3].box.z_min - session.scene[2].box.z_max) < 1e-6
+    # On the walled-off left half, like the carton: a floor lamp is too tall to carry over.
+    lamp = SceneObject(6, "floor lamp", box((0.6, 0.5, 0.8), (0.4, 0.4, 1.6)))
+    room = Session(Scene.from_objects([*office().objects.values(), lamp], office().floor))
+    assert call(room, "move_object", object_id=6, x=0.6, y=1.4, auto_carry=True)["moved"]
+    assert not call(room, "move_object", object_id=6, x=3.4, y=2.4, auto_carry=True)["moved"]
+    assert not call(room, "move_object", object_id=6, x=2.0, y=2.6, auto_carry=True)["moved"]
+
+
+def test_the_agent_is_told_what_can_be_carried() -> None:
+    objects = {o["id"]: o for o in call(Session(office()), "list_objects")["objects"]}
+    assert objects[3]["can_be_carried"] and objects[5]["can_be_carried"]
+    assert not objects[1]["can_be_carried"]  # A desk takes two people.
