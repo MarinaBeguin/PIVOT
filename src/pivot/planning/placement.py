@@ -9,6 +9,7 @@ feasible poses next to a reference object.
 from __future__ import annotations
 
 import math
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -16,9 +17,13 @@ from typing import Any
 import numpy as np
 
 from pivot.geometry.box import OrientedBox, rotation_2d, wrap_angle
-from pivot.geometry.collision import box_distance, box_penetration, polygon_distance
+from pivot.geometry.collision import (
+    box_distance_lower_bound, polygon_distance, polygon_penetration,
+)
+from pivot.geometry.solid import solid_distance, solid_penetration
+from pivot.geometry.floor import FloorMap
 from pivot.geometry.types import FloatArray
-from pivot.scene.graph import Scene, carried_objects
+from pivot.scene.graph import Scene, SceneObject, carried_boxes, carried_objects, is_opening
 
 
 class ConflictKind(str, Enum):
@@ -26,7 +31,9 @@ class ConflictKind(str, Enum):
 
     COLLISION = "collision"
     CLEARANCE = "clearance"
+    WALL_CLEARANCE = "wall_clearance"
     OFF_FLOOR = "off_floor"
+    CEILING = "ceiling"
     NOT_MOVABLE = "not_movable"
 
 
@@ -36,16 +43,23 @@ class Conflict:
 
     Attributes:
         kind: Category of the conflict.
-        amount: Magnitude in meters (penetration depth, missing clearance) or,
-            for ``OFF_FLOOR``, the fraction of the footprint off the floor.
+        amount: Magnitude in meters (penetration depth for ``COLLISION``,
+            remaining gap for the clearance kinds, height above the ceiling
+            for ``CEILING``) or, for ``OFF_FLOOR``, the fraction of the
+            footprint off the floor.
         other_id: The object involved, if any.
         other_label: Its label, for human-readable explanations.
+        carried_id: When the conflict is caused by an object carried by the
+            moved one (a monitor on a desk), that object's id.
+        carried_label: Its label.
     """
 
     kind: ConflictKind
     amount: float
     other_id: int | None = None
     other_label: str | None = None
+    carried_id: int | None = None
+    carried_label: str | None = None
 
     def describe(self) -> str:
         """Renders the conflict as a short English sentence.
@@ -54,13 +68,42 @@ class Conflict:
             A human-readable description.
         """
         other = f"the {self.other_label} (#{self.other_id})" if self.other_id is not None else ""
+        subject = (f"the {self.carried_label} (#{self.carried_id}) it carries "
+                   if self.carried_id is not None else "")
         if self.kind is ConflictKind.COLLISION:
-            return f"overlaps {other} by {100 * self.amount:.0f} cm"
+            return f"{subject}overlaps {other} by {100 * self.amount:.0f} cm"
         if self.kind is ConflictKind.CLEARANCE:
-            return f"leaves only {100 * self.amount:.0f} cm of clearance to {other}"
+            return f"{subject}leaves only {100 * self.amount:.0f} cm of clearance to {other}"
+        if self.kind is ConflictKind.WALL_CLEARANCE:
+            return f"leaves only {100 * self.amount:.0f} cm of clearance to a wall"
         if self.kind is ConflictKind.OFF_FLOOR:
             return f"{100 * self.amount:.0f}% of its footprint is outside the walkable floor"
+        if self.kind is ConflictKind.CEILING:
+            return f"{subject}would rise {100 * self.amount:.0f} cm above the ceiling"
         return "is a fixed part of the room and cannot be moved"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serializes the conflict with machine-readable magnitudes.
+
+        Returns:
+            A JSON-compatible dictionary.
+        """
+        result: dict[str, Any] = {"kind": self.kind.value, "description": self.describe()}
+        if self.kind is ConflictKind.COLLISION:
+            result["penetration_m"] = round(self.amount, 3)
+        elif self.kind in (ConflictKind.CLEARANCE, ConflictKind.WALL_CLEARANCE):
+            result["gap_m"] = round(self.amount, 3)
+        elif self.kind is ConflictKind.OFF_FLOOR:
+            result["off_floor_fraction"] = round(self.amount, 3)
+        elif self.kind is ConflictKind.CEILING:
+            result["above_ceiling_m"] = round(self.amount, 3)
+        if self.other_id is not None:
+            result["other_id"] = self.other_id
+            result["other_label"] = self.other_label
+        if self.carried_id is not None:
+            result["carried_id"] = self.carried_id
+            result["carried_label"] = self.carried_label
+        return result
 
 
 @dataclass(frozen=True)
@@ -73,6 +116,8 @@ class PlacementReport:
         conflicts: Every detected problem; empty if feasible.
         gap_to_anchor: Footprint distance to the reference object, if any.
         travel: Distance from the object's current position, in meters.
+        warnings: Remarks that do not make the pose infeasible (the object
+            stands in front of a window).
     """
 
     object_id: int
@@ -80,6 +125,7 @@ class PlacementReport:
     conflicts: list[Conflict] = field(default_factory=list)
     gap_to_anchor: float | None = None
     travel: float = 0.0
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def feasible(self) -> bool:
@@ -98,11 +144,52 @@ class PlacementReport:
             "center_xy": [round(float(v), 3) for v in self.box.center[:2]],
             "yaw_deg": round(math.degrees(self.box.yaw), 1),
             "travel_m": round(self.travel, 3),
-            "conflicts": [c.describe() for c in self.conflicts],
+            "conflicts": [c.to_dict() for c in self.conflicts],
         }
         if self.gap_to_anchor is not None:
             result["gap_to_anchor_m"] = round(self.gap_to_anchor, 3)
+        if self.warnings:
+            result["warnings"] = self.warnings
         return result
+
+
+def shrink_footprint(box: OrientedBox, margin: float) -> FloatArray:
+    """Returns a box's footprint shrunk by a margin on every side.
+
+    Args:
+        box: The box.
+        margin: Shrinking distance, in meters.
+
+    Returns:
+        The (4, 2) shrunk footprint, counter-clockwise.
+    """
+    size = box.size.copy()
+    size[:2] = np.maximum(size[:2] - 2.0 * margin, 0.0)
+    return OrientedBox(box.center, size, box.yaw).footprint()
+
+
+def _floor_conflicts(floor: FloorMap, box: OrientedBox, clearance: float,
+                     floor_margin: float) -> list[Conflict]:
+    """Checks that a footprint stands on the floor, away from walls.
+
+    Args:
+        floor: The floor map.
+        box: The candidate box.
+        clearance: Required distance to walls, in meters.
+        floor_margin: Margin of the on-floor test, see ``check_placement``.
+
+    Returns:
+        At most one conflict: off the floor, or too close to a wall.
+    """
+    fraction = floor.floor_fraction(shrink_footprint(box, floor_margin))
+    if fraction < 1.0 - 1e-9:
+        return [Conflict(ConflictKind.OFF_FLOOR, 1.0 - fraction)]
+    # The footprint grown by the clearance must stay on the floor too.
+    if clearance > 0.0 and floor.floor_fraction(
+            shrink_footprint(box, floor_margin - clearance)) < 1.0 - 1e-9:
+        gap = floor.distance_to_walls(box.footprint(), search_radius=clearance)
+        return [Conflict(ConflictKind.WALL_CLEARANCE, 0.0 if math.isinf(gap) else gap)]
+    return []
 
 
 def check_placement(
@@ -110,23 +197,30 @@ def check_placement(
     object_id: int,
     box: OrientedBox,
     clearance: float = 0.0,
-    min_floor_fraction: float = 0.95,
+    floor_margin: float = 0.025,
     collision_tolerance: float = 0.01,
+    carried: Collection[int] | None = None,
 ) -> PlacementReport:
     """Checks whether an object can be placed at a given pose.
 
-    Objects resting on the moved object travel with it and are ignored, as are
-    objects that do not intersect the moved object's height range (a chair can
-    slide under a wall-mounted shelf).
+    Objects resting on the moved object travel with it and are ignored.
+    Collisions are tested on the objects' voxel shapes when they have one, so
+    a carton can stand under a table top; otherwise on their boxes, which also
+    lets a chair slide under a wall-mounted shelf.
 
     Args:
         scene: Current scene.
         object_id: The object to place.
         box: Its proposed box. Must keep the object's size.
-        clearance: Required free distance to every other object, in meters.
-        min_floor_fraction: Minimum fraction of the footprint on walkable floor.
+        clearance: Required free distance to every other object and to walls,
+            in meters.
+        floor_margin: The footprint, shrunk by this distance on every side,
+            must lie entirely on walkable floor. Absorbs floor map
+            discretization without letting objects cross thin walls.
         collision_tolerance: Interpenetration depth tolerated, absorbing the
             noise of boxes fitted to reconstructed points.
+        carried: Ids of the objects resting on the moved object, if already
+            known. Computed from the scene otherwise.
 
     Returns:
         A report listing every conflict.
@@ -136,26 +230,126 @@ def check_placement(
     if not obj.movable:
         conflicts.append(Conflict(ConflictKind.NOT_MOVABLE, 0.0))
 
-    ignored = {object_id, *carried_objects(scene, object_id)}
-    for other in scene.objects.values():
-        if other.object_id in ignored:
-            continue
-        depth = box_penetration(box, other.box)
-        if depth > collision_tolerance:
-            conflicts.append(Conflict(ConflictKind.COLLISION, depth, other.object_id, other.label))
-        elif clearance > 0.0:
-            distance = box_distance(box, other.box)
-            if distance < clearance:
-                conflicts.append(
-                    Conflict(ConflictKind.CLEARANCE, distance, other.object_id, other.label))
+    if carried is None:
+        carried = carried_objects(scene, object_id)
+    ignored = {object_id, *carried}
+    others = [o for o in scene.objects.values()
+              if o.object_id not in ignored and not is_opening(o)]
+    conflicts += _object_conflicts(others, obj, box, clearance, collision_tolerance)
+    child_boxes = carried_boxes(scene, object_id, box) if carried else {}
+    for child_id in carried:
+        conflicts += _object_conflicts(others, scene[child_id], child_boxes[child_id],
+                                       clearance, collision_tolerance, carried=True)
+    if scene.ceiling is not None:
+        conflicts += _ceiling_conflicts(scene, box, child_boxes,
+                                        scene.ceiling + collision_tolerance)
 
     if scene.floor is not None:
-        fraction = scene.floor.floor_fraction(box.footprint())
-        if fraction < min_floor_fraction:
-            conflicts.append(Conflict(ConflictKind.OFF_FLOOR, 1.0 - fraction))
+        conflicts.extend(_floor_conflicts(scene.floor, box, clearance, floor_margin))
 
     travel = float(np.linalg.norm(box.center[:2] - obj.box.center[:2]))
-    return PlacementReport(object_id, box, conflicts, travel=travel)
+    return PlacementReport(object_id, box, conflicts, travel=travel,
+                           warnings=opening_warnings(scene, box))
+
+
+def _ceiling_conflicts(scene: Scene, box: OrientedBox, child_boxes: dict[int, OrientedBox],
+                       ceiling: float) -> list[Conflict]:
+    """Checks that an object, and what it carries, stays under the ceiling.
+
+    Args:
+        scene: The scene.
+        box: The object's proposed box.
+        child_boxes: Boxes of the objects it carries, keyed by id.
+        ceiling: Highest height allowed, in meters.
+
+    Returns:
+        One conflict per box rising above the ceiling.
+    """
+    conflicts = []
+    if box.z_max > ceiling:
+        conflicts.append(Conflict(ConflictKind.CEILING, box.z_max - ceiling))
+    for child_id, child in child_boxes.items():
+        if child.z_max > ceiling:
+            conflicts.append(Conflict(ConflictKind.CEILING, child.z_max - ceiling,
+                                      carried_id=child_id, carried_label=scene[child_id].label))
+    return conflicts
+
+
+# How far in front of an opening an object is in the way: the passage of a
+# door, the reach to a window.
+OPENING_REACH = {"door": 0.8, "window": 0.3}
+
+
+def front_zone(opening: OrientedBox, reach: float) -> OrientedBox:
+    """Returns the zone in front of and behind an opening, as wide as the opening.
+
+    The opening's long horizontal side is its width; the zone extends along
+    the other side, on both faces (which one opens onto the room is unknown).
+
+    Args:
+        opening: Box of the door or window.
+        reach: Depth of the zone on each face, in meters.
+
+    Returns:
+        The zone, on the floor, as tall as the opening.
+    """
+    size = opening.size.copy()
+    depth_axis = 0 if size[0] < size[1] else 1
+    size[depth_axis] += 2.0 * reach
+    return OrientedBox(opening.center.copy(), size, opening.yaw)
+
+
+def opening_warnings(scene: Scene, box: OrientedBox) -> list[str]:
+    """Notes the doors and windows an object would stand in front of.
+
+    Standing beside an opening, against the same wall, is not in front of it.
+
+    Args:
+        scene: The scene.
+        box: The object's box.
+
+    Returns:
+        One sentence per opening.
+    """
+    footprint = box.footprint()
+    return [f"stands in front of the {o.label} (#{o.object_id})"
+            for o in scene.objects.values()
+            if is_opening(o) and polygon_penetration(footprint, front_zone(
+                o.box, OPENING_REACH.get(o.label.lower(), 0.3)).footprint()) > 0.01]
+
+
+def _object_conflicts(others: list[SceneObject], mover: SceneObject, box: OrientedBox,
+                      clearance: float, tolerance: float, carried: bool = False
+                      ) -> list[Conflict]:
+    """Lists the collisions and clearance violations of one moved object.
+
+    Args:
+        others: Objects that do not move.
+        mover: The moved object (or an object it carries).
+        box: Its box at the tested pose.
+        clearance: Required free distance, in meters.
+        tolerance: Interpenetration depth tolerated, in meters.
+        carried: Whether ``mover`` is carried by the object being placed.
+
+    Returns:
+        The conflicts.
+    """
+    carried_id, carried_label = (mover.object_id, mover.label) if carried else (None, None)
+    conflicts = []
+    for other in others:
+        # Objects certainly farther than the clearance can neither collide nor be too close.
+        if box_distance_lower_bound(box, other.box) > clearance:
+            continue
+        depth = solid_penetration(box, mover.shape, other.box, other.shape, tolerance)
+        if depth > tolerance:
+            conflicts.append(Conflict(ConflictKind.COLLISION, depth, other.object_id,
+                                      other.label, carried_id, carried_label))
+        elif clearance > 0.0:
+            distance = solid_distance(box, mover.shape, other.box, other.shape, horizon=clearance)
+            if distance < clearance:
+                conflicts.append(Conflict(ConflictKind.CLEARANCE, distance, other.object_id,
+                                          other.label, carried_id, carried_label))
+    return conflicts
 
 
 def _side_positions(half_anchor: FloatArray, half_mover: FloatArray, gap: float,
@@ -246,7 +440,7 @@ def propose_placements(
     max_gap: float = 0.4,
     clearance: float = 0.0,
     max_results: int = 3,
-    min_floor_fraction: float = 0.95,
+    floor_margin: float = 0.025,
 ) -> list[PlacementReport]:
     """Searches for feasible poses that put an object next to another.
 
@@ -262,7 +456,9 @@ def propose_placements(
             "next to", in meters.
         clearance: Required free distance to every other object, in meters.
         max_results: Maximum number of proposals.
-        min_floor_fraction: Minimum fraction of the footprint on walkable floor.
+        floor_margin: The footprint, shrunk by this distance on every side,
+            must lie entirely on walkable floor. Absorbs floor map
+            discretization without letting objects cross thin walls.
 
     Returns:
         Up to ``max_results`` feasible reports, best first. Empty if none exists.
@@ -275,7 +471,7 @@ def propose_placements(
     gaps = tuple(float(g) for g in np.linspace(0.05, max_gap, 4))
     feasible: list[PlacementReport] = []
     for box in candidate_poses(mover, anchor, gaps, yaws):
-        report = check_placement(scene, object_id, box, clearance, min_floor_fraction)
+        report = check_placement(scene, object_id, box, clearance, floor_margin)
         gap = polygon_distance(box.footprint(), anchor.footprint())
         if report.feasible and gap <= max_gap:
             feasible.append(PlacementReport(object_id, box, [], gap, report.travel))

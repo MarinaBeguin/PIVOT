@@ -1,5 +1,6 @@
 """Tests for the scene graph."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -50,6 +51,9 @@ def test_round_trip_through_json(office: Scene, tmp_path: Path) -> None:
     assert restored[5].movable is False
     assert restored.floor is not None and office.floor is not None
     np.testing.assert_array_equal(restored.floor.floor, office.floor.floor)
+    assert restored.ceiling is None
+    path.write_text(json.dumps({**office.to_dict(), "ceiling": 2.6}), encoding="utf-8")
+    assert Scene.load(path).ceiling == 2.6
 
 
 def test_object_serialization_keeps_label() -> None:

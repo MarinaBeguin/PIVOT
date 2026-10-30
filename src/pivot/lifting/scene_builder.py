@@ -1,19 +1,43 @@
 """Assembles a scene graph from a reconstruction and object tracks."""
 
-from dataclasses import dataclass
+import math
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 
 from pivot.geometry.box import OrientedBox, fit_box
 from pivot.geometry.floor import FloorMap
 from pivot.geometry.plane import apply_transform
-from pivot.geometry.types import FloatArray
+from pivot.geometry.types import BoolArray, FloatArray
 from pivot.lifting.backproject import scene_points
-from pivot.lifting.floor import detect_floor
-from pivot.lifting.objects import lift_track
+from pivot.lifting.completion import complete_hidden, drop_fragments
+from pivot.lifting.floor import detect_floor, estimate_ceiling, room_orientation
+from pivot.lifting.objects import (
+    assign_by_votes, contained_tracks, distinct_pairs, duplicate_groups, lift_track,
+    split_overlaps,
+)
+from pivot.lifting.openings import Walls, clean_openings
+from pivot.lifting.parts import join_parts
+from pivot.lifting.volume import CarveConfig, carve_shapes
 from pivot.perception.tracks import Track
 from pivot.reconstruction.types import Reconstruction
-from pivot.scene.graph import STRUCTURAL_LABELS, Scene, SceneObject
+from pivot.scene.graph import STRUCTURAL_LABELS, Scene, SceneObject, is_supported_by
+
+
+@dataclass(frozen=True)
+class MergeConfig:
+    """Parameters of merging tracks into objects.
+
+    Attributes:
+        duplicate_overlap: Tracks of one label are merged when this fraction of
+            the smaller cloud coincides with the larger one or lies in its box.
+        part_gap: Separate instances of one label closer than this, and small
+            enough together to be one object, are joined as its parts, in meters.
+    """
+
+    duplicate_overlap: float = 0.5
+    part_gap: float = 0.06
 
 
 @dataclass(frozen=True)
@@ -23,17 +47,30 @@ class BuildConfig:
     Attributes:
         voxel: Object fusion voxel size, in meters.
         min_points: Objects with fewer fused voxels are discarded.
-        floor_snap: Objects whose bottom is this close to the floor are set
-            exactly on it, in meters.
+        support_tolerance: Gap or interpenetration under which an object counts
+            as resting on another one, in meters.
+        max_fall: Unsupported objects whose bottom is higher than this are
+            taken to be wall-mounted and left in place, in meters.
         floor_band: Points below this height count as floor, in meters.
         floor_resolution: Floor map cell size, in meters.
+        merge: Track merging parameters.
+        box_trim: Fraction of an object's points ignored at each end of every
+            box axis, see :func:`~pivot.geometry.box.fit_box`.
+        align_tolerance_deg: Objects within this angle of the walls are
+            aligned with them, in degrees.
+        carve: Volume carving parameters; None keeps whole boxes.
     """
 
     voxel: float = 0.03
-    min_points: int = 20
-    floor_snap: float = 0.10
+    min_points: int = 100
+    support_tolerance: float = 0.10
+    max_fall: float = 1.0
     floor_band: float = 0.05
     floor_resolution: float = 0.05
+    merge: MergeConfig = field(default_factory=MergeConfig)
+    box_trim: float = 0.02
+    align_tolerance_deg: float = 12.0
+    carve: CarveConfig | None = field(default_factory=CarveConfig)
 
 
 @dataclass(frozen=True)
@@ -51,25 +88,57 @@ class BuiltScene:
     object_points: dict[int, FloatArray]
 
 
-def _snap_to_floor(box: OrientedBox, snap: float) -> OrientedBox:
-    """Extends a box down to the floor when it nearly touches it.
-
-    Legs and bottoms are often occluded, so fitted boxes float slightly.
+def _resting_height(obj: SceneObject, others: list[SceneObject], tolerance: float) -> float:
+    """Returns the height an object rests at: the top of its support, or the floor.
 
     Args:
-        box: Fitted box.
-        snap: Maximum gap to close, in meters.
+        obj: The object.
+        others: Candidate supports.
+        tolerance: Allowed gap or interpenetration with a support's top, in meters.
 
     Returns:
-        The box, extended to z = 0 if its bottom was within ``snap``.
+        The height of the highest support under the object, 0 for the floor.
     """
-    if not 0.0 < box.z_min <= snap:
-        return box
-    size = box.size.copy()
-    size[2] = box.z_max
-    center = box.center.copy()
-    center[2] = 0.5 * box.z_max
-    return OrientedBox(center, size, box.yaw)
+    # A support's top must be below the object's top, or the object is under it.
+    tops = [o.box.z_max for o in others if o.object_id != obj.object_id
+            and o.box.z_max < obj.box.z_max
+            and is_supported_by(obj.box, o.box, height_tolerance=tolerance)]
+    return max(tops, default=0.0)
+
+
+def settle(objects: list[SceneObject], tolerance: float,
+           max_fall: float = 1.0) -> list[SceneObject]:
+    """Applies gravity: every movable object rests on a support or on the floor.
+
+    Legs and bottoms are thin or occluded, so fitted boxes often float (a
+    table reduced to its top, a chair to its seat). An object that rests on
+    no other object is extended down to the floor; one that does is set
+    exactly on its support's top. Objects floating higher than ``max_fall``
+    (wall shelves, lamp heads) are left as fitted, like structural objects.
+    Supports are tested on the fitted boxes, before any change.
+
+    Args:
+        objects: Objects with fitted boxes.
+        tolerance: Allowed gap or interpenetration with a support's top, in meters.
+        max_fall: Largest drop to a support or to the floor, in meters.
+
+    Returns:
+        The objects with settled boxes.
+    """
+    settled = []
+    for obj in objects:
+        if obj.movable:
+            base = _resting_height(obj, objects, tolerance)
+            box = obj.box
+            if box.z_min - base > max_fall:
+                settled.append(obj)
+                continue
+            size, center = box.size.copy(), box.center.copy()
+            size[2] = box.z_max - base
+            center[2] = 0.5 * (box.z_max + base)
+            obj = replace(obj, box=OrientedBox(center, size, box.yaw))
+        settled.append(obj)
+    return settled
 
 
 def build_scene(recon: Reconstruction, tracks: list[Track],
@@ -90,20 +159,146 @@ def build_scene(recon: Reconstruction, tracks: list[Track],
     leveled = recon.transformed(transform)
     points = apply_transform(transform, points)
 
-    objects: list[SceneObject] = []
-    object_points: dict[int, FloatArray] = {}
-    for track in tracks:
-        cloud = lift_track(leveled, track, voxel=config.voxel)
-        if len(cloud) < config.min_points:
-            continue
-        box = _snap_to_floor(fit_box(cloud), config.floor_snap)
-        movable = track.label.lower() not in STRUCTURAL_LABELS
-        objects.append(SceneObject(track.track_id, track.label, box, movable, track.score))
-        object_points[track.track_id] = cloud
+    room_yaw = room_orientation(points)
+    objects, object_points, object_tracks = _lift_objects(leveled, tracks, room_yaw, config)
+    walls = Walls.from_floor(points[np.abs(points[:, 2]) < config.floor_band, :2], room_yaw)
+    objects = clean_openings(objects, object_points, walls)
 
+    objects = settle(objects, config.support_tolerance, config.max_fall)
+    if config.carve is not None:
+        masks = {i: _merged_masks(group) for i, group in object_tracks.items()}
+        objects = carve_shapes(leveled, objects, object_points, masks, config.carve)
+    objects = complete_hidden(drop_fragments(objects))
     floor = _floor_map(points, objects, config)
     metadata = {"frames": len(recon), "tracks": len(tracks)}
-    return BuiltScene(Scene.from_objects(objects, floor, metadata), leveled, object_points)
+    scene = Scene.from_objects(objects, floor, metadata, estimate_ceiling(points))
+    return BuiltScene(scene, leveled, object_points)
+
+
+def fit_object_box(cloud: FloatArray, room_yaw: float, trim: float = 0.02,
+                   align_tolerance_deg: float = 12.0) -> OrientedBox:
+    """Fits an object's box, robust to stray points and aligned with the walls.
+
+    Furniture mostly stands parallel to the walls, while the minimum-area
+    orientation of a partial, noisy cloud can be off by several degrees.
+
+    Args:
+        cloud: (N, 3) object points.
+        room_yaw: Wall orientation, see :func:`~pivot.lifting.floor.room_orientation`.
+        trim: Fraction of the points ignored at each end of every axis.
+        align_tolerance_deg: Boxes within this angle of the walls are aligned
+            with them, in degrees.
+
+    Returns:
+        The box.
+    """
+    box = fit_box(cloud, trim=trim)
+    quarter = 0.5 * math.pi
+    offset = (box.yaw - room_yaw + 0.5 * quarter) % quarter - 0.5 * quarter
+    if abs(offset) <= math.radians(align_tolerance_deg):
+        box = fit_box(cloud, yaw=box.yaw - offset, trim=trim)
+    return box
+
+
+def _lift_objects(recon: Reconstruction, tracks: list[Track], room_yaw: float, config: BuildConfig
+                  ) -> tuple[list[SceneObject], dict[int, FloatArray], dict[int, list[Track]]]:
+    """Lifts tracks to objects with fitted, not yet settled, boxes.
+
+    Each object takes the id and label of the first track of its group.
+    Small objects and flat patches of floor are discarded.
+
+    Args:
+        recon: The leveled reconstruction.
+        tracks: Object tracks.
+        room_yaw: Wall orientation, in radians.
+        config: Assembly parameters.
+
+    Returns:
+        The objects, and their fused point clouds and source tracks keyed by object id.
+    """
+    objects: list[SceneObject] = []
+    object_points: dict[int, FloatArray] = {}
+    object_tracks: dict[int, list[Track]] = {}
+
+    def fit(cloud: FloatArray) -> OrientedBox:
+        """Fits a box with the configured trimming and wall alignment.
+
+        Args:
+            cloud: (N, 3) object points.
+
+        Returns:
+            The box.
+        """
+        return fit_object_box(cloud, room_yaw, config.box_trim, config.align_tolerance_deg)
+
+    for group, cloud in _merged_clouds(recon, tracks, fit, config):
+        if len(cloud) < config.min_points:
+            continue
+        box = fit(cloud)
+        if box.z_max < config.floor_band:
+            continue  # A patch of floor segmented as an object.
+        first = group[0]
+        movable = first.label.lower() not in STRUCTURAL_LABELS
+        score = max(t.score for t in group)
+        objects.append(SceneObject(first.track_id, first.label, box, movable, score))
+        object_points[first.track_id] = cloud
+        object_tracks[first.track_id] = group
+    return objects, object_points, object_tracks
+
+
+def _merged_masks(tracks: list[Track]) -> dict[int, BoolArray]:
+    """Unites the masks of tracks describing one object, frame by frame.
+
+    Args:
+        tracks: Tracks of one object.
+
+    Returns:
+        Masks keyed by frame.
+    """
+    merged: dict[int, BoolArray] = {}
+    for track in tracks:
+        for frame, mask in track.masks.items():
+            merged[frame] = merged[frame] | mask if frame in merged else mask
+    return merged
+
+
+def _merged_clouds(recon: Reconstruction, tracks: list[Track],
+                   fit: Callable[[FloatArray], OrientedBox],
+                   config: BuildConfig) -> list[tuple[list[Track], FloatArray]]:
+    """Lifts tracks and merges those of one label that describe the same object.
+
+    Args:
+        recon: The leveled reconstruction.
+        tracks: Object tracks.
+        fit: Box fitting function.
+        config: Assembly parameters.
+
+    Returns:
+        Each group of tracks with its fused point cloud, in track order.
+    """
+    clouds = [lift_track(recon, track, voxel=config.voxel) for track in tracks]
+    boxes = [fit(c) if len(c) else None for c in clouds]
+    # A part segmented under another noun is already in the whole's points.
+    parts = contained_tracks(tracks)
+    merged = []
+    for label in dict.fromkeys(t.label for t in tracks):
+        indices = [i for i, t in enumerate(tracks) if t.label == label and i not in parts]
+        if not indices:
+            continue
+        groups = [[indices[i] for i in group] for group in duplicate_groups(
+            [clouds[i] for i in indices], 1.5 * config.voxel, config.merge.duplicate_overlap,
+            [boxes[i] for i in indices], distinct=distinct_pairs([tracks[i] for i in indices]))]
+        # Members are voxel centers on the same grid: duplicates coincide.
+        group_clouds = [np.unique(np.vstack([clouds[i] for i in g]), axis=0) for g in groups]
+        objects = [sorted(i for p in parts for i in groups[p])
+                   for parts in join_parts(group_clouds, label, fit, config.merge.part_gap)]
+        # Tracks are sparse: support is judged over a few voxels around each point.
+        owned = split_overlaps(assign_by_votes(
+            [[clouds[i] for i in members] for members in objects], 3.0 * config.voxel), fit)
+        merged += [([tracks[i] for i in members], cloud)
+                   for members, cloud in zip(objects, owned)]
+    merged.sort(key=lambda item: item[0][0].track_id)
+    return merged
 
 
 def _floor_map(points: FloatArray, objects: list[SceneObject], config: BuildConfig) -> FloorMap:

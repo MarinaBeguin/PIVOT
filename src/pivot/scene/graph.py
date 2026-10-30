@@ -17,9 +17,32 @@ import numpy as np
 from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import polygon_penetration
 from pivot.geometry.floor import FloorMap
+from pivot.geometry.shape import VoxelShape
 
 # Labels of objects that are part of the building and can never be moved.
 STRUCTURAL_LABELS = frozenset({"wall", "floor", "ceiling", "door", "window", "radiator", "column"})
+
+# Openings in walls: not obstacles inside the room (their volume is mostly what
+# the camera saw through them), but places that should be kept clear.
+OPENING_LABELS = frozenset({"door", "window"})
+
+# Furniture whose top can receive an object put down on it (a trash can or a
+# chair is not one, even if its top is flat enough).
+SURFACE_LABELS = frozenset({"table", "desk", "shelf", "cabinet", "counter", "nightstand",
+                            "dresser", "sideboard", "bookshelf", "bench", "tv stand",
+                            "coffee table"})
+
+
+def is_opening(obj: SceneObject) -> bool:
+    """Tests whether an object is a door or a window.
+
+    Args:
+        obj: The object.
+
+    Returns:
+        True for openings in walls.
+    """
+    return obj.label.lower() in OPENING_LABELS
 
 
 @dataclass(frozen=True)
@@ -32,6 +55,8 @@ class SceneObject:
         box: Gravity-aligned bounding box in world coordinates.
         movable: Whether the agent may move the object.
         confidence: Detection confidence in [0, 1].
+        shape: Volume actually occupied inside the box, if known; the whole
+            box otherwise.
     """
 
     object_id: int
@@ -39,6 +64,7 @@ class SceneObject:
     box: OrientedBox
     movable: bool = True
     confidence: float = 1.0
+    shape: VoxelShape | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serializes the object to JSON-compatible types.
@@ -46,13 +72,16 @@ class SceneObject:
         Returns:
             A dictionary representation.
         """
-        return {
+        data: dict[str, Any] = {
             "id": self.object_id,
             "label": self.label,
             "box": self.box.to_dict(),
             "movable": self.movable,
             "confidence": self.confidence,
         }
+        if self.shape is not None:
+            data["shape"] = self.shape.to_dict()
+        return data
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> SceneObject:
@@ -64,33 +93,38 @@ class SceneObject:
         Returns:
             The deserialized object.
         """
+        shape = VoxelShape.from_dict(data["shape"]) if data.get("shape") else None
         return cls(int(data["id"]), str(data["label"]), OrientedBox.from_dict(data["box"]),
-                   bool(data["movable"]), float(data["confidence"]))
+                   bool(data["movable"]), float(data["confidence"]), shape)
 
 
 @dataclass(frozen=True)
 class Scene:
-    """A room: its objects and its walkable floor.
+    """A room: its objects, its walkable floor and its ceiling.
 
     Attributes:
         objects: Objects keyed by id.
         floor: Walkable floor map, or None if unknown.
         metadata: Free-form provenance information (source video, models used).
+        ceiling: Ceiling height above the floor, in meters, or None if unknown.
     """
 
     objects: dict[int, SceneObject]
     floor: FloorMap | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    ceiling: float | None = None
 
     @classmethod
     def from_objects(cls, objects: list[SceneObject], floor: FloorMap | None = None,
-                     metadata: dict[str, Any] | None = None) -> Scene:
+                     metadata: dict[str, Any] | None = None,
+                     ceiling: float | None = None) -> Scene:
         """Builds a scene from a list of objects.
 
         Args:
             objects: Objects with unique ids.
             floor: Walkable floor map.
             metadata: Provenance information.
+            ceiling: Ceiling height, in meters.
 
         Returns:
             The scene.
@@ -101,7 +135,7 @@ class Scene:
         by_id = {obj.object_id: obj for obj in objects}
         if len(by_id) != len(objects):
             raise ValueError("Object ids must be unique.")
-        return cls(by_id, floor, dict(metadata or {}))
+        return cls(by_id, floor, dict(metadata or {}), ceiling)
 
     def __getitem__(self, object_id: int) -> SceneObject:
         try:
@@ -152,17 +186,9 @@ class Scene:
         Returns:
             The edited scene.
         """
-        old = self[object_id].box
-        delta_yaw = box.yaw - old.yaw
-        rotation = np.array([[np.cos(delta_yaw), -np.sin(delta_yaw)],
-                             [np.sin(delta_yaw), np.cos(delta_yaw)]])
-        delta_z = box.center[2] - old.center[2]
         scene = self.with_box(object_id, box)
-        for child_id in carried_objects(self, object_id):
-            child = self[child_id].box
-            center_xy = rotation @ (child.center[:2] - old.center[:2]) + box.center[:2]
-            new_child = child.moved(center_xy, child.yaw + delta_yaw, child.z_min + delta_z)
-            scene = scene.with_box(child_id, new_child)
+        for child_id, child_box in carried_boxes(self, object_id, box).items():
+            scene = scene.with_box(child_id, child_box)
         return scene
 
     def to_dict(self) -> dict[str, Any]:
@@ -175,6 +201,7 @@ class Scene:
             "objects": [o.to_dict() for o in sorted(self.objects.values(),
                                                      key=lambda o: o.object_id)],
             "floor": self.floor.to_dict() if self.floor is not None else None,
+            "ceiling": self.ceiling,
             "metadata": self.metadata,
         }
 
@@ -190,7 +217,7 @@ class Scene:
         """
         floor = FloorMap.from_dict(data["floor"]) if data.get("floor") else None
         objects = [SceneObject.from_dict(o) for o in data["objects"]]
-        return cls.from_objects(objects, floor, data.get("metadata"))
+        return cls.from_objects(objects, floor, data.get("metadata"), data.get("ceiling"))
 
     def save(self, path: Path) -> None:
         """Writes the scene to a JSON file.
@@ -275,3 +302,30 @@ def carried_objects(scene: Scene, object_id: int) -> list[int]:
         carried.extend(children)
         frontier.extend(children)
     return carried
+
+
+def carried_boxes(scene: Scene, object_id: int, box: OrientedBox) -> dict[int, OrientedBox]:
+    """Places the objects carried by an object at a new pose of that object.
+
+    Carried objects undergo the same rigid motion: rotation about the vertical
+    axis through the carrier's center, then translation.
+
+    Args:
+        scene: The scene.
+        object_id: The carrier.
+        box: Its new box.
+
+    Returns:
+        The new boxes of the carried objects, keyed by id.
+    """
+    old = scene[object_id].box
+    delta_yaw = box.yaw - old.yaw
+    rotation = np.array([[np.cos(delta_yaw), -np.sin(delta_yaw)],
+                         [np.sin(delta_yaw), np.cos(delta_yaw)]])
+    delta_z = box.center[2] - old.center[2]
+    result = {}
+    for child_id in carried_objects(scene, object_id):
+        child = scene[child_id].box
+        center_xy = rotation @ (child.center[:2] - old.center[:2]) + box.center[:2]
+        result[child_id] = child.moved(center_xy, child.yaw + delta_yaw, child.z_min + delta_z)
+    return result
