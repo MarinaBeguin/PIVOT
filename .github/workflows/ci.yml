@@ -24,3 +24,13 @@ jobs:
         run: pip install -e ".[dev,serve]"
       - name: Tests, mypy and pylint
         run: bash scripts/check.sh "$(dirname "$(command -v python)")"
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t pivot .
+      - name: The server starts in the image
+        run: docker run --rm pivot python -c "import pivot.server.app"
