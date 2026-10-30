@@ -52,12 +52,41 @@ def resize_mask(mask: BoolArray, size: tuple[int, int]) -> BoolArray:
     return result
 
 
+def depth_edges(depth: FloatArray, max_jump: float = 0.05) -> BoolArray:
+    """Finds depth pixels lying on a depth discontinuity.
+
+    At an object's silhouette a low-resolution depth pixel averages the object
+    and what is behind it, producing "flying" points between the two. A plane
+    seen at a grazing angle also has large depth differences between
+    neighbors, but they are regular: discontinuities are detected on the
+    second difference (curvature) along rows and columns instead, then grown
+    by one pixel to catch the flying pixel between the two sides of a step.
+
+    Args:
+        depth: (H, W) depth map, in meters.
+        max_jump: Largest second difference, relative to depth, that is not a
+            discontinuity.
+
+    Returns:
+        An (H, W) mask, True on discontinuities.
+    """
+    # Second differences are only defined inside the image; borders stay 0.
+    curvature = np.zeros_like(depth)
+    curvature[:, 1:-1] = np.abs(depth[:, :-2] + depth[:, 2:] - 2 * depth[:, 1:-1])
+    curvature[1:-1, :] = np.maximum(curvature[1:-1, :],
+                                    np.abs(depth[:-2, :] + depth[2:, :] - 2 * depth[1:-1, :]))
+    result: BoolArray = ndimage.binary_dilation(curvature > max_jump * depth)
+    return result
+
+
 def masked_points(recon: Reconstruction, frame: int, mask: BoolArray,
-                  erode: int = 1, max_depth: float = 8.0) -> FloatArray:
+                  erode: int = 1, max_depth: float = 8.0,
+                  max_jump: float | None = 0.05) -> FloatArray:
     """Lifts the pixels of one frame's mask to world points.
 
-    Masks are eroded first: depth at object boundaries mixes foreground and
-    background and would smear the object towards the wall behind it.
+    Masks are eroded and depth discontinuities removed first: depth at object
+    boundaries mixes foreground and background and would smear the object
+    towards the wall behind it.
 
     Args:
         recon: The reconstruction.
@@ -65,6 +94,8 @@ def masked_points(recon: Reconstruction, frame: int, mask: BoolArray,
         mask: Mask at any resolution.
         erode: Erosion radius in depth pixels.
         max_depth: Depths beyond this are discarded.
+        max_jump: Relative depth jump marking a discontinuity, see
+            :func:`depth_edges`; None keeps every pixel.
 
     Returns:
         (N, 3) world points.
@@ -72,8 +103,11 @@ def masked_points(recon: Reconstruction, frame: int, mask: BoolArray,
     small = resize_mask(mask, recon.depth_size)
     if erode > 0:
         small = ndimage.binary_erosion(small, iterations=erode)
-    return backproject(recon.depths[frame], recon.depth_intrinsics(frame),
-                       recon.cam_to_world[frame], small, max_depth)
+    depth = recon.depths[frame]
+    if max_jump is not None:
+        small &= ~depth_edges(depth, max_jump)
+    return backproject(depth, recon.depth_intrinsics(frame), recon.cam_to_world[frame], small,
+                       max_depth)
 
 
 def scene_points(recon: Reconstruction, pixel_stride: int = 4,
