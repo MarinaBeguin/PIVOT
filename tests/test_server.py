@@ -6,7 +6,8 @@ from fastapi.testclient import TestClient
 from pivot.agent.loop import Agent
 from pivot.meta.client import MetaConfig
 from pivot.scene.examples import office_scene
-from pivot.server.app import create_app
+from pivot.server.app import MAX_AUDIO_BYTES, create_app
+from pivot.server.limits import Budget, Meter, SpendLedger
 from test_agent import ScriptedModel, message, tool_call
 
 
@@ -99,3 +100,44 @@ def test_moving_plan_lists_the_moves_made() -> None:
     app.post("/api/tools/move_object", json={"object_id": 3, "x": 3.0, "y": 1.0})
     page = app.get("/instructions").text
     assert "<ol><li>Slide the office chair (#3)" in page
+
+
+def test_each_visitor_rearranges_their_own_room() -> None:
+    points = np.zeros((3, 3), dtype=np.float32)
+    colors = np.zeros((3, 3), dtype=np.uint8)
+    app = create_app(office_scene(), points, colors)
+    alice, bob = TestClient(app), TestClient(app)
+    alice.post("/api/tools/move_object", json={"object_id": 3, "x": 3.0, "y": 1.0})
+    chair = next(o for o in alice.get("/api/objects").json() if o["id"] == 3)
+    assert chair["box"]["center"][:2] == [3.0, 1.0]
+    untouched = next(o for o in bob.get("/api/objects").json() if o["id"] == 3)
+    assert untouched["box"]["center"][:2] == [1.5, 1.7]
+
+
+def test_public_requests_are_charged_and_refused_over_budget() -> None:
+    model = ScriptedModel([message("Hello."), message("Again.")])
+    ledger = SpendLedger(Budget(total_usd=1.0, visitor_daily_usd=1.0, visitor_daily_requests=1))
+    meter = Meter(ledger, "salt", proxy_hops=0, chat_price=lambda usage: 0.25)
+    points = np.zeros((3, 3), dtype=np.float32)
+    colors = np.zeros((3, 3), dtype=np.uint8)
+    app = TestClient(create_app(office_scene(), points, colors, agent_factory=lambda session: Agent(
+        session, MetaConfig(api_key="test"), client=model),  # type: ignore[arg-type]
+        meter=meter))
+    assert app.get("/api/limits").json() == {"public": True, "requests_left": 1,
+                                             "budget_spent": False}
+    assert app.post("/api/chat", json={"message": "Hi"}).json()["answer"] == "Hello."
+    assert ledger.total == 0.25
+    assert app.get("/api/limits").json()["requests_left"] == 0
+    refused = app.post("/api/chat", json={"message": "Hi again"})
+    assert refused.status_code == 429 and "requests today" in refused.json()["error"]
+    assert ledger.total == 0.25
+
+
+def test_long_recordings_are_refused() -> None:
+    points = np.zeros((3, 3), dtype=np.float32)
+    colors = np.zeros((3, 3), dtype=np.uint8)
+    app = TestClient(create_app(office_scene(), points, colors, agent_factory=lambda session: Agent(
+        session, MetaConfig(api_key="test"), client=ScriptedModel([])),  # type: ignore[arg-type]
+        transcriber=lambda audio, keywords: "never"))
+    assert app.post("/api/transcribe", content=b"0" * (MAX_AUDIO_BYTES + 1)).status_code == 413
+    assert app.get("/api/limits").json() == {"public": False}
