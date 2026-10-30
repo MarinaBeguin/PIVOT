@@ -1,18 +1,20 @@
-# PIVOT — verified spatial reasoning for real rooms
+# PIVOT!
+
+*From seeing a room to proving how to change it.*
 
 [![CI](https://github.com/MarinaBeguin/PIVOT/actions/workflows/ci.yml/badge.svg)](https://github.com/MarinaBeguin/PIVOT/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![Meta models](https://img.shields.io/badge/Meta-SAM%203.1%20·%20Muse%20·%20Llama-0866FF)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-**Film a room, then ask in plain words — typed or spoken — whether furniture fits, and how to
+**Film a room, then ask in plain words, typed or spoken, whether furniture fits and how to
 rearrange it.** PIVOT rebuilds the room in 3D, finds every object with **SAM 3.1**, and a
 **Muse** (or **Llama**) agent answers by calling geometric tools that check every claim:
 collisions on the real shapes, room to pass, ceiling height, a complete collision-free path.
 The language model never makes up geometry: every answer is backed by a computation.
 
-Built for the **Meta Global AI Hackathon 2026** (October 26 – November 4, 2026) — **Indie
-developer track, "Push the Frontier" theme**: it gives assistants and robots a new capability,
+Built for the **Meta Global AI Hackathon 2026** (October 26 to November 4, 2026),
+**Indie developer track, "Push the Frontier" theme**. It gives assistants and robots a new capability,
 reasoning about real space with answers they can prove. The repository was created on October 27.
 
 | | |
@@ -29,8 +31,8 @@ reasoning about real space with answers they can prove. The repository was creat
 Large language models reason well about intentions ("clear the way to the window") but not
 about centimeters. Asked about a real room, they state that a sofa "fits" or a chair "can go
 under the desk" without being able to check: **spatial hallucination**. A wrong spatial answer
-is costly — a sofa that does not pass the door, a returned order, a passage left too narrow for a
-wheelchair — and it is the first thing a user notices.
+is costly: a sofa that does not pass the door, a returned order, a passage left too narrow for a
+wheelchair. It is also the first thing a user notices.
 
 Geometric planners, on the other hand, can verify a move but do not understand a request made in
 words. **PIVOT combines both**: the language model interprets the request and decides what to
@@ -53,7 +55,7 @@ On a real office scanned with a phone, Muse alone wrongly claims a move is feasi
 | **Quest (mixed reality) users** | "Free a 2 × 2 m play area." | The fewest moves of chairs and tables that clear the space, each one checked. |
 | **Home robotics** (e.g. Meta FAIR's Habitat and PARTNR settings) | A rearrangement plan written by a language model | The verification layer between a plan in words and its physical execution. |
 
-The core of PIVOT is not interior design: it is **verified spatial reasoning** — an assistant that
+The core of PIVOT is not interior design: it is **verified spatial reasoning**: an assistant that
 understands a request in words and answers only with what it computed on the real geometry. That
 is what an assistant that sees the world through a camera, as on Meta's glasses and headsets,
 is missing today. The whole chain uses Meta models: SAM 3.1 to see, Muse or Llama to reason,
@@ -73,18 +75,18 @@ tools on this scene):
 > of the passage; the tightest spot on the way left 6 cm. A closer free spot would have stood in
 > front of door 29, so I did not use it. A wheelchair can still reach every object from the doors.
 
-- **Verified moves** — collisions are tested on carved voxel volumes, not boxes, so a chair can
+- **Verified moves.** Collisions are tested on carved voxel volumes, not boxes, so a chair can
   slide under a table top; every path is searched in (x, y, rotation) and re-validated exactly.
-- **Make room** — when other objects block the way, they are pushed aside, the object passes,
+- **Make room.** When other objects block the way, they are pushed aside, the object passes,
   then they are put back as close as possible to where they were.
 - **Carry** light objects over furniture, or put them on a desk; gravity keeps every object on a
   surface; nothing may rise above the **ceiling**.
-- **Accessibility** — after a rearrangement, PIVOT checks that a person (60 cm) or a wheelchair
+- **Accessibility.** After a rearrangement, PIVOT checks that a person (60 cm) or a wheelchair
   (90 cm) can still reach every object from the doors.
-- **Moving plan** — a printable page with a plan seen from above and numbered steps ("Slide the
+- **Moving plan.** A printable page with a plan seen from above and numbered steps ("Slide the
   chair (#5) 1.2 m to 27 cm from the table (#72), turning it 90 degrees"), flagging the moves that
   need **two people**.
-- **Voice** — speak instead of typing (Muse Voice Transcribe, or wav2vec 2.0 with open weights);
+- **Voice.** Speak instead of typing (Muse Voice Transcribe, or wav2vec 2.0 with open weights);
   answers can be read aloud, as on glasses without a screen.
 - **Undo** any move, including multi-step ones; the 3D viewer animates every executed path.
 
@@ -103,12 +105,12 @@ tools on this scene):
 
 | Model | Role in PIVOT | API version | Open-weight version |
 |---|---|---|---|
-| **SAM 3.1** | Segments and tracks every object of the video from a noun ("chair", "lamp") | Meta Model API (`sam-3.1`, parsed with `meta-sam-parser`) | `facebook/sam3.1`, self-hosted (multiplex video predictor, 64 objects per prompt) |
-| **Muse Spark 1.3** | Agent with 11 geometric tools; lists the kinds of objects a video shows | Meta Model API | — |
-| **Llama 3.1 8B Instruct** | The same agent, with tool calling | — | Served by vLLM on our GPU |
-| **Llama 3.2 11B Vision Instruct** | Lists the kinds of objects a video shows | — | transformers, on our GPU |
-| **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API (`/asr/transcribe`) | — |
-| **wav2vec 2.0** (`facebook/wav2vec2-large-960h-lv60-self`) | Spoken requests (English) | — | transformers, on the CPU |
+| **SAM 3.1** | Segments and tracks every object of the video from a noun ("chair", "lamp") | Meta Model API, read with Meta's SAM parser | Self-hosted weights (multiplex video predictor, 64 objects per prompt) |
+| **Muse Spark 1.3** | Agent with 11 geometric tools; lists the kinds of objects a video shows | Meta Model API | |
+| **Llama 3.1 8B Instruct** | The same agent, with tool calling | | Served by vLLM on the GPU |
+| **Llama 3.2 11B Vision Instruct** | Lists the kinds of objects a video shows | | Hugging Face transformers, on the GPU |
+| **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
+| **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
 
 ![SAM 3.1 tracking the floor lamps through the video, one track per view](assets/sam_tracking.jpg)
 
@@ -151,10 +153,10 @@ judge replays every executed motion with exact geometry. Four variants share the
 
 | Variant | Success (95% CI) | False claims | False refusals | Expected cost* | Latency p50 |
 |---|---|---|---|---|---|
-| Muse alone (`llm_only`) | 56% (40–70%) | 15/36 | 1/36 | 4.19 | 15 s |
-| Muse + final feasibility check (`llm_check`) | 89% (75–96%) | 2/36 | 2/36 | 0.61 | 27 s |
+| Muse alone | 56% (40–70%) | 15/36 | 1/36 | 4.19 | 15 s |
+| Muse + a final feasibility check | 89% (75–96%) | 2/36 | 2/36 | 0.61 | 27 s |
 | **PIVOT: Muse + verifying tools** | **92% (78–97%)** | 3/36 | **0/36** | 0.83 | 23 s |
-| Geometric search alone (`planner_only`) | 97% (86–100%) | 1/36 | 0/36 | 0.28 | 12 s |
+| Geometric search alone | 97% (86–100%) | 1/36 | 0/36 | 0.28 | 12 s |
 
 \*A false claim (saying a move works when it does not) is counted as 10 times worse than a false
 refusal. Muse alone, when wrong, puts objects through others by 14 cm on average.
@@ -162,11 +164,11 @@ refusal. Muse alone, when wrong, puts objects through others by 14 cm on average
 The geometric search alone scores highest **only on requests it can parse by construction**: the
 task labels come from the same planner. It cannot take a request in words, nor constraints that
 exist only in the sentence ("without blocking the door"). PIVOT keeps the planner's reliability
-while understanding language. Reproduce with `python -m pivot.eval` (see below).
+while understanding language. The evaluation can be reproduced from the command line (see below).
 
 ## Two versions: with or without an API key
 
-| | **API version** (`run_api.sh`) | **Open-weight version** (`run_open.sh`) |
+| | **API version** | **Open-weight version** |
 |---|---|---|
 | Needs | A Meta Model API key | An NVIDIA GPU (SAM 3.1 peaked at 45 GB on an A6000), no key |
 | Object list | Muse Spark (up to 20 kinds) | Llama 3.2 Vision (up to 8 kinds) |
@@ -180,7 +182,7 @@ on your GPUs.
 
 ### Input
 
-A capture with color frames, depth and camera poses — today a **ScanNet++ iPhone capture**
+A capture with color frames, depth and camera poses. Today this is a **ScanNet++ iPhone capture**
 (RGB, LiDAR depth, ARKit poses) and its video (one frame out of 10). Rebuilding a room from a
 plain phone video without depth is on the [roadmap](#limitations-and-roadmap).
 
@@ -206,9 +208,10 @@ bash scripts/cluster/setup_llama_env.sh    # once: vLLM, Llama 3.1 8B and Llama 
 bash scripts/run_open.sh <scannetpp_scene_dir> <video.mp4> <out_dir>
 ```
 
-The Meta Llama and SAM 3.1 weights are gated on Hugging Face: request access to
-`facebook/sam3.1`, `meta-llama/Llama-3.1-8B-Instruct` and `meta-llama/Llama-3.2-11B-Vision-Instruct`
-first.
+The SAM 3.1 and Llama weights are gated on Hugging Face: first request access to
+[SAM 3.1](https://huggingface.co/facebook/sam3.1),
+[Llama 3.1 8B Instruct](https://huggingface.co/meta-llama/Llama-3.1-8B-Instruct) and
+[Llama 3.2 11B Vision Instruct](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision-Instruct).
 
 ### Options of both scripts
 
@@ -244,12 +247,12 @@ python -m pivot.eval summary --help
 
 - **201 tests** (geometry, lifting on synthetic rooms rendered exactly, planning, agent with a
   scripted model, server, evaluation), **mypy strict**,
-  **pylint 10/10**, Google-style docstrings — run by `scripts/check.sh`.
+  **pylint 10/10**, Google-style docstrings, all run by one script (scripts/check.sh).
 - **CI** on every pull request: install in a fresh environment, tests, mypy, pylint, and the
-  Docker image is built. `main` is protected: changes land only through pull requests with green
+  Docker image is built. The main branch is protected: changes land only through pull requests with green
   checks.
 - **Docker** image for the web app: non-root user, healthcheck, port from the host.
-- No secrets in the repository: the API key lives in `.env` (git-ignored) or in the environment.
+- No secrets in the repository: the API key lives in a git-ignored .env file or in the environment.
 
 ```text
 src/pivot/
@@ -275,7 +278,7 @@ Known limitations, measured rather than hidden:
 - SAM 3.1 tracks the kinds of objects it is given: an object never named is not detected.
 - 4 cm voxels: thin tubes can be missed; space never seen (behind a monitor) stays occupied.
   Hidden parts are inferred, not observed.
-- `NO_PATH` means no path exists at the planning resolution (5 cm, 22.5°), not a proof of
+- "No path" means no path exists at the planning resolution (5 cm, 22.5°), not a proof of
   impossibility; making room can take up to about a minute and a half in hard cases.
 
 Next:
@@ -289,4 +292,4 @@ Next:
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT, see [LICENSE](LICENSE).
