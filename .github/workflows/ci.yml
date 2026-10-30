@@ -1,0 +1,26 @@
+# Quality gates on every pull request, and on main once merged: tests, type
+# checks, lint. Same checks as scripts/check.sh, which is what runs here.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: Install ffmpeg (video encoding tests)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      - name: Install PIVOT with its development and server dependencies
+        run: pip install -e ".[dev,serve]"
+      - name: Tests, mypy and pylint
+        run: bash scripts/check.sh "$(dirname "$(command -v python)")"

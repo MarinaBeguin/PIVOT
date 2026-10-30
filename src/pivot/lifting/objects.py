@@ -33,7 +33,7 @@ def voxel_votes(points_per_view: list[FloatArray],
     if not keys:
         return np.zeros((0, 3)), np.zeros(0, dtype=np.int64)
     voxels, votes = np.unique(np.vstack(keys), axis=0, return_counts=True)
-    return (voxels + 0.5) * voxel, votes
+    return ((voxels + 0.5) * voxel).astype(np.float64), votes.astype(np.int64)
 
 
 def largest_cluster(points: FloatArray, radius: float) -> FloatArray:
@@ -186,7 +186,7 @@ def _over_footprint(points: FloatArray, box: OrientedBox, margin: float, max_gap
     Returns:
         The fraction in [0, 1].
     """
-    gap = max(box.z_min - points[:, 2].max(), points[:, 2].min() - box.z_max)
+    gap = max(float(box.z_min - points[:, 2].max()), float(points[:, 2].min() - box.z_max))
     if gap > max_gap:
         return 0.0
     local = np.abs(box.to_local(points)[:, :2])
@@ -218,13 +218,14 @@ def distinct_pairs(tracks: list[Track], max_shared: float = 0.5, min_area: float
         for j in range(i + 1, len(tracks)):
             b = tracks[j]
             shared = sorted(f for f in set(a.masks) & set(b.masks)
-                            if min(a.masks[f].mean(), b.masks[f].mean()) >= min_area)
+                            if min(float(a.masks[f].mean()), float(b.masks[f].mean())) >= min_area)
             if not shared:
                 continue
             picked = [shared[k] for k in np.linspace(0, len(shared) - 1, min(samples, len(shared)),
                                                      dtype=int)]
             fractions = [np.logical_and(a.masks[f], b.masks[f]).sum()
-                         / max(min(a.masks[f].sum(), b.masks[f].sum()), 1) for f in picked]
+                         / max(min(int(a.masks[f].sum()), int(b.masks[f].sum())), 1)
+                         for f in picked]
             if np.median(fractions) <= max_shared:
                 result.add((i, j))
     return result
@@ -297,7 +298,7 @@ def contained_tracks(tracks: list[Track], min_inside: float = 0.8) -> set[int]:
             if whole.label == part.label or not shared:
                 continue
             inside = [np.logical_and(part.masks[f], whole.masks[f]).sum()
-                      / max(part.masks[f].sum(), 1) for f in shared]
+                      / max(int(part.masks[f].sum()), 1) for f in shared]
             if np.median(inside) >= min_inside:
                 parts.add(i)
                 break

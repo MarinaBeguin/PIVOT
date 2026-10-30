@@ -84,8 +84,7 @@ class VoxelShape:
         Returns:
             (M, 3) points, in meters.
         """
-        result: FloatArray = (self.cells + 0.5) * self.resolution
-        return result
+        return ((self.cells + 0.5) * self.resolution).astype(np.float64)
 
     def world_centers(self, box: OrientedBox) -> FloatArray:
         """Returns the cell centers for the object at a given pose.
