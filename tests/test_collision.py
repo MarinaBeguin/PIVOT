@@ -7,6 +7,7 @@ import pytest
 
 from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import (
+    box_distance_lower_bound,
     box_distance,
     box_penetration,
     boxes_collide,
@@ -78,3 +79,11 @@ def test_polygon_helpers_are_symmetric() -> None:
 ])
 def test_interval_gap(a: tuple[float, float], b: tuple[float, float], expected: float) -> None:
     assert interval_gap(*a, *b) == pytest.approx(expected)
+
+
+def test_box_distance_lower_bound_never_exceeds_distance() -> None:
+    rng = np.random.default_rng(7)
+    for _ in range(200):
+        a = OrientedBox(rng.uniform(-2, 2, 3), rng.uniform(0.1, 1.5, 3), rng.uniform(-3, 3))
+        b = OrientedBox(rng.uniform(-2, 2, 3), rng.uniform(0.1, 1.5, 3), rng.uniform(-3, 3))
+        assert box_distance_lower_bound(a, b) <= box_distance(a, b) + 1e-9

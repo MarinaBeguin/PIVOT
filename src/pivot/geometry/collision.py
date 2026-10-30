@@ -10,7 +10,7 @@ import math
 
 import numpy as np
 
-from pivot.geometry.box import OrientedBox
+from pivot.geometry.box import OrientedBox, rotation_2d
 from pivot.geometry.types import FloatArray
 
 _EPS = 1e-9
@@ -74,6 +74,27 @@ def _point_segment_distance(points: FloatArray, start: FloatArray, end: FloatArr
     return result
 
 
+def points_to_polygon_distance(points: FloatArray, polygon: FloatArray) -> FloatArray:
+    """Computes distances from points to a convex polygon region.
+
+    Args:
+        points: (N, 2) query points.
+        polygon: (M, 2) convex polygon, counter-clockwise.
+
+    Returns:
+        (N,) distances; 0 for points inside the polygon.
+    """
+    inside = np.ones(len(points), dtype=bool)
+    distances = np.full(len(points), math.inf)
+    for i, start in enumerate(polygon):
+        end = polygon[(i + 1) % len(polygon)]
+        edge, rel = end - start, points - start
+        inside &= edge[0] * rel[:, 1] - edge[1] * rel[:, 0] >= 0.0
+        distances = np.minimum(distances, _point_segment_distance(points, start, end))
+    result: FloatArray = np.where(inside, 0.0, distances)
+    return result
+
+
 def polygon_distance(a: FloatArray, b: FloatArray) -> float:
     """Computes the Euclidean distance between two convex polygons.
 
@@ -108,6 +129,42 @@ def interval_gap(lo_a: float, hi_a: float, lo_b: float, hi_b: float) -> float:
         The distance between the intervals, or 0.0 if they intersect.
     """
     return max(0.0, lo_b - hi_a, lo_a - hi_b)
+
+
+def footprint_overlap(box: OrientedBox, other: OrientedBox, samples: int = 9) -> float:
+    """Measures how much of a box's footprint lies over another box's footprint.
+
+    Args:
+        box: The box whose footprint is sampled.
+        other: The other box.
+        samples: Footprint samples per side.
+
+    Returns:
+        The fraction in [0, 1].
+    """
+    u = (np.arange(samples) + 0.5) / samples - 0.5
+    grid = np.stack(np.meshgrid(u, u), axis=-1).reshape(-1, 2) * box.size[:2]
+    world_xy = grid @ rotation_2d(box.yaw).T + box.center[:2]
+    world = np.column_stack([world_xy, np.full(len(grid), other.center[2])])
+    local = np.abs(other.to_local(world)[:, :2])
+    return float(np.mean(np.all(local <= 0.5 * other.size[:2], axis=1)))
+
+
+def box_distance_lower_bound(a: OrientedBox, b: OrientedBox) -> float:
+    """Bounds the distance between two boxes from below, cheaply.
+
+    Uses the circles circumscribing the footprints and the vertical gap.
+
+    Args:
+        a: First box.
+        b: Second box.
+
+    Returns:
+        A value never larger than :func:`box_distance`.
+    """
+    d_xy = (math.hypot(*(a.center[:2] - b.center[:2]))
+            - 0.5 * math.hypot(*a.size[:2]) - 0.5 * math.hypot(*b.size[:2]))
+    return max(d_xy, interval_gap(a.z_min, a.z_max, b.z_min, b.z_max), 0.0)
 
 
 def box_distance(a: OrientedBox, b: OrientedBox) -> float:

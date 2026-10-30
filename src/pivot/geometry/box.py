@@ -211,14 +211,16 @@ def min_area_rectangle(points_xy: FloatArray) -> tuple[FloatArray, FloatArray, f
     return center, hi[best] - lo[best], angle
 
 
-def fit_box(points: FloatArray) -> OrientedBox:
-    """Fits the tightest gravity-aligned box around a point cloud.
-
-    The caller is responsible for removing outliers beforehand: every point is
-    enclosed.
+def fit_box(points: FloatArray, yaw: float | None = None, trim: float = 0.0) -> OrientedBox:
+    """Fits a gravity-aligned box around a point cloud.
 
     Args:
         points: (N, 3) world points, N >= 1.
+        yaw: Orientation to fit the box at, in radians; the minimum-area
+            orientation if None.
+        trim: Fraction of the points ignored at each end of every axis, so
+            that a few stray points do not inflate the box. 0 encloses every
+            point.
 
     Returns:
         The fitted box. Its longer horizontal side is along the local x axis.
@@ -229,11 +231,21 @@ def fit_box(points: FloatArray) -> OrientedBox:
     points = np.asarray(points, dtype=np.float64).reshape(-1, 3)
     if len(points) == 0:
         raise ValueError("Cannot fit a box to an empty point set.")
-    center_xy, size_xy, yaw = min_area_rectangle(points[:, :2])
-    if size_xy[1] > size_xy[0]:
-        size_xy = size_xy[::-1]
+    if yaw is None:
+        _, _, yaw = min_area_rectangle(points[:, :2])
+        if trim > 0.0:
+            # Stray points can rotate the hull: re-estimate on the kept ones.
+            local = points[:, :2] @ rotation_2d(yaw)
+            lo, hi = np.quantile(local, [trim, 1.0 - trim], axis=0)
+            kept = np.all((local >= lo) & (local <= hi), axis=1)
+            if kept.sum() >= 3:
+                _, _, yaw = min_area_rectangle(points[kept, :2])
+    # Box-local coordinates: x along yaw, y across it.
+    local = np.column_stack([points[:, :2] @ rotation_2d(yaw), points[:, 2]])
+    lo, hi = np.quantile(local, [trim, 1.0 - trim], axis=0)
+    size = hi - lo
+    center = np.concatenate([rotation_2d(yaw) @ (0.5 * (lo[:2] + hi[:2])), [0.5 * (lo[2] + hi[2])]])
+    if size[1] > size[0]:
+        size[:2] = size[1::-1]
         yaw += 0.5 * math.pi
-    z_lo, z_hi = float(points[:, 2].min()), float(points[:, 2].max())
-    center = np.array([center_xy[0], center_xy[1], 0.5 * (z_lo + z_hi)])
-    size = np.array([size_xy[0], size_xy[1], z_hi - z_lo])
-    return OrientedBox(center, size, yaw)
+    return OrientedBox(center, size, wrap_angle(yaw))

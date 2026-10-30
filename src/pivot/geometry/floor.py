@@ -7,13 +7,15 @@ this grid to check that a proposed placement stays inside the room.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 from scipy import ndimage
 
-from pivot.geometry.types import BoolArray, FloatArray
+from pivot.geometry.collision import points_to_polygon_distance
+from pivot.geometry.types import BoolArray, FloatArray, IntArray
 
 
 @dataclass(frozen=True)
@@ -77,21 +79,46 @@ class FloorMap:
         rows, cols = self.floor.shape
         return int(rows), int(cols)
 
-    def cell_centers(self) -> FloatArray:
-        """Returns the world xy of every cell center.
+    def cells_inside(self, polygon: FloatArray) -> tuple[IntArray, IntArray]:
+        """Lists the cells whose centers lie inside a convex polygon.
+
+        Cells beyond the grid bounds are included, so callers can tell a
+        footprint that leaves the mapped area.
+
+        Args:
+            polygon: (N, 2) convex polygon, counter-clockwise.
 
         Returns:
-            A (rows, cols, 2) array.
+            A tuple ``(rows, cols)`` of cell indices, possibly out of bounds.
         """
-        rows, cols = self.shape
-        xs = self.origin[0] + (np.arange(cols) + 0.5) * self.resolution
-        ys = self.origin[1] + (np.arange(rows) + 0.5) * self.resolution
-        grid_x, grid_y = np.meshgrid(xs, ys)
-        result: FloatArray = np.stack([grid_x, grid_y], axis=-1)
+        lo = np.floor((polygon.min(axis=0) - self.origin) / self.resolution).astype(int)
+        hi = np.ceil((polygon.max(axis=0) - self.origin) / self.resolution).astype(int)
+        cols, rows = np.meshgrid(np.arange(lo[0], hi[0] + 1), np.arange(lo[1], hi[1] + 1))
+        centers = self.origin + (np.stack([cols, rows], axis=-1) + 0.5) * self.resolution
+        inside = np.ones(cols.shape, dtype=bool)
+        for i, start in enumerate(polygon):
+            edge = polygon[(i + 1) % len(polygon)] - start
+            rel = centers - start
+            # Left of every counter-clockwise edge means inside.
+            inside &= edge[0] * rel[..., 1] - edge[1] * rel[..., 0] >= 0.0
+        return rows[inside], cols[inside]
+
+    def _in_bounds(self, rows: IntArray, cols: IntArray) -> BoolArray:
+        """Tests which cell indices fall inside the grid.
+
+        Args:
+            rows: Row indices.
+            cols: Column indices.
+
+        Returns:
+            A mask of in-bounds cells.
+        """
+        n_rows, n_cols = self.shape
+        result: BoolArray = (rows >= 0) & (rows < n_rows) & (cols >= 0) & (cols < n_cols)
         return result
 
     def rasterize(self, polygon: FloatArray) -> BoolArray:
-        """Marks the cells whose centers lie inside a convex polygon.
+        """Marks the grid cells whose centers lie inside a convex polygon.
 
         Args:
             polygon: (N, 2) convex polygon, counter-clockwise.
@@ -99,34 +126,61 @@ class FloorMap:
         Returns:
             A (rows, cols) mask.
         """
-        centers = self.cell_centers()
-        inside = np.ones(self.shape, dtype=bool)
-        for i, start in enumerate(polygon):
-            edge = polygon[(i + 1) % len(polygon)] - start
-            rel = centers - start
-            # Left of every counter-clockwise edge means inside.
-            inside &= edge[0] * rel[..., 1] - edge[1] * rel[..., 0] >= 0.0
-        return inside
+        rows, cols = self.cells_inside(polygon)
+        keep = self._in_bounds(rows, cols)
+        mask = np.zeros(self.shape, dtype=bool)
+        mask[rows[keep], cols[keep]] = True
+        return mask
 
     def floor_fraction(self, polygon: FloatArray) -> float:
         """Computes the fraction of a footprint that stands on walkable floor.
 
-        Footprint parts outside the grid count as off the floor.
+        Footprint cells outside the grid count as off the floor.
 
         Args:
             polygon: (N, 2) convex polygon, counter-clockwise.
 
         Returns:
-            A value in [0, 1]. Footprints smaller than a cell are tested at their
-            centroid.
+            A value in [0, 1]. Footprints containing no cell center are tested
+            at their centroid.
         """
-        mask = self.rasterize(polygon)
-        total = int(mask.sum())
-        if total == 0:
+        rows, cols = self.cells_inside(polygon)
+        if len(rows) == 0:
             return 1.0 if self.is_floor(polygon.mean(axis=0)) else 0.0
-        area = _polygon_area(polygon) / self.resolution**2
-        # Cells outside the grid are not in the mask; account for them through area.
-        return min(1.0, float((mask & self.floor).sum()) / max(area, total))
+        keep = self._in_bounds(rows, cols)
+        on_floor = int(self.floor[rows[keep], cols[keep]].sum())
+        return on_floor / len(rows)
+
+    def distance_to_walls(self, polygon: FloatArray, search_radius: float = 1.0) -> float:
+        """Measures the gap between a footprint and the nearest non-floor cell.
+
+        Non-floor cells (walls, unobserved areas, outside the map) are treated as
+        solid squares.
+
+        Args:
+            polygon: (N, 2) convex footprint, counter-clockwise.
+            search_radius: Gaps larger than this are reported as infinite.
+
+        Returns:
+            The gap in meters; 0 if the footprint overlaps a non-floor cell.
+        """
+        lo = polygon.min(axis=0) - search_radius
+        hi = polygon.max(axis=0) + search_radius
+        start = np.floor((lo - self.origin) / self.resolution).astype(int)
+        stop = np.ceil((hi - self.origin) / self.resolution).astype(int)
+        cols, rows = np.meshgrid(np.arange(start[0], stop[0] + 1),
+                                 np.arange(start[1], stop[1] + 1))
+        rows, cols = rows.ravel(), cols.ravel()
+        solid = ~self._in_bounds(rows, cols)
+        keep = ~solid
+        solid[keep] = ~self.floor[rows[keep], cols[keep]]
+        if not solid.any():
+            return math.inf
+        cells = np.column_stack([cols[solid], rows[solid]]) + 0.5
+        centers = self.origin + cells * self.resolution
+        gaps = points_to_polygon_distance(centers, polygon) - 0.5 * self.resolution
+        nearest = float(max(0.0, gaps.min()))
+        return nearest if nearest <= search_radius else math.inf
 
     def is_floor(self, point_xy: FloatArray) -> bool:
         """Tests whether a single point lies on walkable floor.
@@ -169,16 +223,3 @@ class FloorMap:
         for row, cols in enumerate(data["floor"]):
             floor[row, cols] = True
         return cls(np.asarray(data["origin"], dtype=np.float64), float(data["resolution"]), floor)
-
-
-def _polygon_area(polygon: FloatArray) -> float:
-    """Computes the area of a simple polygon with the shoelace formula.
-
-    Args:
-        polygon: (N, 2) vertices.
-
-    Returns:
-        The unsigned area.
-    """
-    x, y = polygon[:, 0], polygon[:, 1]
-    return 0.5 * abs(float(x @ np.roll(y, -1) - y @ np.roll(x, -1)))

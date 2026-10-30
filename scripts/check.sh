@@ -7,5 +7,5 @@ cd "$(dirname "$0")/.."
 "$BIN/mypy"
 "$BIN/pylint" src/pivot
 # Test helpers are self-describing and imported as top-level modules by pytest.
-"$BIN/pylint" tests --disable=missing-function-docstring,missing-param-doc,missing-return-doc,\
+"$BIN/pylint" tests --disable=missing-function-docstring,missing-param-doc,missing-return-doc,missing-yield-doc,\
 wrong-import-order,too-many-locals

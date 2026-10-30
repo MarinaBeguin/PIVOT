@@ -93,3 +93,9 @@ def test_fit_box_puts_long_side_on_local_x() -> None:
 def test_fit_box_rejects_empty_input() -> None:
     with pytest.raises(ValueError):
         fit_box(np.zeros((0, 3)))
+
+
+def test_trimmed_fit_handles_tiny_clouds() -> None:
+    for count in (1, 2):
+        fitted = fit_box(np.arange(3.0 * count).reshape(count, 3), trim=0.02)
+        assert np.all(np.isfinite(fitted.size))
