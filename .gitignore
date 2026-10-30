@@ -11,9 +11,10 @@ docs/
 # Secrets
 .env
 
-# Data and generated outputs never go in the repo
-data/
-outputs/
-cache/
+# Data and generated outputs never go in the repo. Anchored at the root, so
+# that the code of src/pivot/data/ and the fixtures of tests/data/ are kept.
+/data/
+/outputs/
+/cache/
 *.out
 *.err
