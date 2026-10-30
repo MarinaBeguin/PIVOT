@@ -1,0 +1,713 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PIVOT scene</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg: #111418; --panel: #1b2027cc; --text: #e6e8eb; --muted: #9aa3ad; --accent: #4cc38a;
+          --warn: #f5a524; --bad: #e5484d; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+               font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  .panel { position: absolute; top: 12px; max-height: calc(100% - 24px); overflow: auto;
+           background: var(--panel); border-radius: 8px; padding: 12px 14px; backdrop-filter: blur(6px); }
+  #panel { left: 12px; width: 260px; }
+  #controls { right: 12px; width: 290px; display: none; }
+  .panel h1 { font-size: 15px; margin: 0 0 4px; }
+  .panel h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
+  .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  .panel label { display: block; margin: 4px 0; cursor: pointer; }
+  #objects li { list-style: none; padding: 3px 6px; border-radius: 4px; cursor: pointer;
+                display: flex; gap: 8px; align-items: center; }
+  #objects li:hover, #objects li.active { background: #ffffff14; }
+  #objects { padding: 0; margin: 8px 0 0; }
+  .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .dims { color: var(--muted); font-size: 12px; margin-left: auto; }
+  .tag { font-size: 11px; padding: 1px 5px; border-radius: 3px; background: #000a;
+         color: #fff; white-space: nowrap; pointer-events: none; }
+  .row { display: flex; gap: 6px; margin: 6px 0; align-items: center; }
+  .row .key { color: var(--muted); width: 64px; flex: none; }
+  input[type=number] { width: 80px; background: #0006; color: var(--text); border: 1px solid #fff3;
+                       border-radius: 4px; padding: 3px 6px; }
+  button { background: #ffffff1a; color: var(--text); border: 1px solid #fff3; border-radius: 4px;
+           padding: 5px 10px; cursor: pointer; }
+  button:hover { background: #ffffff2a; }
+  button:disabled { opacity: 0.4; cursor: default; }
+  button.primary { background: var(--accent); color: #0b1a12; border-color: var(--accent); }
+  #result { margin-top: 10px; font-size: 13px; white-space: pre-wrap; }
+  #result .ok { color: var(--accent); font-weight: 600; }
+  #result .no { color: var(--bad); font-weight: 600; }
+  .hint { color: var(--muted); font-size: 12px; }
+  #chat { display: none; margin-top: 14px; border-top: 1px solid #fff2; padding-top: 10px; }
+  #chatLog { max-height: 260px; overflow: auto; font-size: 13px; }
+  #chatLog .user { margin: 8px 0 2px; color: var(--accent); }
+  #chatLog .agent { white-space: pre-wrap; }
+  #chatLog .tools { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  #chatInput { width: 100%; box-sizing: border-box; min-height: 48px; background: #0006;
+               color: var(--text); border: 1px solid #fff3; border-radius: 4px; padding: 5px 6px;
+               font: inherit; resize: vertical; }
+  #chatMic.recording { background: var(--bad); border-color: var(--bad); color: #fff; }
+  #chat label { font-size: 12px; color: var(--muted); }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="panel" class="panel">
+  <h1 id="title">PIVOT scene</h1>
+  <div class="meta" id="meta"></div>
+  <label><input type="checkbox" id="showPoints" checked> Point cloud</label>
+  <label><input type="checkbox" id="showBoxes" checked> Object boxes</label>
+  <label><input type="checkbox" id="showVolumes" checked> Object volumes</label>
+  <label><input type="checkbox" id="showFloor" checked> Walkable floor</label>
+  <label>Cut above <span id="cutValue">2.0</span> m
+    <input type="range" id="cut" min="0.3" max="4" step="0.1" value="2.0" style="width:100%"></label>
+  <ul id="objects"></ul>
+</div>
+<div id="controls" class="panel">
+  <h2>Move an object</h2>
+  <div class="hint">Click an object, then click where it should go: under a table, on a desk
+    (with "Carry it"), anywhere. After a move, the next click picks a new object; to change
+    it before, use "Change", the list, Ctrl-click or Esc.
+    Every move is planned and checked against the real geometry before it happens.</div>
+  <div class="row"><span class="key">Object</span><span id="selected">none</span>
+    <button id="deselect" style="display:none">Change</button></div>
+  <div class="row"><span class="key">Target</span><span id="target">none</span></div>
+  <div class="row"><span class="key">Rotation</span>
+    <input type="number" id="yaw" step="15" placeholder="keep"><span class="hint">degrees</span></div>
+  <label><input type="checkbox" id="carry"> Carry it, over furniture (light objects)</label>
+  <div class="row">
+    <button id="check" disabled>Check</button>
+    <button id="move" class="primary" disabled>Move</button>
+    <button id="undo">Undo</button>
+    <button id="reset">Reset</button>
+    <button id="plan" title="Printable steps and plan of the moves made">Moving plan</button>
+  </div>
+  <div id="result"></div>
+  <div class="row"><button id="makeRoom" class="primary" style="display:none">Make room &amp; move</button></div>
+  <div id="chat">
+    <h2>Ask PIVOT</h2>
+    <div class="hint">For example: "Can chair 5 go under table 72?", "Put the trash can next to
+      door 26 without blocking it." Every answer is checked against the geometry.</div>
+    <div id="chatLog"></div>
+    <textarea id="chatInput" placeholder="Your request…"></textarea>
+    <div class="row"><button id="chatSend" class="primary">Send</button>
+      <button id="chatMic" style="display:none" title="Click, speak, click again">Speak</button>
+      <label><input type="checkbox" id="chatAloud"> Read answers aloud</label></div>
+  </div>
+</div>
+<script id="scene-data" type="application/json">__PIVOT_SCENE_DATA__</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
+import { Line2 } from "three/addons/lines/Line2.js";
+import { LineGeometry } from "three/addons/lines/LineGeometry.js";
+import { LineMaterial } from "three/addons/lines/LineMaterial.js";
+
+const data = JSON.parse(document.getElementById("scene-data").textContent);
+const decode = (b64, Type) => {
+  const bytes = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  return new Type(bytes.buffer);
+};
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+// Section plane hiding the ceiling, so the room is seen like a floor plan.
+const cutPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 2.0);
+renderer.clippingPlanes = [cutPlane];
+document.body.appendChild(renderer.domElement);
+const labels = new CSS2DRenderer();
+labels.domElement.style.position = "absolute";
+labels.domElement.style.top = "0";
+labels.domElement.style.pointerEvents = "none";
+document.body.appendChild(labels.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x111418);
+const camera = new THREE.PerspectiveCamera(55, 1, 0.05, 100);
+camera.up.set(0, 0, 1);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+
+// Point cloud.
+const positions = decode(data.points, Float32Array);
+const colors = decode(data.colors, Uint8Array);
+const cloudGeometry = new THREE.BufferGeometry();
+cloudGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+cloudGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3, true));
+const cloud = new THREE.Points(cloudGeometry,
+  new THREE.PointsMaterial({ size: 0.025, vertexColors: true, sizeAttenuation: true }));
+scene.add(cloud);
+
+// Walkable floor, drawn as a translucent texture just above z = 0.
+const floorGroup = new THREE.Group();
+if (data.floor) {
+  const f = data.floor;
+  const pixels = new Uint8Array(f.rows * f.cols * 4);
+  f.cells.forEach((cols, row) => cols.forEach(col => {
+    pixels.set([76, 195, 138, 90], (row * f.cols + col) * 4);
+  }));
+  const texture = new THREE.DataTexture(pixels, f.cols, f.rows);
+  texture.magFilter = THREE.NearestFilter;
+  texture.needsUpdate = true;
+  const plane = new THREE.Mesh(
+    new THREE.PlaneGeometry(f.cols * f.resolution, f.rows * f.resolution),
+    new THREE.MeshBasicMaterial({ map: texture, transparent: true, depthWrite: false }));
+  plane.position.set(f.origin[0] + f.cols * f.resolution / 2,
+                     f.origin[1] + f.rows * f.resolution / 2, 0.005);
+  floorGroup.add(plane);
+}
+scene.add(floorGroup);
+
+// Objects: box edges with a label, a pickable invisible fill, and the volume
+// each object actually occupies. All three follow the object's pose.
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 2.0));
+const sun = new THREE.DirectionalLight(0xffffff, 1.5);
+sun.position.set(2, -3, 5);
+scene.add(sun);
+const boxGroup = new THREE.Group();
+const volumeGroup = new THREE.Group();
+const list = document.getElementById("objects");
+const views = new Map();
+const palette = ["#e5484d", "#3e63dd", "#46a758", "#f5d90a", "#8e4ec6", "#12a594",
+                 "#f76b15", "#d6409f", "#0090ff", "#a18072"];
+data.objects.forEach((obj, i) => {
+  const color = new THREE.Color(palette[i % palette.length]);
+  const [sx, sy, sz] = obj.box.size;
+  const edges = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(sx, sy, sz)),
+    new THREE.LineBasicMaterial({ color }));
+  const fill = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.0, depthWrite: false }));
+  fill.userData.id = obj.id;
+  edges.add(fill);
+  const tag = document.createElement("div");
+  tag.className = "tag";
+  tag.textContent = `${obj.label} #${obj.id}`;
+  const label = new CSS2DObject(tag);
+  label.position.set(0, 0, sz / 2 + 0.05);
+  edges.add(label);
+  boxGroup.add(edges);
+
+  let cubes = null;
+  if (obj.shape) {
+    // Cells are in the box frame: one instanced cube per occupied cell.
+    const r = obj.shape.resolution, cells = obj.shape.cells, count = cells.length / 3;
+    cubes = new THREE.InstancedMesh(new THREE.BoxGeometry(r, r, r),
+      new THREE.MeshLambertMaterial({ color }), count);
+    const m = new THREE.Matrix4();
+    for (let k = 0; k < count; k++) {
+      m.makeTranslation((cells[3 * k] + 0.5) * r, (cells[3 * k + 1] + 0.5) * r,
+                        (cells[3 * k + 2] + 0.5) * r);
+      cubes.setMatrixAt(k, m);
+    }
+    volumeGroup.add(cubes);
+  }
+
+  const li = document.createElement("li");
+  li.innerHTML = `<span class="swatch" style="background:${palette[i % palette.length]}"></span>` +
+    `<span>${obj.label} #${obj.id}</span>` +
+    `<span class="dims">${sx.toFixed(2)}×${sy.toFixed(2)}×${sz.toFixed(2)} m</span>`;
+  li.onclick = () => select(obj.id);
+  list.appendChild(li);
+  views.set(obj.id, { obj, edges, fill, cubes, li, z: obj.box.center[2] });
+  setPose(obj.id, obj.box.center[0], obj.box.center[1], obj.box.yaw);
+});
+scene.add(boxGroup);
+scene.add(volumeGroup);
+
+function setPose(id, x, y, yaw, z = null) {
+  const view = views.get(id);
+  if (z !== null) view.z = z;
+  for (const node of [view.edges, view.cubes]) {
+    if (!node) continue;
+    node.position.set(x, y, view.z);
+    node.rotation.z = yaw;
+  }
+}
+
+function pose(id) {
+  const edges = views.get(id).edges;
+  return [edges.position.x, edges.position.y, edges.rotation.z];
+}
+
+// Back to picking an object: the next click selects instead of aiming.
+function clearSelection() {
+  selectedId = null;
+  views.forEach(v => {
+    v.fill.material.opacity = 0.0;
+    v.li.classList.remove("active");
+    if (v.cubes) {
+      v.cubes.material.transparent = false;
+      v.cubes.material.opacity = 1.0;
+      v.cubes.material.depthWrite = true;
+      v.cubes.material.needsUpdate = true;
+    }
+  });
+  document.getElementById("selected").textContent = "none";
+  document.getElementById("deselect").style.display = "none";
+  // Options apply to one move: the next object starts with the defaults.
+  document.getElementById("carry").checked = false;
+  document.getElementById("yaw").value = "";
+  setTarget(null);
+}
+window.addEventListener("keydown", e => {
+  if (e.key === "Escape" && data.interactive) clearSelection();
+});
+
+document.getElementById("title").textContent = data.title;
+document.getElementById("meta").textContent =
+  `${data.objects.length} objects · ${(positions.length / 3).toLocaleString()} points`;
+for (const [id, group] of [["showPoints", cloud], ["showBoxes", boxGroup],
+                           ["showVolumes", volumeGroup], ["showFloor", floorGroup]]) {
+  document.getElementById(id).onchange = e => {
+    group.visible = e.target.checked;
+    if (group === boxGroup) labels.domElement.style.display = e.target.checked ? "" : "none";
+  };
+}
+
+document.getElementById("cut").oninput = e => {
+  cutPlane.constant = parseFloat(e.target.value);
+  document.getElementById("cutValue").textContent = parseFloat(e.target.value).toFixed(1);
+};
+
+// ---------------------------------------------------------------------------
+// Selection, and the controls that plan and execute moves (served mode only).
+let selectedId = null;
+let target = null;
+const ghost = new THREE.Group();
+// The planned path and the target are drawn over everything, so they stay
+// visible under tables and through the point cloud: no depth test, and in the
+// transparent pass, which is drawn last.
+const pathMaterial = new LineMaterial({ color: 0xffe066, linewidth: 5, depthTest: false,
+                                        transparent: true });
+const pathLine = new Line2(new LineGeometry(), pathMaterial);
+pathLine.renderOrder = 10;
+pathLine.visible = false;
+scene.add(ghost, pathLine);
+
+function select(id) {
+  selectedId = id;
+  views.forEach((v, key) => {
+    v.fill.material.opacity = key === id ? 0.25 : 0.0;
+    v.li.classList.toggle("active", key === id);
+    // Focus: the other objects' volumes fade out.
+    if (v.cubes) {
+      v.cubes.material.transparent = key !== id;
+      v.cubes.material.opacity = key === id ? 1.0 : 0.3;
+      v.cubes.material.depthWrite = key === id;
+      v.cubes.material.needsUpdate = true;  // Transparency changes the shader.
+    }
+  });
+  const view = views.get(id);
+  controls.target.set(view.edges.position.x, view.edges.position.y, view.z);
+  document.getElementById("selected").textContent = `${view.obj.label} #${id}`;
+  document.getElementById("deselect").style.display = data.interactive ? "" : "none";
+  setTarget(null);
+}
+
+function setTarget(point) {
+  target = point;
+  ghost.clear();
+  pathLine.visible = false;
+  document.getElementById("target").textContent =
+    point ? `(${point.x.toFixed(2)}, ${point.y.toFixed(2)}) m` : "none";
+  const ready = data.interactive && selectedId !== null && point !== null;
+  document.getElementById("check").disabled = !ready;
+  document.getElementById("move").disabled = !ready;
+  document.getElementById("makeRoom").style.display = "none";
+  if (point) showGhost(point, requestedYaw() ?? pose(selectedId)[2]);
+}
+
+// Dashed outline of the selected object at a pose.
+function showGhost(point, yaw) {
+  ghost.clear();
+  const view = views.get(selectedId);
+  const [sx, sy, sz] = view.obj.box.size;
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(sx, sy, sz)),
+    new THREE.LineDashedMaterial({ color: 0xffffff, dashSize: 0.05, gapSize: 0.04,
+                                   depthTest: false, transparent: true }));
+  outline.renderOrder = 10;
+  outline.computeLineDistances();
+  outline.position.set(point.x, point.y, view.z);
+  outline.rotation.z = yaw;
+  ghost.add(outline);
+}
+
+function requestedYaw() {
+  const value = document.getElementById("yaw").value;
+  return value === "" ? null : THREE.MathUtils.degToRad(parseFloat(value));
+}
+document.getElementById("yaw").oninput = () => { if (target) setTarget(target); };
+
+// A click (not a drag) picks an object, or a target on the floor.
+const raycaster = new THREE.Raycaster();
+const floorPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
+let downAt = null;
+renderer.domElement.addEventListener("pointerdown", e => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener("pointerup", e => {
+  if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  const ndc = new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1,
+                                -(e.clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const fills = [...views.values()].map(v => v.fill);
+  // Without a selection, a click selects. With one, it aims, through objects
+  // (under a table); ctrl-click selects another object.
+  const selecting = selectedId === null || !data.interactive || e.ctrlKey || e.metaKey;
+  // Door and window boxes are large and stand in front of the room: an object
+  // under the cursor wins over them.
+  const hits = selecting ? raycaster.intersectObjects(fills, false) : [];
+  const isOpening = h => ["door", "window"].includes(views.get(h.object.userData.id).obj.label);
+  const hit = hits.find(h => !isOpening(h)) ?? hits[0];
+  if (hit) {
+    select(hit.object.userData.id);
+    return;
+  }
+  if (!data.interactive || selectedId === null) return;
+  const point = raycaster.ray.intersectPlane(floorPlane, new THREE.Vector3());
+  if (point) setTarget(point);
+});
+
+async function callTool(name, args) {
+  const response = await fetch(`/api/tools/${name}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args) });
+  return response.json();
+}
+
+function moveArguments() {
+  // A click is approximate: accept the nearest feasible pose within 50 cm.
+  const args = { object_id: selectedId, x: target.x, y: target.y, snap_m: 0.5 };
+  // Carried objects travel with their bottom at 90 cm, above desks.
+  if (document.getElementById("carry").checked) args.carry_height_m = 0.9;
+  const yaw = document.getElementById("yaw").value;
+  if (yaw !== "") args.yaw_deg = parseFloat(yaw);
+  return args;
+}
+
+function describe(plan, moved) {
+  if (plan.status === "success") {
+    const lines = [`<span class="ok">${moved ? "Moved" : "Feasible"}</span>`,
+      `path ${plan.path_length_m} m, rotation ${plan.total_rotation_deg}°`,
+      `effort ${plan.effort_m} m, tightest clearance ` +
+      (plan.min_clearance_m === null ? "> 1 m" : `${Math.round(100 * plan.min_clearance_m)} cm`)];
+    return lines.join("\n");
+  }
+  return `<span class="no">Not possible (${plan.status.replace("_", " ")})</span>\n${plan.message}`;
+}
+
+function drawPath(waypoints) {
+  pathLine.geometry = new LineGeometry();
+  pathLine.geometry.setPositions(waypoints.flatMap(([x, y]) => [x, y, 0.02]));
+  pathLine.computeLineDistances();
+  pathLine.visible = true;
+}
+
+const result = document.getElementById("result");
+let busy = false;
+async function run(name) {
+  if (busy) return;
+  busy = true;
+  result.textContent = "Planning…";
+  try {
+    const answer = await callTool(name, moveArguments());
+    if (answer.error) { result.innerHTML = `<span class="no">Error</span>\n${answer.error}`; return; }
+    const plan = name === "move_object" ? answer.plan : answer;
+    result.innerHTML = describe(plan, name === "move_object" && answer.moved);
+    for (const warning of answer.warnings || []) result.innerHTML += `\nNote: it ${warning}.`;
+    const adjusted = answer.goal_adjusted;
+    if (adjusted) {
+      result.innerHTML += `\nTarget adjusted by ${Math.round(100 * adjusted.shift_m)} cm` +
+        " to leave room around the object.";
+      showGhost(new THREE.Vector3(adjusted.x, adjusted.y, 0),
+                THREE.MathUtils.degToRad(adjusted.yaw_deg));
+    }
+    if (plan.waypoints) drawPath(plan.waypoints);
+    if (name === "move_object" && answer.moved) {
+      await animate(selectedId, answer.carried_along || [], plan.waypoints);
+      applyObjects(answer.objects);
+      clearSelection();
+    } else if (plan.status !== "success") {
+      await suggestMakingRoom();
+    }
+  } finally {
+    busy = false;
+  }
+}
+
+// When the object cannot get there, check whether moving others aside would help.
+const makeRoomButton = document.getElementById("makeRoom");
+async function suggestMakingRoom() {
+  result.innerHTML += "\n\nLooking for objects to move out of the way…";
+  const preview = await callTool("make_room", moveArguments());
+  result.innerHTML = result.innerHTML.replace("\n\nLooking for objects to move out of the way…", "");
+  if (preview.success && preview.blockers.length) {
+    result.innerHTML += `\n\n<span class="ok">${preview.message}</span>`;
+    makeRoomButton.style.display = "";
+  } else if (preview.message) {
+    result.innerHTML += `\n\n${preview.message}`;
+  }
+}
+
+makeRoomButton.onclick = async () => {
+  if (busy) return;
+  busy = true;
+  makeRoomButton.style.display = "none";
+  result.textContent = "Planning…";
+  try {
+    const answer = await callTool("make_room_and_move", moveArguments());
+    if (!answer.moved) { result.innerHTML = `<span class="no">Not possible</span>\n${answer.message}`; return; }
+    result.innerHTML = `<span class="ok">Moved</span>\n${answer.message}`;
+    for (const step of answer.steps) {
+      drawPath(step.waypoints);
+      await animate(step.object_id, step.carried_along || [], step.waypoints);
+    }
+    applyObjects(answer.objects);
+    clearSelection();
+  } finally {
+    busy = false;
+  }
+};
+document.getElementById("deselect").onclick = clearSelection;
+document.getElementById("check").onclick = () => run("plan_motion");
+document.getElementById("move").onclick = () => run("move_object");
+document.getElementById("undo").onclick = async () => {
+  const answer = await callTool("undo", {});
+  result.textContent = answer.undone ? "Last move undone." : answer.reason;
+  if (answer.objects) applyObjects(answer.objects);
+};
+document.getElementById("reset").onclick = async () => {
+  const objects = await (await fetch("/api/reset", { method: "POST" })).json();
+  applyObjects(objects);
+  clearSelection();
+  chatLog.textContent = "";  // The server starts a new conversation too.
+  result.textContent = "Scene reset.";
+};
+
+function applyObjects(objects) {
+  for (const obj of objects) {
+    if (!views.has(obj.id)) continue;
+    views.get(obj.id).z = obj.box.center[2];
+    setPose(obj.id, obj.box.center[0], obj.box.center[1], obj.box.yaw);
+  }
+}
+
+// Plays a verified motion: the object follows the waypoints (translations,
+// in-place turns, lifts and lowerings), and what it carries moves rigidly with it.
+function animate(id, carried, waypoints) {
+  const [x0, y0, yaw0] = pose(id);
+  const height = views.get(id).obj.box.size[2];
+  const z0 = views.get(id).z;
+  const riders = carried.map(child => {
+    const [cx, cy, cyaw] = pose(child);
+    const dx = cx - x0, dy = cy - y0;
+    return { child, u: Math.cos(-yaw0) * dx - Math.sin(-yaw0) * dy,
+             v: Math.sin(-yaw0) * dx + Math.cos(-yaw0) * dy, dyaw: cyaw - yaw0,
+             dz: views.get(child).z - z0 };
+  });
+  // Waypoints are [x, y, yaw in degrees, bottom height]; poses use the center height.
+  const steps = [];
+  let previous = [waypoints[0][0], waypoints[0][1], yaw0, z0];
+  for (const [x, y, yawDeg, bottom] of waypoints.slice(1)) {
+    let yaw = THREE.MathUtils.degToRad(yawDeg);
+    // Turn the short way, continuing from the current yaw.
+    yaw = previous[2] + Math.atan2(Math.sin(yaw - previous[2]), Math.cos(yaw - previous[2]));
+    const z = bottom + height / 2;
+    const seconds = Math.max(Math.hypot(x - previous[0], y - previous[1]) / 0.6,
+                             Math.abs(yaw - previous[2]) / (Math.PI / 2),
+                             Math.abs(z - previous[3]) / 0.4, 0.05);
+    steps.push({ from: previous, to: [x, y, yaw, z], seconds });
+    previous = [x, y, yaw, z];
+  }
+  return new Promise(resolve => {
+    let index = 0, start = performance.now();
+    function frame(now) {
+      const step = steps[index];
+      const t = Math.min((now - start) / (1000 * step.seconds), 1);
+      const [x, y, yaw, z] = step.from.map((a, k) => a + t * (step.to[k] - a));
+      setPose(id, x, y, yaw, z);
+      for (const r of riders) {
+        setPose(r.child, x + Math.cos(yaw) * r.u - Math.sin(yaw) * r.v,
+                y + Math.sin(yaw) * r.u + Math.cos(yaw) * r.v, yaw + r.dyaw, z + r.dz);
+      }
+      if (t < 1) return requestAnimationFrame(frame);
+      index += 1;
+      start = now;
+      if (index < steps.length) return requestAnimationFrame(frame);
+      resolve();
+    }
+    if (steps.length) requestAnimationFrame(frame); else resolve();
+  });
+}
+
+if (data.interactive) document.getElementById("controls").style.display = "block";
+document.getElementById("plan").onclick = () => window.open("/instructions", "_blank");
+
+// Requests in words: the agent answers, and the moves it made are played back.
+const chatLog = document.getElementById("chatLog");
+function chatLine(cls, text) {
+  const line = document.createElement("div");
+  line.className = cls;
+  line.textContent = text;
+  chatLog.appendChild(line);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return line;
+}
+async function sendChat() {
+  const input = document.getElementById("chatInput");
+  const message = input.value.trim();
+  if (!message || busy) return;
+  busy = true;
+  input.value = "";
+  chatLine("user", message);
+  const pending = chatLine("agent", "Thinking…");
+  try {
+    const answer = await (await fetch("/api/chat", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }) })).json();
+    if (answer.error) { pending.textContent = answer.error; return; }
+    pending.textContent = answer.answer;
+    speak(answer.answer);
+    if (answer.steps.length)
+      chatLine("tools", "Checked with: " + answer.steps.map(s => s.tool).join(", "));
+    clearSelection();
+    for (const motion of answer.motions) {
+      drawPath(motion.waypoints);
+      await animate(motion.object_id, motion.carried_along, motion.waypoints);
+    }
+    applyObjects(answer.objects);
+  } finally {
+    busy = false;
+  }
+}
+// Answers read aloud by the browser's own voice (no server, no cost): on
+// glasses, there is no screen to read them from.
+const aloud = document.getElementById("chatAloud");
+function speak(text) {
+  if (!aloud.checked || !window.speechSynthesis) return;
+  speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = "en-US";
+  speechSynthesis.speak(utterance);
+}
+
+// Spoken requests: the microphone is recorded as 16 kHz mono 16-bit WAV (what
+// the transcription models take), sent to the server, and the text is sent
+// to the agent like a typed request.
+const mic = document.getElementById("chatMic");
+let recording = null;
+function wavBytes(chunks, rate) {
+  const length = chunks.reduce((n, c) => n + c.length, 0);
+  const input = new Float32Array(length);
+  let offset = 0;
+  for (const chunk of chunks) { input.set(chunk, offset); offset += chunk.length; }
+  const target = 16000, count = Math.floor(length * target / rate);
+  const view = new DataView(new ArrayBuffer(44 + 2 * count));
+  const text = (at, s) => [...s].forEach((c, i) => view.setUint8(at + i, c.charCodeAt(0)));
+  text(0, "RIFF"); view.setUint32(4, 36 + 2 * count, true); text(8, "WAVEfmt ");
+  view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+  view.setUint32(24, target, true); view.setUint32(28, 2 * target, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); text(36, "data");
+  view.setUint32(40, 2 * count, true);
+  for (let i = 0; i < count; i++) {
+    const x = i * rate / target, j = Math.floor(x), f = x - j;  // Linear resampling.
+    const v = (1 - f) * input[j] + f * (input[Math.min(j + 1, length - 1)] || 0);
+    view.setInt16(44 + 2 * i, Math.max(-1, Math.min(1, v)) * 32767, true);
+  }
+  return view.buffer;
+}
+async function startRecording() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  const context = new AudioContext();
+  const source = context.createMediaStreamSource(stream);
+  const processor = context.createScriptProcessor(4096, 1, 1);
+  const chunks = [];
+  processor.onaudioprocess = e => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  source.connect(processor);
+  processor.connect(context.destination);
+  recording = { stream, context, processor, chunks };
+  mic.classList.add("recording");
+  mic.textContent = "Stop";
+}
+async function stopRecording() {
+  const { stream, context, processor, chunks } = recording;
+  recording = null;
+  processor.disconnect();
+  stream.getTracks().forEach(t => t.stop());
+  await context.close();
+  mic.classList.remove("recording");
+  mic.textContent = "Transcribing…";
+  mic.disabled = true;
+  try {
+    const result = await (await fetch("/api/transcribe", {
+      method: "POST", headers: { "Content-Type": "audio/wav" },
+      body: wavBytes(chunks, context.sampleRate) })).json();
+    if (result.error) { chatLine("agent", result.error); return; }
+    if (!result.text) { chatLine("agent", "I did not hear anything."); return; }
+    aloud.checked = true;  // Asked by voice, answered by voice.
+    document.getElementById("chatInput").value = result.text;
+    await sendChat();
+  } finally {
+    mic.textContent = "Speak";
+    mic.disabled = false;
+  }
+}
+mic.onclick = async () => {
+  try {
+    if (recording) await stopRecording(); else await startRecording();
+  } catch (error) {
+    chatLine("agent", "Microphone unavailable: " + error.message);
+  }
+};
+
+if (data.chat) {
+  document.getElementById("chat").style.display = "block";
+  if (data.voice && navigator.mediaDevices) mic.style.display = "";
+  document.getElementById("chatSend").onclick = sendChat;
+  document.getElementById("chatInput").addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
+  });
+}
+
+// Scripting hook, for tests and recorded demos: the same actions as the controls.
+window.pivot = {
+  select,
+  deselect: clearSelection,
+  aim: (x, y) => setTarget(new THREE.Vector3(x, y, 0)),
+  check: () => run("plan_motion"),
+  move: () => run("move_object"),
+  view: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); controls.target.set(tx, ty, tz); },
+};
+
+// Frame the scene from above at an angle.
+cloudGeometry.computeBoundingBox();
+const bounds = cloudGeometry.boundingBox;
+const center = bounds.getCenter(new THREE.Vector3());
+const extent = bounds.getSize(new THREE.Vector3()).length();
+controls.target.set(center.x, center.y, 0.5);
+camera.position.set(center.x - 0.4 * extent, center.y - 0.6 * extent, 0.7 * extent);
+
+function resize() {
+  const w = window.innerWidth, h = window.innerHeight;
+  renderer.setSize(w, h);
+  labels.setSize(w, h);
+  pathMaterial.resolution.set(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener("resize", resize);
+resize();
+renderer.setAnimationLoop(() => {
+  controls.update();
+  renderer.render(scene, camera);
+  labels.render(scene, camera);
+});
+</script>
+</body>
+</html>
