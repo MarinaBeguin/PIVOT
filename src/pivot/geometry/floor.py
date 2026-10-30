@@ -168,9 +168,8 @@ class FloorMap:
         hi = polygon.max(axis=0) + search_radius
         start = np.floor((lo - self.origin) / self.resolution).astype(int)
         stop = np.ceil((hi - self.origin) / self.resolution).astype(int)
-        cols, rows = np.meshgrid(np.arange(start[0], stop[0] + 1),
-                                 np.arange(start[1], stop[1] + 1))
-        rows, cols = rows.ravel(), cols.ravel()
+        rows, cols = (grid.ravel() for grid in np.meshgrid(
+            np.arange(start[1], stop[1] + 1), np.arange(start[0], stop[0] + 1), indexing="ij"))
         solid = ~self._in_bounds(rows, cols)
         keep = ~solid
         solid[keep] = ~self.floor[rows[keep], cols[keep]]
