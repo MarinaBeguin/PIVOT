@@ -94,6 +94,7 @@
     <h2>Ask PIVOT</h2>
     <div class="hint">For example: "Can chair 5 go under table 72?", "Put the trash can next to
       door 26 without blocking it." Every answer is checked against the geometry.</div>
+    <div id="chatLimits" class="hint"></div>
     <div id="chatLog"></div>
     <textarea id="chatInput" placeholder="Your request…"></textarea>
     <div class="row"><button id="chatSend" class="primary">Send</button>
@@ -584,7 +585,17 @@ async function sendChat() {
     applyObjects(answer.objects);
   } finally {
     busy = false;
+    showLimits();
   }
+}
+
+// On the public demo, each visitor has a few requests a day: say how many are left.
+async function showLimits() {
+  const limits = await (await fetch("/api/limits")).json();
+  if (!limits.public) return;
+  document.getElementById("chatLimits").textContent = limits.budget_spent
+    ? "The public demo has used its budget: run PIVOT yourself (see the README)."
+    : `Public demo: ${limits.requests_left} request${limits.requests_left === 1 ? "" : "s"} left today.`;
 }
 // Answers read aloud by the browser's own voice (no server, no cost): on
 // glasses, there is no screen to read them from.
@@ -668,6 +679,7 @@ mic.onclick = async () => {
 
 if (data.chat) {
   document.getElementById("chat").style.display = "block";
+  showLimits();
   if (data.voice && navigator.mediaDevices) mic.style.display = "";
   document.getElementById("chatSend").onclick = sendChat;
   document.getElementById("chatInput").addEventListener("keydown", e => {
