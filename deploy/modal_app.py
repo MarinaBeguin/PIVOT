@@ -1,9 +1,11 @@
-"""Serves the PIVOT public demo on Modal: the viewer and the agent on a prebuilt scene.
+"""Serves the PIVOT public demo on Modal: the viewer and the agent on prebuilt rooms.
 
-    PIVOT_DEMO_SCENE=/path/to/out_dir/scene modal deploy deploy/modal_app.py   # from the repo root
+    PIVOT_DEMO_SCENES="Office=/path/office/scene;Classroom=/path/classroom/scene" \
+        modal deploy deploy/modal_app.py   # from the repo root
 
-The scene directory (scene.json and cloud.npz, from ``python -m pivot.build``)
-is copied into the image: the demo never runs SAM, only the agent (Muse Spark)
+Each room is a title and a scene directory (scene.json and cloud.npz, from
+``python -m pivot.build``), the first one shown by default; the directories
+are copied into the image. The demo never runs SAM, only the agent (Muse Spark)
 and speech transcription, through the Meta API. At deploy time the API key is
 read from the repository's .env and handed to Modal as a secret; nothing is
 printed.
@@ -58,19 +60,25 @@ def _secret() -> dict[str, str]:
     return {"META_API_KEY": str(values["META_API_KEY"])}
 
 
-def _scene_dir() -> Path:
-    """Finds the scene to serve, at deploy time only.
+def _rooms() -> list[tuple[str, Path]]:
+    """Reads the rooms to serve from PIVOT_DEMO_SCENES, at deploy time only.
 
     Returns:
-        The directory holding scene.json and cloud.npz.
+        Each room's title and scene directory, the default first.
 
     Raises:
-        SystemExit: If PIVOT_DEMO_SCENE is not set or holds no scene.
+        SystemExit: If no room is given, or a directory holds no scene.
     """
-    scene = Path(os.environ.get("PIVOT_DEMO_SCENE", ""))
-    if not (scene / "scene.json").is_file() or not (scene / "cloud.npz").is_file():
-        raise SystemExit("Set PIVOT_DEMO_SCENE to a scene directory (scene.json, cloud.npz).")
-    return scene
+    rooms = []
+    for spec in filter(None, os.environ.get("PIVOT_DEMO_SCENES", "").split(";")):
+        title, _, path = spec.rpartition("=")
+        scene = Path(path)
+        if not title or not (scene / "scene.json").is_file() or not (scene / "cloud.npz").is_file():
+            raise SystemExit(f"Not a room (Title=scene directory): {spec!r}")
+        rooms.append((title, scene))
+    if not rooms:
+        raise SystemExit('Set PIVOT_DEMO_SCENES, e.g. "Office=/path/to/scene".')
+    return rooms
 
 
 app = modal.App("pivot-demo")
@@ -84,7 +92,11 @@ image = (
     .env(SETTINGS)
 )
 if modal.is_local():
-    image = image.add_local_dir(_scene_dir(), "/scene")
+    ROOMS = _rooms()
+    image = image.env({"PIVOT_ROOMS": ";".join(f"{title}=/scenes/{index}"
+                                              for index, (title, _) in enumerate(ROOMS))})
+    for index, (_, scene_dir) in enumerate(ROOMS):
+        image = image.add_local_dir(scene_dir, f"/scenes/{index}")
 secret = modal.Secret.from_dict(_secret() if modal.is_local() else {})
 
 
@@ -102,5 +114,5 @@ def web() -> FastAPI:
     # pylint: disable-next=import-outside-toplevel
     from pivot.server.app import load_app
 
-    return load_app(Path("/scene"), env_file=Path("/root/no.env"),
+    return load_app(os.environ["PIVOT_ROOMS"].split(";"), env_file=Path("/root/no.env"),
                     max_points=int(os.environ["PIVOT_MAX_POINTS"]), public=True)

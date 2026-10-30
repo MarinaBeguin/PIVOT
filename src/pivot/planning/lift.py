@@ -19,7 +19,7 @@ from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import footprint_overlap
 from pivot.planning.motion import MotionOptions, MotionPlan, MotionStatus, plan_motion
 from pivot.planning.placement import check_placement
-from pivot.scene.graph import SURFACE_LABELS, Scene, carried_boxes, carried_objects
+from pivot.scene.graph import SURFACE_LABELS, Scene, carried_boxes, carried_objects, is_opening
 
 
 def resting_box(scene: Scene, object_id: int, box: OrientedBox, below: float,
@@ -41,6 +41,29 @@ def resting_box(scene: Scene, object_id: int, box: OrientedBox, below: float,
             if o.object_id not in movers and o.label.lower() in SURFACE_LABELS
             and o.box.z_max <= below + 1e-6 and footprint_overlap(box, o.box) >= min_support]
     return box.moved(z_min=max(tops, default=0.0))
+
+
+# Furniture up to this height is carried over (desks, low cabinets), not higher.
+MAX_CARRIED_OVER = 1.1
+# Room left under a carried object.
+CARRY_MARGIN = 0.05
+
+
+def carry_height(scene: Scene, object_id: int) -> float:
+    """Chooses the height to carry an object at: just over the low furniture.
+
+    Args:
+        scene: The scene.
+        object_id: The object.
+
+    Returns:
+        The height of the object's bottom while carried, in meters.
+    """
+    movers = {object_id, *carried_objects(scene, object_id)}
+    tops = [o.box.z_max for o in scene.objects.values()
+            if o.object_id not in movers and not is_opening(o)
+            and o.box.z_max <= MAX_CARRIED_OVER]
+    return max(tops, default=0.0) + CARRY_MARGIN
 
 
 def _column(box: OrientedBox, z_from: float, z_to: float) -> OrientedBox:

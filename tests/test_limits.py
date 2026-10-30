@@ -67,22 +67,25 @@ def test_visitor_key_trusts_only_the_proxy_entry() -> None:
 
 def test_visitors_get_their_own_session_until_idle() -> None:
     now = [0.0]
-    visitors = Visitors(office_scene(), max_visitors=2, idle_seconds=100.0, clock=lambda: now[0])
-    token_a, a = visitors.get(None)
-    token_b, b = visitors.get("unknown")
+    visitors = Visitors({"office": office_scene(), "other": office_scene()}, max_visitors=2,
+                        idle_seconds=100.0, clock=lambda: now[0])
+    token_a, a = visitors.get(None, "office")
+    token_b, b = visitors.get("unknown", "office")
     assert token_a != token_b and a.session is not b.session
-    assert visitors.get(token_a)[1] is a
+    assert visitors.get(token_a, "office")[1] is a
+    other = visitors.get(token_a, "other")[1]
+    assert other is not a and visitors.get(token_a, "other")[1] is other  # One session per room.
     now[0] = 50.0
-    visitors.get(token_a)
-    token_c, _ = visitors.get(None)  # Over the limit: b, the least recently seen, goes.
-    assert len(visitors) == 2 and visitors.get(token_c)[0] == token_c
-    assert visitors.get(token_b)[0] != token_b
+    visitors.get(token_a, "office")
+    token_c, _ = visitors.get(None, "office")  # Over the limit: b, the least recently seen, goes.
+    assert len(visitors) == 2 and visitors.get(token_c, "office")[0] == token_c
+    assert visitors.get(token_b, "office")[0] != token_b
     now[0] = 500.0  # Everyone idle: a known token gets a fresh session.
-    assert visitors.get(token_a)[0] != token_a
+    assert visitors.get(token_a, "office")[0] != token_a
 
 
 def test_reset_gives_a_fresh_session() -> None:
-    visitors = Visitors(office_scene())
-    token, visitor = visitors.get(None)
-    assert visitors.reset(token).session is not visitor.session
-    assert visitors.get(token)[1].session is not visitor.session
+    visitors = Visitors({"office": office_scene()})
+    token, visitor = visitors.get(None, "office")
+    assert visitors.reset(token, "office").session is not visitor.session
+    assert visitors.get(token, "office")[1].session is not visitor.session

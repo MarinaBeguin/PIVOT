@@ -15,15 +15,11 @@
   #panel { left: 12px; width: 260px; }
   #controls { right: 12px; width: 290px; display: none; }
   .panel h1 { font-size: 15px; margin: 0 0 4px; }
+  #sceneMenu { width: 100%; margin: 4px 0 6px; background: #0006; color: var(--text);
+               border: 1px solid #fff3; border-radius: 4px; padding: 4px 6px; font: inherit; }
   .panel h2 { font-size: 13px; margin: 0 0 8px; color: var(--muted); font-weight: 600; }
   .meta { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
   .panel label { display: block; margin: 4px 0; cursor: pointer; }
-  #objects li { list-style: none; padding: 3px 6px; border-radius: 4px; cursor: pointer;
-                display: flex; gap: 8px; align-items: center; }
-  #objects li:hover, #objects li.active { background: #ffffff14; }
-  #objects { padding: 0; margin: 8px 0 0; }
-  .swatch { width: 10px; height: 10px; border-radius: 2px; flex: none; }
-  .dims { color: var(--muted); font-size: 12px; margin-left: auto; }
   .tag { font-size: 11px; padding: 1px 5px; border-radius: 3px; background: #000a;
          color: #fff; white-space: nowrap; pointer-events: none; }
   .row { display: flex; gap: 6px; margin: 6px 0; align-items: center; }
@@ -60,6 +56,7 @@
 <body>
 <div id="panel" class="panel">
   <h1 id="title">PIVOT scene</h1>
+  <select id="sceneMenu" style="display:none" title="Choose a room"></select>
   <div class="meta" id="meta"></div>
   <label><input type="checkbox" id="showPoints" checked> Point cloud</label>
   <label><input type="checkbox" id="showBoxes" checked> Object boxes</label>
@@ -67,26 +64,26 @@
   <label><input type="checkbox" id="showFloor" checked> Walkable floor</label>
   <label>Cut above <span id="cutValue">2.0</span> m
     <input type="range" id="cut" min="0.3" max="4" step="0.1" value="2.0" style="width:100%"></label>
-  <ul id="objects"></ul>
 </div>
 <div id="controls" class="panel">
   <h2>Move an object</h2>
   <div class="hint">Click an object, then click where it should go: under a table, on a desk
-    (with "Carry it"), anywhere. After a move, the next click picks a new object; to change
-    it before, use "Change", the list, Ctrl-click or Esc.
+    (light objects are carried), anywhere. After a move, the next click picks a new object; to change
+    it before, use "Change", Ctrl-click or Esc.
     Every move is planned and checked against the real geometry before it happens.</div>
   <div class="row"><span class="key">Object</span><span id="selected">none</span>
     <button id="deselect" style="display:none">Change</button></div>
   <div class="row"><span class="key">Target</span><span id="target">none</span></div>
   <div class="row"><span class="key">Rotation</span>
     <input type="number" id="yaw" step="15" placeholder="keep"><span class="hint">degrees</span></div>
-  <label><input type="checkbox" id="carry"> Carry it, over furniture (light objects)</label>
   <div class="row">
     <button id="check" disabled>Check</button>
     <button id="move" class="primary" disabled>Move</button>
     <button id="undo">Undo</button>
     <button id="reset">Reset</button>
-    <button id="plan" title="Printable steps and plan of the moves made">Moving plan</button>
+  </div>
+  <div class="row">
+    <button id="plan" title="The moves made so far, as numbered steps and a plan, to save as a PDF">Moving plan (PDF)</button>
   </div>
   <div id="result"></div>
   <div class="row"><button id="makeRoom" class="primary" style="display:none">Make room &amp; move</button></div>
@@ -174,7 +171,6 @@ sun.position.set(2, -3, 5);
 scene.add(sun);
 const boxGroup = new THREE.Group();
 const volumeGroup = new THREE.Group();
-const list = document.getElementById("objects");
 const views = new Map();
 const palette = ["#e5484d", "#3e63dd", "#46a758", "#f5d90a", "#8e4ec6", "#12a594",
                  "#f76b15", "#d6409f", "#0090ff", "#a18072"];
@@ -211,13 +207,7 @@ data.objects.forEach((obj, i) => {
     volumeGroup.add(cubes);
   }
 
-  const li = document.createElement("li");
-  li.innerHTML = `<span class="swatch" style="background:${palette[i % palette.length]}"></span>` +
-    `<span>${obj.label} #${obj.id}</span>` +
-    `<span class="dims">${sx.toFixed(2)}×${sy.toFixed(2)}×${sz.toFixed(2)} m</span>`;
-  li.onclick = () => select(obj.id);
-  list.appendChild(li);
-  views.set(obj.id, { obj, edges, fill, cubes, li, z: obj.box.center[2] });
+  views.set(obj.id, { obj, edges, fill, cubes, z: obj.box.center[2] });
   setPose(obj.id, obj.box.center[0], obj.box.center[1], obj.box.yaw);
 });
 scene.add(boxGroup);
@@ -243,7 +233,6 @@ function clearSelection() {
   selectedId = null;
   views.forEach(v => {
     v.fill.material.opacity = 0.0;
-    v.li.classList.remove("active");
     if (v.cubes) {
       v.cubes.material.transparent = false;
       v.cubes.material.opacity = 1.0;
@@ -254,7 +243,6 @@ function clearSelection() {
   document.getElementById("selected").textContent = "none";
   document.getElementById("deselect").style.display = "none";
   // Options apply to one move: the next object starts with the defaults.
-  document.getElementById("carry").checked = false;
   document.getElementById("yaw").value = "";
   setTarget(null);
 }
@@ -263,6 +251,15 @@ window.addEventListener("keydown", e => {
 });
 
 document.getElementById("title").textContent = data.title;
+// Every request names this page's room; the server keeps one session per room.
+const scoped = path => data.scene
+  ? `${path}${path.includes("?") ? "&" : "?"}scene=${encodeURIComponent(data.scene)}` : path;
+if (data.scenes && data.scenes.length > 1) {
+  const menu = document.getElementById("sceneMenu");
+  for (const room of data.scenes) menu.add(new Option(room.title, room.id, false, room.id === data.scene));
+  menu.onchange = () => { location.href = `/?scene=${encodeURIComponent(menu.value)}`; };
+  menu.style.display = "";
+}
 document.getElementById("meta").textContent =
   `${data.objects.length} objects · ${(positions.length / 3).toLocaleString()} points`;
 for (const [id, group] of [["showPoints", cloud], ["showBoxes", boxGroup],
@@ -297,7 +294,6 @@ function select(id) {
   selectedId = id;
   views.forEach((v, key) => {
     v.fill.material.opacity = key === id ? 0.25 : 0.0;
-    v.li.classList.toggle("active", key === id);
     // Focus: the other objects' volumes fade out.
     if (v.cubes) {
       v.cubes.material.transparent = key !== id;
@@ -377,7 +373,7 @@ renderer.domElement.addEventListener("pointerup", e => {
 });
 
 async function callTool(name, args) {
-  const response = await fetch(`/api/tools/${name}`, {
+  const response = await fetch(scoped(`/api/tools/${name}`), {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(args) });
   return response.json();
 }
@@ -385,8 +381,9 @@ async function callTool(name, args) {
 function moveArguments() {
   // A click is approximate: accept the nearest feasible pose within 50 cm.
   const args = { object_id: selectedId, x: target.x, y: target.y, snap_m: 0.5 };
-  // Carried objects travel with their bottom at 90 cm, above desks.
-  if (document.getElementById("carry").checked) args.carry_height_m = 0.9;
+  // PIVOT slides the object, or carries it over the furniture (or onto a desk) when it is
+  // light and small enough: a bin or a chair, not a sofa nor a floor lamp.
+  args.auto_carry = true;
   const yaw = document.getElementById("yaw").value;
   if (yaw !== "") args.yaw_deg = parseFloat(yaw);
   return args;
@@ -484,7 +481,7 @@ document.getElementById("undo").onclick = async () => {
   if (answer.objects) applyObjects(answer.objects);
 };
 document.getElementById("reset").onclick = async () => {
-  const objects = await (await fetch("/api/reset", { method: "POST" })).json();
+  const objects = await (await fetch(scoped("/api/reset"), { method: "POST" })).json();
   applyObjects(objects);
   clearSelection();
   chatLog.textContent = "";  // The server starts a new conversation too.
@@ -548,7 +545,7 @@ function animate(id, carried, waypoints) {
 }
 
 if (data.interactive) document.getElementById("controls").style.display = "block";
-document.getElementById("plan").onclick = () => window.open("/instructions", "_blank");
+document.getElementById("plan").onclick = () => window.open(scoped("/instructions?pdf=1"), "_blank");
 
 // Requests in words: the agent answers, and the moves it made are played back.
 const chatLog = document.getElementById("chatLog");
@@ -569,7 +566,7 @@ async function sendChat() {
   chatLine("user", message);
   const pending = chatLine("agent", "Thinking…");
   try {
-    const answer = await (await fetch("/api/chat", {
+    const answer = await (await fetch(scoped("/api/chat"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message }) })).json();
     if (answer.error) { pending.textContent = answer.error; return; }
@@ -591,7 +588,7 @@ async function sendChat() {
 
 // On the public demo, each visitor has a few requests a day: say how many are left.
 async function showLimits() {
-  const limits = await (await fetch("/api/limits")).json();
+  const limits = await (await fetch(scoped("/api/limits"))).json();
   if (!limits.public) return;
   document.getElementById("chatLimits").textContent = limits.budget_spent
     ? "The public demo has used its budget: run PIVOT yourself (see the README)."
@@ -656,7 +653,7 @@ async function stopRecording() {
   mic.textContent = "Transcribing…";
   mic.disabled = true;
   try {
-    const result = await (await fetch("/api/transcribe", {
+    const result = await (await fetch(scoped("/api/transcribe"), {
       method: "POST", headers: { "Content-Type": "audio/wav" },
       body: wavBytes(chunks, context.sampleRate) })).json();
     if (result.error) { chatLine("agent", result.error); return; }

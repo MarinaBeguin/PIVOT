@@ -4,7 +4,7 @@ import base64
 import json
 from importlib import resources
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 
@@ -47,9 +47,21 @@ def scene_payload(scene: Scene, points: FloatArray, colors: ColorArray,
     return payload
 
 
+class RoomMenu(NamedTuple):
+    """The room menu of a page.
+
+    Attributes:
+        current: The id of the page's room.
+        rooms: Every room the server offers, as ``(id, title)``.
+    """
+
+    current: str
+    rooms: list[tuple[str, str]]
+
+
 def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,
                   title: str = "PIVOT scene", interactive: bool = False,
-                  chat: bool = False, voice: bool = False) -> str:
+                  chat: bool = False, voice: bool = False, menu: RoomMenu | None = None) -> str:
     """Renders the self-contained viewer page of a scene.
 
     The page loads three.js from a CDN and embeds all scene data.
@@ -63,6 +75,8 @@ def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,
             enables the controls that plan and execute moves.
         chat: Whether the server also answers requests in words (agent).
         voice: Whether requests can also be spoken (microphone).
+        menu: The rooms the server offers and this page's room, sent with
+            every request; no menu if None.
 
     Returns:
         The HTML page.
@@ -72,6 +86,8 @@ def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,
     payload["interactive"] = interactive
     payload["chat"] = chat
     payload["voice"] = voice
+    payload["scenes"] = [{"id": i, "title": t} for i, t in menu.rooms] if menu else []
+    payload["scene"] = menu.current if menu else ""
     # "</" must not appear inside the inline JSON script element.
     return template.replace(_PLACEHOLDER, json.dumps(payload).replace("</", "<\\/"))
 
