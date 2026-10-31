@@ -7,8 +7,11 @@ nearest wall of the room, keeps only its points near that wall, and becomes a
 thin box along it. Openings found twice (a glazed door also segmented as a
 window) are merged, and slivers narrower than any real opening are dropped.
 
-Walls are taken as the sides of the room's floor rectangle, in the room's
-orientation: right for rectangular rooms, approximate for others.
+Walls are taken as the sides of the floor's rectangle, in the room's
+orientation, which is right for one rectangular room. An opening far from
+those sides (a door between two rooms of a home) goes instead into the
+nearest wall found on the floor map: a strip without floor, with floor on at
+least one side.
 """
 
 from __future__ import annotations
@@ -19,31 +22,53 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from pivot.geometry.box import OrientedBox, rotation_2d
+from pivot.geometry.floor import FloorMap
 from pivot.geometry.types import FloatArray
 from pivot.scene.graph import SceneObject, is_opening
 
 
+# An opening farther than this from the floor rectangle's sides is set in an
+# inner wall, when one is found on the floor map.
+OUTER_WALL_REACH = 0.6
+# How far from an opening an inner wall is looked for, and how long a stretch
+# of it is examined, in meters.
+_INNER_SEARCH = 0.8
+_INNER_SPAN = 1.0
+# Share of a wall stretch without floor (a doorway leaves a gap), and largest
+# share of floor-less cells on its floor side.
+_WALL_SOLID = 0.4
+_ROOM_OPEN = 0.3
+# The floor side of a wall is looked at this many cells away from it, times three.
+_WALL_STEP_CELLS = 2
+
+
 @dataclass(frozen=True)
 class Walls:
-    """The four walls of a room, as the sides of its floor rectangle.
+    """The walls of a room: the sides of its floor rectangle, and inner walls.
 
     Attributes:
         yaw: Room orientation, in radians.
         low: (2,) minimum floor coordinates in the room frame, in meters.
         high: (2,) maximum floor coordinates in the room frame, in meters.
+        floor: Floor map to find inner walls on; outer walls only if None.
     """
 
     yaw: float
     low: FloatArray
     high: FloatArray
+    floor: FloorMap | None = None
 
     @classmethod
-    def from_floor(cls, floor_xy: FloatArray, yaw: float, quantile: float = 0.005) -> Walls:
+    def from_floor(cls, floor_xy: FloatArray, yaw: float, floor: FloorMap | None = None,
+                   quantile: float = 0.005) -> Walls:
         """Finds the walls from floor points.
 
         Args:
             floor_xy: (N, 2) floor points, in meters.
             yaw: Room orientation, in radians.
+            floor: Floor map with the walls taken off (see
+                :func:`~pivot.lifting.floor.remove_standing`), to find inner
+                walls on; built from the points if None.
             quantile: Fraction of points ignored on each side (floor seen
                 through doors and windows).
 
@@ -52,7 +77,8 @@ class Walls:
         """
         local = floor_xy @ rotation_2d(yaw)  # World to room frame.
         return cls(yaw, np.quantile(local, quantile, axis=0),
-                   np.quantile(local, 1.0 - quantile, axis=0))
+                   np.quantile(local, 1.0 - quantile, axis=0),
+                   floor if floor is not None else FloorMap.from_points(floor_xy, resolution=0.05))
 
     def to_room(self, xy: FloatArray) -> FloatArray:
         """Expresses world points in the room frame.
@@ -78,7 +104,65 @@ class Walls:
         local = self.to_room(xy[None])[0]
         sides = [(abs(local[a] - c), a, float(c))
                  for a in (0, 1) for c in (self.low[a], self.high[a])]
-        _, axis, coordinate = min(sides)
+        distance, axis, coordinate = min(sides)
+        if distance > OUTER_WALL_REACH:
+            inner = self._inner_wall(local)
+            if inner is not None:
+                return inner
+        return axis, coordinate
+
+    def _floor_share(self, local: FloatArray) -> FloatArray:
+        """Tells which room-frame points lie on the floor map.
+
+        Args:
+            local: (..., 2) room-frame points.
+
+        Returns:
+            A boolean array, True on the floor.
+        """
+        assert self.floor is not None
+        world = local @ rotation_2d(self.yaw).T
+        cells = np.floor((world - self.floor.origin) / self.floor.resolution).astype(int)
+        rows, cols = cells[..., 1], cells[..., 0]
+        inside = ((rows >= 0) & (rows < self.floor.shape[0])
+                  & (cols >= 0) & (cols < self.floor.shape[1]))
+        on_floor = np.zeros(rows.shape, dtype=bool)
+        on_floor[inside] = self.floor.floor[rows[inside], cols[inside]]
+        return on_floor
+
+    def _inner_wall(self, local: FloatArray) -> tuple[int, float] | None:
+        """Finds the inner wall nearest to a room-frame point, on the floor map.
+
+        Args:
+            local: (2,) room-frame point.
+
+        Returns:
+            The room-frame axis the wall is perpendicular to, and its
+            coordinate; None if no wall is near.
+        """
+        if self.floor is None:
+            return None
+        step = self.floor.resolution
+        offsets = np.arange(-_INNER_SEARCH, _INNER_SEARCH + step, step)
+        along = np.arange(-_INNER_SPAN, _INNER_SPAN + step, step)
+        found: list[tuple[float, int, float]] = []
+        side = 3 * _WALL_STEP_CELLS
+        for axis in (0, 1):
+            # Points of strips across the axis, one strip per offset.
+            grid = np.zeros((len(offsets), len(along), 2))
+            grid[..., axis] = local[axis] + offsets[:, None]
+            grid[..., 1 - axis] = local[1 - axis] + along[None, :]
+            solid = 1.0 - self._floor_share(grid).mean(axis=1)
+            for k in np.argsort(np.abs(offsets)):
+                if solid[k] < _WALL_SOLID or solid[k] >= 0.999:
+                    continue
+                if min(solid[max(k - side, 0)], solid[min(k + side, len(offsets) - 1)]) \
+                        <= _ROOM_OPEN:
+                    found.append((abs(float(offsets[k])), axis, float(local[axis] + offsets[k])))
+                    break
+        if not found:
+            return None
+        _, axis, coordinate = min(found)
         return axis, coordinate
 
 

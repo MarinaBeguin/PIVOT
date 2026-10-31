@@ -4,9 +4,10 @@ import numpy as np
 import pytest
 
 from pivot.geometry.box import OrientedBox, fit_box, rotation_2d
+from pivot.geometry.floor import FloorMap
 from pivot.geometry.types import FloatArray
 from pivot.lifting.backproject import backproject, depth_edges, resize_mask
-from pivot.lifting.floor import estimate_ceiling, room_orientation
+from pivot.lifting.floor import estimate_ceiling, remove_standing, room_orientation
 from pivot.lifting.parts import join_parts
 from pivot.lifting.objects import (
     assign_by_votes, contained_tracks, distinct_pairs, duplicate_groups, largest_cluster,
@@ -278,3 +279,36 @@ def test_ceiling_is_the_horizontal_layer_above_the_walls() -> None:
 
 def test_ceiling_is_unknown_when_the_camera_never_looked_up() -> None:
     assert estimate_ceiling(_room_points(None, np.random.default_rng(1))) is None
+
+
+def test_a_thin_partition_erased_by_gap_filling_is_restored() -> None:
+    rng = np.random.default_rng(0)
+    xs, ys = np.meshgrid(np.arange(0.0, 8.1, 0.02), np.arange(0.0, 4.0, 0.02))
+    floor_xy = np.column_stack([xs.ravel(), ys.ravel()])
+    # No floor is seen under the 10 cm partition, except in its 90 cm door.
+    in_wall = (floor_xy[:, 0] > 3.99) & (floor_xy[:, 0] < 4.11)
+    seen = ~in_wall | (np.abs(floor_xy[:, 1] - 2.0) < 0.45)
+    floor = FloorMap.from_points(floor_xy[seen], 0.05)
+    assert floor.is_floor(np.array([4.05, 0.5]))  # Gap filling closed the partition.
+    wall = np.column_stack([rng.uniform(4.0, 4.1, 20000), rng.uniform(0.0, 4.0, 20000),
+                            rng.uniform(0.0, 2.5, 20000)])
+    wall = wall[np.abs(wall[:, 1] - 2.0) >= 0.45]
+    chair = box((2.0, 1.0, 0.45), (0.5, 0.5, 0.9))
+    chair_points = chair.center + (rng.random((3000, 3)) - 0.5) * chair.size
+    seen_floor = np.column_stack([floor_xy[seen], np.zeros(seen.sum())])
+    restored = remove_standing(floor, np.vstack([seen_floor, wall, chair_points]), [chair])
+    assert not restored.is_floor(np.array([4.05, 0.5]))
+    assert restored.is_floor(np.array([4.05, 2.0]))  # The door stays open.
+    assert restored.is_floor(np.array([2.0, 1.0]))  # Under the chair is still floor.
+
+
+def test_what_is_seen_through_the_windows_does_not_hide_the_ceiling() -> None:
+    rng = np.random.default_rng(2)
+    room = _room_points(2.8, rng)
+    # A building seen through a window: a dense facade outside the room, at all heights.
+    facade = np.column_stack([rng.uniform(8.0, 30.0, 400000), rng.uniform(-5.0, 9.0, 400000),
+                              rng.uniform(2.0, 12.0, 400000)])
+    points = np.vstack([room, facade])
+    xs, ys = np.meshgrid(np.arange(0.0, 5.0, 0.02), np.arange(0.0, 4.0, 0.02))
+    floor = FloorMap.from_points(np.column_stack([xs.ravel(), ys.ravel()]), 0.05)
+    assert estimate_ceiling(points, floor) == pytest.approx(2.75, abs=0.051)

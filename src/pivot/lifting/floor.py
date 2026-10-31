@@ -1,9 +1,14 @@
-"""Floor detection (the reference plane every other measurement relies on) and ceiling height."""
+"""Floor detection (the reference plane every other measurement relies on), walls left on
+the floor map, and ceiling height."""
+
+import dataclasses
 
 import numpy as np
 
+from pivot.geometry.box import OrientedBox, rotation_2d
+from pivot.geometry.floor import FloorMap
 from pivot.geometry.plane import Plane, fit_plane_ransac, floor_alignment
-from pivot.geometry.types import FloatArray
+from pivot.geometry.types import FloatArray, IntArray
 
 
 def detect_floor(points: FloatArray, up_hint: FloatArray, threshold: float = 0.03,
@@ -73,8 +78,9 @@ def room_orientation(points: FloatArray, min_height: float = 0.5, max_height: fl
     return float(angles[int(np.argmax(scores))])
 
 
-def estimate_ceiling(points: FloatArray, min_height: float = 2.0, bin_size: float = 0.05,
-                     min_peak_ratio: float = 3.0, edge_fraction: float = 0.25) -> float | None:
+def estimate_ceiling(points: FloatArray, floor: FloorMap | None = None, min_height: float = 2.0,
+                     bin_size: float = 0.05, min_peak_ratio: float = 3.0,
+                     edge_fraction: float = 0.25) -> float | None:
     """Estimates the ceiling height of a leveled scene, if the video saw the ceiling.
 
     Points are first reduced to one per ``bin_size`` cube, so that counts
@@ -85,6 +91,9 @@ def estimate_ceiling(points: FloatArray, min_height: float = 2.0, bin_size: floa
 
     Args:
         points: (N, 3) leveled scene points, floor at z = 0.
+        floor: The room's floor map: only points above it count, so that what
+            is seen through the windows (buildings, trees) does not drown the
+            ceiling; all points if None.
         min_height: Lowest height a ceiling can have, in meters.
         bin_size: Cube and histogram bin size, in meters.
         min_peak_ratio: How many times the median wall bin the peak must hold.
@@ -96,6 +105,14 @@ def estimate_ceiling(points: FloatArray, min_height: float = 2.0, bin_size: floa
         The ceiling height in meters, or None if no ceiling layer is found.
     """
     high = points[points[:, 2] >= min_height]
+    if floor is not None:
+        cells = np.floor((high[:, :2] - floor.origin) / floor.resolution).astype(np.int64)
+        rows, cols = floor.shape
+        inside = ((cells[:, 0] >= 0) & (cells[:, 0] < cols)
+                  & (cells[:, 1] >= 0) & (cells[:, 1] < rows))
+        above = np.zeros(len(high), dtype=bool)
+        above[inside] = floor.floor[cells[inside, 1], cells[inside, 0]]
+        high = high[above]
     if len(high) == 0:
         return None
     cells = np.unique(np.floor(high / bin_size).astype(np.int64), axis=0)
@@ -107,3 +124,86 @@ def estimate_ceiling(points: FloatArray, min_height: float = 2.0, bin_size: floa
     while bottom > 0 and counts[bottom - 1] >= edge_fraction * counts[peak]:
         bottom -= 1
     return round(float((cells[:, 2].min() + bottom) * bin_size), 3)
+
+
+# A cell where floor was seen holds at least this share of a typical floor cell's points.
+SEEN_FLOOR_SHARE = 0.25
+# Walls are looked for between these heights (above skirting boards and floor
+# clutter, below the ceiling), in levels of this height, and must have points
+# in at least this many levels.
+WALL_LOW, WALL_HIGH, WALL_LEVEL, WALL_MIN_LEVELS = 0.3, 1.8, 0.1, 8
+# Objects' boxes are grown by this much before their points are set aside.
+_BOX_MARGIN = 0.05
+
+
+def remove_standing(floor: FloorMap, points: FloatArray, boxes: list[OrientedBox],
+                    floor_band: float = 0.05) -> FloorMap:
+    """Undoes the gap filling of the floor map where something stands: thin walls.
+
+    The floor map fills small gaps in the observed floor, which also erases
+    thin walls: no floor is seen under a 10 cm partition between two rooms,
+    and the filling closes it. Such filled cells are taken off again where
+    points stand above them at many heights (:data:`WALL_MIN_LEVELS`),
+    outside every object's box. Cells where floor was actually seen stay floor.
+
+    Args:
+        floor: The floor map.
+        points: (N, 3) leveled scene points, floor at z = 0 (the floor's
+            points say where it was seen).
+        boxes: Boxes of the segmented objects; their points are not walls.
+        floor_band: Points below this height are floor, in meters.
+
+    Returns:
+        The floor map without those cells.
+    """
+    # Floor seen from many frames is dense; the foot of a wall leaves only a few points.
+    floor_counts = _cell_counts(floor, points[np.abs(points[:, 2]) < floor_band])
+    seen = np.zeros(floor.shape, dtype=bool)
+    if (floor_counts > 0).any():
+        seen = floor_counts >= SEEN_FLOOR_SHARE * float(np.median(floor_counts[floor_counts > 0]))
+    standing = _outside_boxes(points[(points[:, 2] >= WALL_LOW) & (points[:, 2] <= WALL_HIGH)],
+                              boxes)
+    # Distinct height levels with points, per cell.
+    cells = np.floor((standing[:, :2] - floor.origin) / floor.resolution)
+    levels = np.unique(np.column_stack([cells, np.floor(standing[:, 2] / WALL_LEVEL)]), axis=0)
+    counts = _cell_counts(floor, floor.origin + (levels[:, :2] + 0.5) * floor.resolution)
+    return dataclasses.replace(floor, floor=floor.floor & (seen | (counts < WALL_MIN_LEVELS)))
+
+
+def _outside_boxes(points: FloatArray, boxes: list[OrientedBox]) -> FloatArray:
+    """Keeps the points outside every box (grown by :data:`_BOX_MARGIN`).
+
+    Args:
+        points: (N, 3) points.
+        boxes: The boxes.
+
+    Returns:
+        The points no box holds.
+    """
+    keep = np.ones(len(points), dtype=bool)
+    for box in boxes:
+        local = (points[:, :2] - box.center[:2]) @ rotation_2d(box.yaw)
+        inside = np.all(np.abs(local) <= 0.5 * box.size[:2] + _BOX_MARGIN, axis=1)
+        heights = points[:, 2]
+        inside &= (heights >= box.z_min - _BOX_MARGIN) & (heights <= box.z_max + _BOX_MARGIN)
+        keep &= ~inside
+    kept: FloatArray = points[keep]
+    return kept
+
+
+def _cell_counts(floor: FloorMap, xy: FloatArray) -> IntArray:
+    """Counts points per floor map cell.
+
+    Args:
+        floor: The floor map.
+        xy: (N, 2+) points; only their first two coordinates are used.
+
+    Returns:
+        (rows, cols) counts; points off the grid are ignored.
+    """
+    cells = np.floor((xy[:, :2] - floor.origin) / floor.resolution).astype(np.int64)
+    rows, cols = floor.shape
+    inside = (cells[:, 0] >= 0) & (cells[:, 0] < cols) & (cells[:, 1] >= 0) & (cells[:, 1] < rows)
+    counts = np.zeros(floor.shape, dtype=np.int64)
+    np.add.at(counts, (cells[inside, 1], cells[inside, 0]), 1)
+    return counts

@@ -12,7 +12,7 @@ from pivot.geometry.plane import apply_transform
 from pivot.geometry.types import BoolArray, FloatArray
 from pivot.lifting.backproject import scene_points
 from pivot.lifting.completion import complete_hidden, drop_fragments
-from pivot.lifting.floor import detect_floor, estimate_ceiling, room_orientation
+from pivot.lifting.floor import detect_floor, estimate_ceiling, remove_standing, room_orientation
 from pivot.lifting.objects import (
     assign_by_votes, contained_tracks, distinct_pairs, duplicate_groups, lift_track,
     split_overlaps,
@@ -22,7 +22,7 @@ from pivot.lifting.parts import join_parts
 from pivot.lifting.volume import CarveConfig, carve_shapes
 from pivot.perception.tracks import Track
 from pivot.reconstruction.types import Reconstruction
-from pivot.scene.graph import STRUCTURAL_LABELS, Scene, SceneObject, is_supported_by
+from pivot.scene.graph import STRUCTURAL_LABELS, Scene, SceneObject, is_opening, is_supported_by
 
 
 @dataclass(frozen=True)
@@ -161,8 +161,7 @@ def build_scene(recon: Reconstruction, tracks: list[Track],
 
     room_yaw = room_orientation(points)
     objects, object_points, object_tracks = _lift_objects(leveled, tracks, room_yaw, config)
-    walls = Walls.from_floor(points[np.abs(points[:, 2]) < config.floor_band, :2], room_yaw)
-    objects = clean_openings(objects, object_points, walls)
+    objects = clean_openings(objects, object_points, _walls(points, objects, room_yaw, config))
 
     objects = settle(objects, config.support_tolerance, config.max_fall)
     if config.carve is not None:
@@ -171,8 +170,30 @@ def build_scene(recon: Reconstruction, tracks: list[Track],
     objects = complete_hidden(drop_fragments(objects))
     floor = _floor_map(points, objects, config)
     metadata = {"frames": len(recon), "tracks": len(tracks)}
-    scene = Scene.from_objects(objects, floor, metadata, estimate_ceiling(points))
+    scene = Scene.from_objects(objects, floor, metadata, estimate_ceiling(points, floor))
     return BuiltScene(scene, leveled, object_points)
+
+
+def _walls(points: FloatArray, objects: list[SceneObject], room_yaw: float,
+           config: BuildConfig) -> Walls:
+    """Finds the walls openings are set in, inner walls included.
+
+    Args:
+        points: (N, 3) leveled scene points.
+        objects: The lifted objects.
+        room_yaw: Orientation of the room's walls, in radians.
+        config: Assembly parameters.
+
+    Returns:
+        The walls.
+    """
+    floor_xy = points[np.abs(points[:, 2]) < config.floor_band, :2]
+    # Thin walls, erased by the floor map's gap filling, are found again from
+    # what stands outside the objects (openings excepted: their frames are walls).
+    wall_floor = remove_standing(FloorMap.from_points(floor_xy, config.floor_resolution),
+                                 points, [o.box for o in objects if not is_opening(o)],
+                                 config.floor_band)
+    return Walls.from_floor(floor_xy, room_yaw, wall_floor)
 
 
 def fit_object_box(cloud: FloatArray, room_yaw: float, trim: float = 0.02,
@@ -306,7 +327,8 @@ def _floor_map(points: FloatArray, objects: list[SceneObject], config: BuildConf
 
     Floor hidden under furniture is still floor: the footprints of movable
     objects standing on it are added so that they can be moved elsewhere and
-    other objects can take their place.
+    other objects can take their place. Walls are taken off again after the
+    floor's gaps are filled (see :func:`~pivot.lifting.floor.remove_standing`).
 
     Args:
         points: (N, 3) leveled scene points.
@@ -319,7 +341,10 @@ def _floor_map(points: FloatArray, objects: list[SceneObject], config: BuildConf
     floor_xy = points[np.abs(points[:, 2]) < config.floor_band, :2]
     hidden = [_fill_polygon(o.box.footprint(), config.floor_resolution / 2)
               for o in objects if o.movable and o.box.z_min < config.floor_band]
-    return FloorMap.from_points(np.vstack([floor_xy, *hidden]), config.floor_resolution)
+    floor = FloorMap.from_points(np.vstack([floor_xy, *hidden]), config.floor_resolution)
+    # Gap filling erases thin walls: take off what stands outside the objects.
+    return remove_standing(floor, points, [o.box for o in objects if not is_opening(o)],
+                           config.floor_band)
 
 
 def _fill_polygon(polygon: FloatArray, spacing: float) -> FloatArray:
