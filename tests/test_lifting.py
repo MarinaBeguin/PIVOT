@@ -1,5 +1,7 @@
 """End-to-end tests of the lifting chain on exactly rendered synthetic views."""
 
+import math
+
 import numpy as np
 import pytest
 
@@ -138,7 +140,9 @@ def test_settle_grounds_floating_furniture_and_stacks_the_rest() -> None:
     table, screen, glass, shelf = settled[0], settled[1], settled[2], settled[3]
     assert table.box.z_min == pytest.approx(0.0) and table.box.z_max == pytest.approx(0.79)
     assert screen.box.z_min == pytest.approx(0.79) and screen.box.z_max == pytest.approx(1.22)
-    assert glass is window and shelf is wall_shelf
+    assert glass is window
+    # Fixed to the wall: left as fitted, and no longer movable.
+    assert shelf.box is wall_shelf.box and not shelf.movable
 
 
 def test_depth_edges_mark_silhouettes_only() -> None:
@@ -312,3 +316,20 @@ def test_what_is_seen_through_the_windows_does_not_hide_the_ceiling() -> None:
     xs, ys = np.meshgrid(np.arange(0.0, 5.0, 0.02), np.arange(0.0, 4.0, 0.02))
     floor = FloorMap.from_points(np.column_stack([xs.ravel(), ys.ravel()]), 0.05)
     assert estimate_ceiling(points, floor) == pytest.approx(2.75, abs=0.051)
+
+
+def test_a_box_far_from_the_walls_angle_is_aligned_when_it_costs_little() -> None:
+    rng = np.random.default_rng(5)
+    # A sofa along walls at 20 degrees, with a few points of a cushion beside it
+    # that turn its smallest box by more than the angle tolerance.
+    local = rng.uniform(-0.5, 0.5, (3000, 2)) * np.array([2.2, 0.9])
+    cushion = rng.uniform([1.1, -0.45], [1.5, -0.1], (300, 2))
+    xy = np.vstack([local, cushion]) @ rotation_2d(np.radians(20)).T
+    cloud = np.column_stack([xy, rng.uniform(0.0, 0.8, len(xy))])
+    fitted = fit_object_box(cloud, room_yaw=np.radians(20))
+    assert math.remainder(fitted.yaw - np.radians(20), 0.5 * math.pi) == pytest.approx(0.0)
+    # A chair turned 45 degrees stays turned.
+    chair = np.column_stack([rng.uniform(-0.25, 0.25, (2, 2000)).T
+                             @ rotation_2d(np.radians(65)).T, rng.uniform(0, 0.9, 2000)])
+    turned = fit_object_box(chair, room_yaw=np.radians(20))
+    assert abs(math.remainder(turned.yaw - np.radians(20), 0.5 * math.pi)) > np.radians(30)

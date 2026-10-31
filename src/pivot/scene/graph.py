@@ -26,6 +26,14 @@ STRUCTURAL_LABELS = frozenset({"wall", "floor", "ceiling", "door", "window", "ra
 # the camera saw through them), but places that should be kept clear.
 OPENING_LABELS = frozenset({"door", "window"})
 
+# Objects hung on a wall: flat against it. Depth seen in a mirror, or past a
+# curtain through its window, lands behind the wall, so their points spread
+# far from where they hang.
+WALL_MOUNTED_LABELS = frozenset({"mirror", "curtain", "painting", "picture", "poster",
+                                 "whiteboard", "blinds"})
+# Of those, the ones fixed to their window, which the agent does not move.
+FIXED_WALL_LABELS = frozenset({"curtain", "blinds"})
+
 # Furniture whose top can receive an object put down on it (a trash can or a
 # chair is not one, even if its top is flat enough).
 SURFACE_LABELS = frozenset({"table", "desk", "shelf", "cabinet", "counter", "nightstand",
@@ -43,6 +51,18 @@ def is_opening(obj: SceneObject) -> bool:
         True for openings in walls.
     """
     return obj.label.lower() in OPENING_LABELS
+
+
+def is_wall_mounted(obj: SceneObject) -> bool:
+    """Tests whether an object hangs on a wall (a mirror, a curtain).
+
+    Args:
+        obj: The object.
+
+    Returns:
+        True for objects set flat against a wall.
+    """
+    return obj.label.lower() in WALL_MOUNTED_LABELS
 
 
 @dataclass(frozen=True)

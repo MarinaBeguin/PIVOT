@@ -33,7 +33,7 @@ def test_an_opening_is_set_in_its_wall() -> None:
 
 def test_duplicate_openings_merge_and_slivers_go() -> None:
     rng = np.random.default_rng(1)
-    door = SceneObject(1, "door", box((1.5, 3.0, 1.5), (1.0, 0.2, 1.0)), movable=False)
+    door = SceneObject(1, "window", box((1.5, 3.0, 1.5), (1.0, 0.2, 1.0)), movable=False)
     glazing = SceneObject(2, "window", box((1.6, 3.0, 1.5), (0.8, 0.2, 1.0)), movable=False)
     sliver = SceneObject(3, "window", box((3.5, 3.0, 1.5), (0.1, 0.2, 1.0)), movable=False)
     chair = SceneObject(4, "chair", box((2.0, 1.0, 0.45), (0.5, 0.5, 0.9)))
@@ -64,3 +64,61 @@ def test_an_inner_door_goes_into_the_partition_between_two_rooms() -> None:
     front = SceneObject(8, "door", box((0.2, 1.0, 1.0), (0.4, 0.8, 2.0)), movable=False)
     snapped_front = snap_opening(front, outer, walls)
     assert snapped_front is not None and snapped_front.box.center[0] == pytest.approx(0.0, abs=0.1)
+
+
+def test_pieces_of_one_door_are_joined() -> None:
+    rng = np.random.default_rng(2)
+    # The top and bottom of a door in the wall y = 3, segmented apart, its middle missed.
+    top = rng.uniform([1.0, 2.95, 1.4], [1.9, 3.05, 2.0], (300, 3))
+    bottom = rng.uniform([1.0, 2.95, 0.0], [1.9, 3.05, 0.8], (200, 3))
+    doors = [SceneObject(1, "door", box((1.45, 3.0, 1.55), (0.9, 0.1, 0.9)), movable=False),
+             SceneObject(2, "door", box((1.45, 3.0, 0.5), (0.9, 0.1, 1.0)), movable=False)]
+    cleaned = clean_openings(doors, {1: top, 2: bottom}, WALLS)
+    assert [o.object_id for o in cleaned] == [1]
+    assert cleaned[0].box.z_min == pytest.approx(0.0, abs=0.05)
+    assert cleaned[0].box.z_max == pytest.approx(2.0, abs=0.05)
+
+
+def test_a_mirror_hangs_flat_on_its_wall_and_a_curtain_in_mid_room_goes() -> None:
+    rng = np.random.default_rng(3)
+    # A mirror on the wall x = 4: its frame, and the room it shows, 2 m behind the wall.
+    frame = rng.uniform([3.95, 1.0, 1.0], [4.05, 2.0, 2.0], (300, 3))
+    reflection = rng.uniform([5.0, 0.0, 0.0], [6.5, 3.0, 2.5], (600, 3))
+    mirror = SceneObject(5, "mirror", box((5.0, 1.5, 1.25), (3.0, 3.0, 2.5)))
+    curtain = SceneObject(6, "curtain", box((2.0, 1.5, 1.1), (1.0, 1.0, 2.2)))
+    middle = rng.uniform([1.5, 1.0, 0.0], [2.5, 2.0, 2.2], (300, 3))
+    cleaned = clean_openings([mirror, curtain], {5: np.vstack([frame, reflection]),
+                                                 6: middle}, WALLS)
+    assert [o.object_id for o in cleaned] == [5]
+    hung = cleaned[0]
+    assert hung.movable  # A mirror can be moved; a curtain cannot.
+    assert hung.box.center[:2] == pytest.approx([4.0, 1.5], abs=0.05)
+    assert hung.box.size[1] == pytest.approx(0.05)
+    assert hung.box.size[0] == pytest.approx(1.0, abs=0.06)
+
+
+def test_cabinet_doors_and_what_a_mirror_shows_are_dropped() -> None:
+    rng = np.random.default_rng(4)
+    floor = two_rooms_floor(0.9)  # Two rooms, x in [0, 8], the partition at x = 4.
+    rows, cols = np.nonzero(floor.floor)
+    floor_xy = floor.origin + (np.column_stack([cols, rows]) + 0.5) * floor.resolution
+    walls = Walls.from_floor(floor_xy, 0.0, floor)
+    # A cabinet's door, 40 cm tall, against the wall y = 0.
+    cabinet = SceneObject(1, "door", box((1.0, 0.2, 0.25), (0.5, 0.1, 0.4)), movable=False)
+    low = rng.uniform([0.75, 0.0, 0.05], [1.25, 0.1, 0.45], (200, 3))
+    # A mirror seen in another mirror: on a wall 2 m outside the home.
+    far = SceneObject(2, "mirror", box((10.0, 2.0, 1.4), (0.8, 0.1, 1.0)))
+    ghost = rng.uniform([9.95, 1.6, 0.9], [10.05, 2.4, 1.9], (300, 3))
+    cleaned = clean_openings([cabinet, far], {1: low, 2: ghost},
+                             Walls(walls.yaw, walls.low, np.array([10.0, walls.high[1]]),
+                                   walls.floor))
+    assert not cleaned
+
+
+def test_a_curtain_by_its_window_is_fixed() -> None:
+    rng = np.random.default_rng(5)
+    drape = rng.uniform([0.0, 1.0, 0.1], [0.3, 2.0, 2.3], (400, 3))
+    curtain = SceneObject(7, "curtain", box((0.15, 1.5, 1.2), (0.3, 1.0, 2.2)))
+    cleaned = clean_openings([curtain], {7: drape}, WALLS)
+    assert len(cleaned) == 1 and not cleaned[0].movable
+    assert cleaned[0].box.size[1] == pytest.approx(0.15)

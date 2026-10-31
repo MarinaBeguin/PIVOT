@@ -31,6 +31,9 @@ _TRAVEL_WEIGHT = 0.15
 _DOORWAY_REACH = 0.6
 # Spots are kept this far from the edge of doorways, so that they stay passable.
 _DOORWAY_KEEP_CLEAR = 0.6
+# Exact placement checks made before giving up: when the best-ranked poses
+# all fail, the thousands of others would too, at a second or so each.
+_MAX_CHECKS = 60
 
 
 @dataclass(frozen=True)
@@ -155,15 +158,16 @@ def spots_in_room(scene: Scene, object_id: int, rooms: RoomMap, room_id: int,
         max_spots: Most poses returned.
 
     Returns:
-        Feasible poses (exact placement checks), best first, out of doorways
-        and not in front of a door; spots far apart from one another, so that
-        one blocked area does not fill the list.
+        Feasible poses (exact placement checks, a bounded number of them),
+        best first, out of doorways and not in front of a door; spots far
+        apart from one another, so that one blocked area does not fill the list.
     """
     box = scene[object_id].box
     space = ConfigurationSpace.build(scene, object_id, clearance=clearance)
     spots: list[OrientedBox] = []
+    checks = 0
     for _, center, yaw in _ranked_centers(space, rooms, room_id, box):
-        if len(spots) >= max_spots:
+        if len(spots) >= max_spots or checks >= _MAX_CHECKS:
             break
         if any(np.linalg.norm(center - s.center[:2]) < 0.5 for s in spots):
             continue
@@ -172,6 +176,7 @@ def spots_in_room(scene: Scene, object_id: int, rooms: RoomMap, room_id: int,
             continue
         spot = box.moved(np.asarray(center, dtype=np.float64), yaw)
         report = check_placement(scene, object_id, spot, clearance)
+        checks += 1
         # A spot in front of a door would block it: not where one puts furniture.
         if report.feasible and not any("door" in w for w in report.warnings):
             spots.append(spot)

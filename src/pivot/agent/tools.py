@@ -549,6 +549,9 @@ def _to_room(session: Session, object_id: int, room: str, clearance_m: float,
     result: JsonDict = {"object_id": object_id, "from_room": rooms.name_of(
         rooms.object_rooms.get(object_id, 0)), "to_room": target.name,
         "found": False, "moved": False}
+    if not scene[object_id].movable:
+        return {**result, "reason": f"The {scene[object_id].label} is part of the building or "
+                                    "fixed to a wall or the ceiling: it is not moved."}
     reason = _too_wide(rooms, scene[object_id], target.room_id, clearance_m)
     if reason is not None:
         # Wider than a doorway even turned: no path to search for.

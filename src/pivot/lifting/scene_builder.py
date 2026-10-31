@@ -19,10 +19,13 @@ from pivot.lifting.objects import (
 )
 from pivot.lifting.openings import Walls, clean_openings
 from pivot.lifting.parts import join_parts
+from pivot.lifting.plausible import drop_implausible
 from pivot.lifting.volume import CarveConfig, carve_shapes
 from pivot.perception.tracks import Track
 from pivot.reconstruction.types import Reconstruction
-from pivot.scene.graph import STRUCTURAL_LABELS, Scene, SceneObject, is_opening, is_supported_by
+from pivot.scene.graph import (
+    STRUCTURAL_LABELS, Scene, SceneObject, is_opening, is_supported_by, is_wall_mounted,
+)
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,7 @@ class BuildConfig:
         support_tolerance: Gap or interpenetration under which an object counts
             as resting on another one, in meters.
         max_fall: Unsupported objects whose bottom is higher than this are
-            taken to be wall-mounted and left in place, in meters.
+            taken to be fixed to a wall or the ceiling, in meters.
         floor_band: Points below this height count as floor, in meters.
         floor_resolution: Floor map cell size, in meters.
         merge: Track merging parameters.
@@ -114,8 +117,10 @@ def settle(objects: list[SceneObject], tolerance: float,
     table reduced to its top, a chair to its seat). An object that rests on
     no other object is extended down to the floor; one that does is set
     exactly on its support's top. Objects floating higher than ``max_fall``
-    (wall shelves, lamp heads) are left as fitted, like structural objects.
-    Supports are tested on the fitted boxes, before any change.
+    (wall shelves, ceiling lights) are fixed to a wall or the ceiling: they
+    are left as fitted and are not moved by the agent. Objects hung on a wall
+    (a mirror, a painting) stay where they hang. Supports are tested on the
+    fitted boxes, before any change.
 
     Args:
         objects: Objects with fitted boxes.
@@ -127,11 +132,11 @@ def settle(objects: list[SceneObject], tolerance: float,
     """
     settled = []
     for obj in objects:
-        if obj.movable:
+        if obj.movable and not is_wall_mounted(obj):
             base = _resting_height(obj, objects, tolerance)
             box = obj.box
             if box.z_min - base > max_fall:
-                settled.append(obj)
+                settled.append(replace(obj, movable=False))
                 continue
             size, center = box.size.copy(), box.center.copy()
             size[2] = box.z_max - base
@@ -163,7 +168,7 @@ def build_scene(recon: Reconstruction, tracks: list[Track],
     objects, object_points, object_tracks = _lift_objects(leveled, tracks, room_yaw, config)
     objects = clean_openings(objects, object_points, _walls(points, objects, room_yaw, config))
 
-    objects = settle(objects, config.support_tolerance, config.max_fall)
+    objects = drop_implausible(settle(objects, config.support_tolerance, config.max_fall))
     if config.carve is not None:
         masks = {i: _merged_masks(group) for i, group in object_tracks.items()}
         objects = carve_shapes(leveled, objects, object_points, masks, config.carve)
@@ -197,11 +202,13 @@ def _walls(points: FloatArray, objects: list[SceneObject], room_yaw: float,
 
 
 def fit_object_box(cloud: FloatArray, room_yaw: float, trim: float = 0.02,
-                   align_tolerance_deg: float = 12.0) -> OrientedBox:
+                   align_tolerance_deg: float = 12.0, align_area_ratio: float = 1.1) -> OrientedBox:
     """Fits an object's box, robust to stray points and aligned with the walls.
 
     Furniture mostly stands parallel to the walls, while the minimum-area
-    orientation of a partial, noisy cloud can be off by several degrees.
+    orientation of a partial, noisy cloud can be off by several degrees, or
+    by more for a cloud with a few points of a neighbor: a sofa's box then
+    crosses the wall it stands against.
 
     Args:
         cloud: (N, 3) object points.
@@ -209,6 +216,8 @@ def fit_object_box(cloud: FloatArray, room_yaw: float, trim: float = 0.02,
         trim: Fraction of the points ignored at each end of every axis.
         align_tolerance_deg: Boxes within this angle of the walls are aligned
             with them, in degrees.
+        align_area_ratio: Boxes farther from the walls' angle are aligned too
+            when their footprint grows by less than this factor.
 
     Returns:
         The box.
@@ -216,8 +225,11 @@ def fit_object_box(cloud: FloatArray, room_yaw: float, trim: float = 0.02,
     box = fit_box(cloud, trim=trim)
     quarter = 0.5 * math.pi
     offset = (box.yaw - room_yaw + 0.5 * quarter) % quarter - 0.5 * quarter
-    if abs(offset) <= math.radians(align_tolerance_deg):
-        box = fit_box(cloud, yaw=box.yaw - offset, trim=trim)
+    aligned = fit_box(cloud, yaw=box.yaw - offset, trim=trim)
+    area = float(box.size[0] * box.size[1])
+    if (abs(offset) <= math.radians(align_tolerance_deg)
+            or aligned.size[0] * aligned.size[1] <= align_area_ratio * area):
+        return aligned
     return box
 
 
