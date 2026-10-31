@@ -21,11 +21,15 @@ from pivot.lifting.openings import Walls, clean_openings
 from pivot.lifting.parts import join_parts
 from pivot.lifting.plausible import drop_implausible
 from pivot.lifting.volume import CarveConfig, carve_shapes
+from pivot.perception.inventory import BUILT_IN_KINDS
 from pivot.perception.tracks import Track
 from pivot.reconstruction.types import Reconstruction
 from pivot.scene.graph import (
     STRUCTURAL_LABELS, Scene, SceneObject, is_opening, is_supported_by, is_wall_mounted,
 )
+
+# Objects the agent never moves: the building's own parts and its fittings.
+_FIXED_LABELS = STRUCTURAL_LABELS | frozenset(BUILT_IN_KINDS)
 
 
 @dataclass(frozen=True)
@@ -271,7 +275,7 @@ def _lift_objects(recon: Reconstruction, tracks: list[Track], room_yaw: float, c
         if box.z_max < config.floor_band:
             continue  # A patch of floor segmented as an object.
         first = group[0]
-        movable = first.label.lower() not in STRUCTURAL_LABELS
+        movable = first.label.lower() not in _FIXED_LABELS
         score = max(t.score for t in group)
         objects.append(SceneObject(first.track_id, first.label, box, movable, score))
         object_points[first.track_id] = cloud

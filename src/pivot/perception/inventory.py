@@ -27,15 +27,24 @@ import numpy as np
 from pivot.geometry.types import UInt8Array
 from pivot.meta.client import MetaConfig, call_with_retry
 
+# Fittings built into the home: furniture cannot go where they stand, and the
+# agent does not move them. The inventory asks for them by these names.
+BUILT_IN_KINDS = ("kitchen counter", "kitchen island", "fitted wardrobe", "bathtub", "shower",
+                  "toilet", "sink", "fridge", "fireplace")
 INVENTORY_PROMPT = (
-    "These images are frames of one video walking through a room. List the kinds of objects "
-    "that matter for rearranging its furniture: furniture and other objects a person could move "
-    "(chairs, tables, lamps, bins...), and the doors and windows, which constrain where "
-    "furniture can go. Ignore walls, floor, ceiling, small items lying on surfaces (cups, "
-    "papers, keyboards) and anything outside the room. Use short, common English nouns in the "
-    'singular, as one would name them to a mover ("chair", "table", "trash can"); name each kind '
-    'once even if there are several, and write "door" and "window" exactly so. List at most '
-    "{limit} kinds, the largest objects first. Answer with a JSON array of strings only.")
+    "These images are frames of one video walking through a home, one room or several. List "
+    "the kinds of objects that matter for rearranging its furniture: (1) furniture and other "
+    "objects a person could move (chairs, tables, sofas, beds, lamps, rugs, bins...); (2) "
+    "fittings built into the home that take up floor space, which furniture must avoid, named "
+    "with these words when they apply: " + ", ".join(f'"{kind}"' for kind in BUILT_IN_KINDS)
+    + ' ("kitchen counter" is the whole run of base cabinets and worktop); (3) objects hung on '
+    "the walls (paintings, mirrors, curtains); (4) the doors and windows, which constrain where "
+    "furniture can go. Look at every room the frames show, kitchen and hallway included. Ignore "
+    "walls, floor, ceiling and small items lying on surfaces (cups, papers, keyboards). Use "
+    "short, common English nouns in the singular, as one would name them to a mover (\"chair\", "
+    '"table", "trash can"); name each kind once even if there are several, and write "door" '
+    'and "window" exactly so. List at most {limit} kinds, the largest objects first. Answer '
+    "with a JSON array of strings only.")
 OPEN_VISION_MODEL = "meta-llama/Llama-3.2-11B-Vision-Instruct"
 # Each prompt costs SAM 3.1 a pass over the whole video (minutes); the run
 # scripts allow more through the API, which is faster than our GPUs.
@@ -49,7 +58,8 @@ def parse_inventory(text: str, limit: int = MAX_PROMPTS) -> list[str]:
     Reads the first JSON array of the answer, or else one name per line or
     comma. Names are lowercased, without article; a name ending with another
     listed name ("office chair", "chair") is dropped, as SAM would track the
-    same objects twice.
+    same objects twice, unless it names a fitting built into the home
+    ("kitchen counter" is not a movable counter).
 
     Args:
         text: The model's answer.
@@ -72,7 +82,8 @@ def parse_inventory(text: str, limit: int = MAX_PROMPTS) -> list[str]:
         if name and len(name.split()) <= 3 and name not in names:
             names.append(name)
     generic = [name for name in names
-               if not any(name != other and name.endswith(" " + other) for other in names)]
+               if name in BUILT_IN_KINDS
+               or not any(name != other and name.endswith(" " + other) for other in names)]
     return generic[:limit]
 
 
@@ -95,8 +106,10 @@ def contact_sheet(tiles: list[UInt8Array], columns: int = 3) -> UInt8Array:
     return sheet
 
 
-def video_sheet(video: Path, frames: int = 9, tile_width: int = 448) -> bytes:
+def video_sheet(video: Path, frames: int = 16, tile_width: int = 448) -> bytes:
     """Samples frames evenly over a video and tiles them, as a JPEG.
+
+    Sixteen frames, four by row, cover the rooms of a small home.
 
     Args:
         video: Video file.
@@ -124,7 +137,8 @@ def video_sheet(video: Path, frames: int = 9, tile_width: int = 448) -> bytes:
             tiles.append(cv2.resize(frame, (tile_width, height), interpolation=cv2.INTER_AREA))
     if not tiles:
         raise RuntimeError(f"cannot read frames from {video}")
-    ok, jpeg = cv2.imencode(".jpg", contact_sheet(tiles), [cv2.IMWRITE_JPEG_QUALITY, 85])
+    ok, jpeg = cv2.imencode(".jpg", contact_sheet(tiles, columns=4),
+                            [cv2.IMWRITE_JPEG_QUALITY, 85])
     return bytes(jpeg)
 
 
