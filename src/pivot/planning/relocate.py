@@ -18,7 +18,7 @@ from scipy import ndimage
 from pivot.geometry.box import OrientedBox
 from pivot.geometry.types import FloatArray
 from pivot.planning.cspace import ConfigurationSpace
-from pivot.planning.motion import MotionPlan, densify
+from pivot.planning.motion import MotionPlan
 from pivot.planning.placement import check_placement
 from pivot.scene.graph import Scene
 from pivot.scene.rooms import RoomMap
@@ -27,8 +27,6 @@ from pivot.scene.rooms import RoomMap
 _SAMPLE_STEP = 0.05
 # Weight of the travel distance against the gap to the wall when ranking spots.
 _TRAVEL_WEIGHT = 0.15
-# Poses this close to a doorway's center count as going through it.
-_DOORWAY_REACH = 0.6
 # Spots are kept this far from the edge of doorways, so that they stay passable.
 _DOORWAY_KEEP_CLEAR = 0.6
 # Exact placement checks made before giving up: when the best-ranked poses
@@ -45,8 +43,8 @@ class Doorway:
         to_room: Name of the room it enters.
         width: Width of the passage, in meters.
         door_id: The door object there, if one was segmented.
-        margin: Smallest gap between the object and the doorway's sides as
-            it goes through, in meters.
+        margin: Room to spare: the doorway's width minus the object's, as
+            it goes through turned its narrow side first, in meters.
     """
 
     from_room: str
@@ -97,16 +95,13 @@ def route(rooms: RoomMap, plan: MotionPlan) -> tuple[list[str], list[Doorway]]:
     """
     visited = _rooms_along(rooms, plan)
     passages = {p.rooms: p for p in rooms.passages}
-    poses = densify(plan.waypoints)
     doorways = []
     for a, b in zip(visited, visited[1:]):
         passage = passages.get((min(a, b), max(a, b)))
         if passage is None:
             continue
-        near = [pose for pose in poses
-                if np.linalg.norm(pose.center[:2] - passage.center) <= _DOORWAY_REACH]
-        margin = min((rooms.floor.distance_to_walls(pose.footprint(), search_radius=0.5)
-                      for pose in near), default=math.inf)
+        # The path hugs one side of the doorway; what matters is the room left.
+        margin = passage.width - float(min(plan.waypoints[0].size[:2]))
         doorways.append(Doorway(rooms.name_of(a) or "", rooms.name_of(b) or "",
                                 passage.width, passage.door_id, margin))
     return [rooms.name_of(r) or "" for r in visited], doorways

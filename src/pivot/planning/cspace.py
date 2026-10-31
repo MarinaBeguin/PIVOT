@@ -22,7 +22,7 @@ from pivot.geometry.box import OrientedBox, rotation_2d, wrap_angle
 from pivot.geometry.floor import FloorMap
 from pivot.geometry.types import BoolArray, FloatArray
 from pivot.planning.layers import free_of_obstacles, mover_stamps, obstacle_slabs
-from pivot.scene.graph import Scene, carried_objects, is_opening
+from pivot.scene.graph import Scene, carried_objects, obstructs
 
 State = tuple[int, int, int]
 """A lattice configuration ``(yaw_bin, row, col)``."""
@@ -79,7 +79,7 @@ def obstacle_grid(scene: Scene, object_id: int, floor: FloorMap, clearance: floa
     margin = clearance + 0.5 * math.sqrt(2.0) * floor.resolution - tolerance
     blocked = np.zeros(floor.shape, dtype=bool)
     for other in scene.objects.values():
-        if other.object_id in movers or is_opening(other):
+        if other.object_id in movers or not obstructs(other, scene[object_id]):
             continue
         vertical_gap = max(other.box.z_min - z_hi, z_lo - other.box.z_max)
         if vertical_gap >= clearance - tolerance:

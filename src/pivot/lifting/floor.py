@@ -4,6 +4,7 @@ the floor map, and ceiling height."""
 import dataclasses
 
 import numpy as np
+from scipy import ndimage
 
 from pivot.geometry.box import OrientedBox, rotation_2d
 from pivot.geometry.floor import FloorMap
@@ -132,6 +133,11 @@ SEEN_FLOOR_SHARE = 0.25
 # clutter, below the ceiling), in levels of this height, and must have points
 # in at least this many levels.
 WALL_LOW, WALL_HIGH, WALL_LEVEL, WALL_MIN_LEVELS = 0.3, 1.8, 0.1, 8
+# A wall taken off the floor spans at least this many cells: smaller specks
+# are clutter or noise, and would leave holes the planner cannot cross.
+MIN_WALL_CELLS = 8
+# Wall cells this many cells apart or closer are one wall.
+_WALL_DOT_GAP = 2
 # Objects' boxes are grown by this much before their points are set aside.
 _BOX_MARGIN = 0.05
 
@@ -144,7 +150,8 @@ def remove_standing(floor: FloorMap, points: FloatArray, boxes: list[OrientedBox
     thin walls: no floor is seen under a 10 cm partition between two rooms,
     and the filling closes it. Such filled cells are taken off again where
     points stand above them at many heights (:data:`WALL_MIN_LEVELS`),
-    outside every object's box. Cells where floor was actually seen stay floor.
+    outside every object's box, and form a stretch long enough to be a wall
+    (:data:`MIN_WALL_CELLS`). Cells where floor was actually seen stay floor.
 
     Args:
         floor: The floor map.
@@ -167,7 +174,14 @@ def remove_standing(floor: FloorMap, points: FloatArray, boxes: list[OrientedBox
     cells = np.floor((standing[:, :2] - floor.origin) / floor.resolution)
     levels = np.unique(np.column_stack([cells, np.floor(standing[:, 2] / WALL_LEVEL)]), axis=0)
     counts = _cell_counts(floor, floor.origin + (levels[:, :2] + 0.5) * floor.resolution)
-    return dataclasses.replace(floor, floor=floor.floor & (seen | (counts < WALL_MIN_LEVELS)))
+    walls = floor.floor & ~seen & (counts >= WALL_MIN_LEVELS)
+    # A wall seen edge-on is often dotted: cells a few apart belong together.
+    labels, _ = ndimage.label(ndimage.binary_dilation(walls, iterations=_WALL_DOT_GAP),
+                              structure=np.ones((3, 3), dtype=bool))
+    sizes = np.bincount(labels[walls], minlength=labels.max() + 1)
+    sizes[0] = 0
+    walls &= sizes[labels] >= MIN_WALL_CELLS
+    return dataclasses.replace(floor, floor=floor.floor & ~walls)
 
 
 def _outside_boxes(points: FloatArray, boxes: list[OrientedBox]) -> FloatArray:

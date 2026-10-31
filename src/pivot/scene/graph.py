@@ -34,6 +34,9 @@ WALL_MOUNTED_LABELS = frozenset({"mirror", "curtain", "painting", "picture", "po
 # Of those, the ones fixed to their window, which the agent does not move.
 FIXED_WALL_LABELS = frozenset({"curtain", "blinds"})
 
+# Floor coverings: flat, they slide under furniture and are walked over.
+FLAT_LABELS = frozenset({"rug", "carpet", "mat", "doormat"})
+
 # Furniture whose top can receive an object put down on it (a trash can or a
 # chair is not one, even if its top is flat enough).
 SURFACE_LABELS = frozenset({"table", "desk", "shelf", "cabinet", "counter", "nightstand",
@@ -51,6 +54,35 @@ def is_opening(obj: SceneObject) -> bool:
         True for openings in walls.
     """
     return obj.label.lower() in OPENING_LABELS
+
+
+def is_flat(obj: SceneObject) -> bool:
+    """Tests whether an object is a floor covering (a rug, a mat).
+
+    Args:
+        obj: The object.
+
+    Returns:
+        True for flat objects that furniture stands on or slides over.
+    """
+    return obj.label.lower() in FLAT_LABELS
+
+
+def obstructs(other: SceneObject, mover: SceneObject) -> bool:
+    """Tests whether an object is in the way of another one moving.
+
+    Openings are not obstacles (their volume is mostly what was seen through
+    them), and a rug neither stops furniture nor is stopped by it: it slides
+    under a table, a chair slides over it.
+
+    Args:
+        other: The object that stays.
+        mover: The moving object.
+
+    Returns:
+        True if ``other`` is an obstacle to ``mover``.
+    """
+    return not (is_opening(other) or is_flat(other) or is_flat(mover))
 
 
 def is_wall_mounted(obj: SceneObject) -> bool:
@@ -296,8 +328,10 @@ def support_parents(scene: Scene) -> dict[int, int]:
     """
     parents: dict[int, int] = {}
     for top in scene.objects.values():
+        # What stands on a rug stays when the rug is pulled from under it.
         supports = [b for b in scene.objects.values()
-                    if b.object_id != top.object_id and is_supported_by(top.box, b.box)]
+                    if b.object_id != top.object_id and not is_flat(b)
+                    and is_supported_by(top.box, b.box)]
         if supports:
             parents[top.object_id] = max(supports, key=lambda b: b.box.z_max).object_id
     return parents

@@ -19,7 +19,7 @@ from scipy import ndimage
 
 from pivot.geometry.types import BoolArray, IntArray
 from pivot.planning.placement import front_zone
-from pivot.scene.graph import Scene, is_opening, support_parents
+from pivot.scene.graph import Scene, is_flat, is_opening, support_parents
 
 # Walking width of an adult, and of a wheelchair (accessible-route guidelines).
 WALKING_WIDTH = 0.6
@@ -85,7 +85,7 @@ def _standable(scene: Scene, width: float) -> tuple[BoolArray, BoolArray]:
     assert floor is not None
     obstacles = np.zeros(floor.shape, dtype=bool)
     for obj in scene.objects.values():
-        if not is_opening(obj) and obj.box.z_min < HEADROOM:
+        if not (is_opening(obj) or is_flat(obj)) and obj.box.z_min < HEADROOM:
             obstacles |= floor.rasterize(obj.box.footprint())
     free = floor.floor & ~obstacles
     # Distance, in meters, from each free cell to the nearest wall or object;
@@ -148,7 +148,7 @@ def check_access(scene: Scene, width: float = WALKING_WIDTH) -> AccessReport | N
     resting = support_parents(scene)
     unreachable = [
         o.object_id for o in sorted(scene.objects.values(), key=lambda o: o.object_id)
-        if not is_opening(o) and o.object_id not in resting
+        if not (is_opening(o) or is_flat(o)) and o.object_id not in resting
         and not (reach & floor.rasterize(o.box.footprint())).any()]
     # The floor a person walks on is wider than the cells their center visits.
     walked = ndimage.binary_dilation(

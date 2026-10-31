@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from conftest import box
-from pivot.scene.examples import sofa_scene
+from pivot.scene.examples import rectangle_floor, sofa_scene
 from pivot.geometry.floor import FloorMap
 from pivot.planning.cspace import ConfigurationSpace, footprint_kernel
 from pivot.planning.motion import (
@@ -174,3 +174,26 @@ def test_only_a_shallow_collision_can_be_voxel_aliasing() -> None:
     assert _aliasing(report(Conflict(ConflictKind.COLLISION, 0.04, 2)))
     assert not _aliasing(report(Conflict(ConflictKind.COLLISION, 0.12, 2)))
     assert not _aliasing(report(Conflict(ConflictKind.WALL_CLEARANCE, 0.01)))
+
+
+def _dining_scene() -> Scene:
+    """A table, a chair pushed under it (their boxes overlap), and a rug, in a 5 x 4 m room."""
+    table = SceneObject(1, "table", box((2.5, 2.0, 0.375), (1.6, 0.9, 0.75)))
+    chair = SceneObject(2, "chair", box((2.5, 1.45, 0.45), (0.5, 0.5, 0.9)))
+    rug = SceneObject(3, "rug", box((1.0, 3.2, 0.01), (1.2, 0.8, 0.02)))
+    return Scene.from_objects([table, chair, rug], rectangle_floor(5.0, 4.0))
+
+
+def test_a_rug_slides_under_a_table_and_a_chair_over_a_rug() -> None:
+    scene = _dining_scene()
+    under = plan_motion(scene, 3, scene[3].box.moved(np.array([2.5, 2.0])))
+    assert under.status is MotionStatus.SUCCESS
+    onto = plan_motion(scene, 2, scene[2].box.moved(np.array([1.0, 3.2])))
+    assert onto.status is MotionStatus.SUCCESS
+
+
+def test_a_chair_pushed_under_a_table_slides_out() -> None:
+    scene = _dining_scene()
+    assert not check_placement(scene, 2, scene[2].box).feasible  # The boxes overlap.
+    plan = plan_motion(scene, 2, scene[2].box.moved(np.array([4.0, 0.8])))
+    assert plan.status is MotionStatus.SUCCESS

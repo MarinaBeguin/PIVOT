@@ -306,6 +306,20 @@ def test_a_thin_partition_erased_by_gap_filling_is_restored() -> None:
     assert restored.is_floor(np.array([2.0, 1.0]))  # Under the chair is still floor.
 
 
+def test_a_lone_pole_leaves_no_hole_in_the_floor() -> None:
+    rng = np.random.default_rng(1)
+    xs, ys = np.meshgrid(np.arange(0.0, 4.0, 0.02), np.arange(0.0, 4.0, 0.02))
+    floor_xy = np.column_stack([xs.ravel(), ys.ravel()])
+    # A coat rack's pole hides the floor in one cell, which gap filling closes.
+    under_pole = np.hypot(floor_xy[:, 0] - 2.0, floor_xy[:, 1] - 2.0) < 0.04
+    floor = FloorMap.from_points(floor_xy[~under_pole], 0.05)
+    pole = np.column_stack([rng.uniform(1.98, 2.02, 3000), rng.uniform(1.98, 2.02, 3000),
+                            rng.uniform(0.0, 1.8, 3000)])
+    seen_floor = np.column_stack([floor_xy[~under_pole], np.zeros((~under_pole).sum())])
+    restored = remove_standing(floor, np.vstack([seen_floor, pole]), [])
+    assert restored.is_floor(np.array([2.0, 2.0]))
+
+
 def test_what_is_seen_through_the_windows_does_not_hide_the_ceiling() -> None:
     rng = np.random.default_rng(2)
     room = _room_points(2.8, rng)
