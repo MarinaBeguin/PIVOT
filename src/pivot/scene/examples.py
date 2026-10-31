@@ -96,6 +96,32 @@ def sofa_scene(door_width: float) -> Scene:
                               {"name": f"two rooms, {door_width:.2f} m door"})
 
 
+def apartment_scene(door_width: float = 0.9) -> Scene:
+    """A living room and a bedroom, 4 x 4 m each, joined by a door.
+
+    The living room (left) has a sofa against its left wall, an armchair, a
+    coffee table and a carton; the bedroom (right) has a bed against its far
+    wall. The wall between them spans x in [4.0, 4.1], the door is centered at
+    y = 2.
+
+    Args:
+        door_width: Width of the door, in meters.
+
+    Returns:
+        The scene.
+    """
+    objects = [
+        SceneObject(1, "sofa", box((0.5, 2.0, 0.4), (0.9, 2.0, 0.8))),
+        SceneObject(2, "armchair", box((2.0, 3.3, 0.4), (0.8, 0.8, 0.8))),
+        SceneObject(3, "coffee table", box((1.6, 2.0, 0.22), (0.6, 1.0, 0.44))),
+        SceneObject(4, "carton", box((2.8, 0.6, 0.2), (0.4, 0.4, 0.4))),
+        SceneObject(5, "bed", box((7.0, 2.0, 0.25), (2.0, 1.4, 0.5))),
+        SceneObject(6, "door", box((4.05, 2.0, 1.0), (0.1, door_width, 2.0)), movable=False),
+    ]
+    return Scene.from_objects(objects, two_rooms_floor(door_width),
+                              {"name": f"apartment, {door_width:.2f} m door"}, ceiling=2.5)
+
+
 def legged_table(object_id: int, center_xy: tuple[float, float],
                  size: tuple[float, float, float] = (1.2, 0.8, 0.76), top: float = 0.08,
                  leg: float = 0.08, resolution: float = 0.04) -> SceneObject:

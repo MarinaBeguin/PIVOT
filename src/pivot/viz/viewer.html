@@ -22,6 +22,7 @@
   .panel label { display: block; margin: 4px 0; cursor: pointer; }
   .tag { font-size: 11px; padding: 1px 5px; border-radius: 3px; background: #000a;
          color: #fff; white-space: nowrap; pointer-events: none; }
+  .tag.room { font-size: 13px; font-weight: 600; background: #ffffffd0; color: #1d2421; }
   .row { display: flex; gap: 6px; margin: 6px 0; align-items: center; }
   .row .key { color: var(--muted); width: 64px; flex: none; }
   input[type=number] { width: 80px; background: #0006; color: var(--text); border: 1px solid #fff3;
@@ -148,8 +149,13 @@ const floorGroup = new THREE.Group();
 if (data.floor) {
   const f = data.floor;
   const pixels = new Uint8Array(f.rows * f.cols * 4);
-  f.cells.forEach((cols, row) => cols.forEach(col => {
-    pixels.set([76, 195, 138, 90], (row * f.cols + col) * 4);
+  // One tint per room when the capture covers several, the walkable green otherwise.
+  const tints = [[76, 195, 138], [94, 156, 230], [232, 170, 72], [196, 120, 214],
+                 [230, 110, 110], [120, 200, 210], [190, 200, 90]];
+  f.cells.forEach((cols, row) => cols.forEach((col, k) => {
+    const room = f.rooms ? f.rooms[row][k] : 0;
+    const tint = room ? tints[(room - 1) % tints.length] : tints[0];
+    pixels.set([...tint, 90], (row * f.cols + col) * 4);
   }));
   const texture = new THREE.DataTexture(pixels, f.cols, f.rows);
   texture.magFilter = THREE.NearestFilter;
@@ -160,6 +166,14 @@ if (data.floor) {
   plane.position.set(f.origin[0] + f.cols * f.resolution / 2,
                      f.origin[1] + f.rows * f.resolution / 2, 0.005);
   floorGroup.add(plane);
+  for (const room of data.rooms || []) {
+    const tag = document.createElement("div");
+    tag.className = "tag room";
+    tag.textContent = room.name;
+    const label = new CSS2DObject(tag);
+    label.position.set(room.center[0], room.center[1], 0.05);
+    floorGroup.add(label);
+  }
 }
 scene.add(floorGroup);
 

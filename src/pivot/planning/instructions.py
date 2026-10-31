@@ -16,7 +16,9 @@ from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import polygon_distance
 from pivot.planning.handling import people_needed
 from pivot.planning.motion import MotionPlan
+from pivot.planning.relocate import Doorway, route
 from pivot.scene.graph import Scene
+from pivot.scene.rooms import RoomMap, find_rooms
 
 # Below these, a turn or a lift is not worth mentioning.
 _MIN_TURN_DEG = 10.0
@@ -34,11 +36,11 @@ class Step:
         start: Its box before the move.
         end: Its box after the move.
         distance: Length of the path, in meters.
-        turn_deg: Signed change of orientation, counterclockwise, in degrees.
         carried: Whether it is lifted rather than slid along the floor.
         people: How many people it takes.
         landmark: The nearest other object at the end, if any: its label, its
             id and the gap to it, in meters.
+        doorways: The doorways it goes through, when it changes room.
     """
 
     number: int
@@ -47,10 +49,15 @@ class Step:
     start: OrientedBox
     end: OrientedBox
     distance: float
-    turn_deg: float
     carried: bool
     people: int
     landmark: tuple[str, int, float] | None
+    doorways: tuple[Doorway, ...] = ()
+
+    @property
+    def turn_deg(self) -> float:
+        """Signed change of orientation, counterclockwise, in degrees."""
+        return math.degrees(math.remainder(self.end.yaw - self.start.yaw, 2 * math.pi))
 
     def text(self) -> str:
         """Renders the step as one English sentence.
@@ -60,6 +67,10 @@ class Step:
         """
         verb = "Carry" if self.carried else "Slide"
         parts = [f"{verb} the {self.label} (#{self.object_id}) {_length(self.distance)}"]
+        if self.doorways:
+            first, last = self.doorways[0], self.doorways[-1]
+            doors = ", ".join(_doorway(d) for d in self.doorways)
+            parts[0] += f" from the {first.from_room} to the {last.to_room} ({doors})"
         if self.landmark is not None:
             label, landmark_id, gap = self.landmark
             where = "against" if gap < 0.03 else f"{_length(gap)} from"
@@ -71,6 +82,21 @@ class Step:
         if self.people > 1:
             sentence += " Two people needed."
         return sentence
+
+
+def _doorway(doorway: Doorway) -> str:
+    """Says which doorway is crossed and with how much room to spare.
+
+    Args:
+        doorway: The doorway.
+
+    Returns:
+        E.g. ``"door #6, 5 cm to spare"``.
+    """
+    name = f"door #{doorway.door_id}" if doorway.door_id is not None else "doorway"
+    if math.isfinite(doorway.margin):
+        return f"{name}, {100 * doorway.margin:.0f} cm to spare"
+    return name
 
 
 def _length(meters: float) -> str:
@@ -118,18 +144,37 @@ def instructions(initial: Scene, motions: list[MotionPlan]) -> list[Step]:
     """
     steps = []
     scene = initial
+    rooms = find_rooms(initial)
+    if rooms is not None and len(rooms.rooms) < 2:
+        rooms = None
     for number, motion in enumerate(motions, start=1):
-        obj = scene[motion.object_id]
-        start, end = motion.waypoints[0], motion.waypoints[-1]
-        after = scene.moved(obj.object_id, end)
-        moved_along = {i for i in scene.objects if i != obj.object_id
-                       and not np.allclose(after[i].box.center, scene[i].box.center)}
+        after = scene.moved(motion.object_id, motion.waypoints[-1])
+        steps.append(_step(number, scene, after, motion, rooms))
         scene = after
-        landmark = _nearest(scene, obj.object_id, end, moved_along)
-        lowest = min(start.z_min, end.z_min)
-        turn = math.degrees(math.remainder(end.yaw - start.yaw, 2 * math.pi))
-        steps.append(Step(
-            number, obj.object_id, obj.label, start, end, motion.length, turn,
-            carried=any(w.z_min > lowest + _MIN_LIFT for w in motion.waypoints),
-            people=people_needed(obj), landmark=landmark))
     return steps
+
+
+def _step(number: int, before: Scene, after: Scene, motion: MotionPlan,
+          rooms: RoomMap | None) -> Step:
+    """Describes one executed motion.
+
+    Args:
+        number: Its position in the sequence, from 1.
+        before: The scene before it.
+        after: The scene after it.
+        motion: The motion.
+        rooms: The rooms, when the home has several.
+
+    Returns:
+        The step.
+    """
+    obj = before[motion.object_id]
+    start, end = motion.waypoints[0], motion.waypoints[-1]
+    moved_along = {i for i in before.objects if i != obj.object_id
+                   and not np.allclose(after[i].box.center, before[i].box.center)}
+    lowest = min(start.z_min, end.z_min)
+    return Step(number, obj.object_id, obj.label, start, end, motion.length,
+                carried=any(w.z_min > lowest + _MIN_LIFT for w in motion.waypoints),
+                people=people_needed(obj),
+                landmark=_nearest(after, obj.object_id, end, moved_along),
+                doorways=tuple(route(rooms, motion)[1]) if rooms else ())

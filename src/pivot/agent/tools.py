@@ -24,12 +24,19 @@ from pivot.planning.access import WALKING_WIDTH, check_access
 from pivot.planning.handling import can_be_carried, people_needed
 from pivot.planning.lift import carry_height, plan_carried_motion, resting_box
 from pivot.planning.motion import MotionOptions, MotionPlan, MotionStatus, plan_motion
+from pivot.planning.relocate import route, spots_in_room
 from pivot.planning.placement import check_placement, opening_warnings, propose_placements
 from pivot.planning.rearrange import plan_rearrangement
 from pivot.planning.snap import nearest_feasible_pose
 from pivot.scene.graph import Scene, SceneObject, carried_objects, support_parents
+from pivot.scene.rooms import Passage, RoomMap, find_rooms
 
 JsonDict = dict[str, Any]
+# Free spots of the target room tried, best first, before giving up.
+_ROOM_TRIES = 4
+# An object narrower than a doorway by less than this does not pass it: the
+# doorway's width is measured on the floor map, to a cell or so.
+_DOORWAY_TOLERANCE = 0.03
 
 
 @dataclass
@@ -75,19 +82,21 @@ def _round(value: float, digits: int = 3) -> float:
     return round(float(value), digits)
 
 
-def describe_object(scene: Scene, obj: SceneObject) -> JsonDict:
+def describe_object(scene: Scene, obj: SceneObject, rooms: RoomMap | None = None) -> JsonDict:
     """Summarizes an object for the model.
 
     Args:
         scene: The scene, to resolve what the object rests on.
         obj: The object.
+        rooms: The rooms of the scene, to say which one holds the object.
 
     Returns:
-        Its id, label, pose, size, support relations and how many people
-        it takes to move it.
+        Its id, label, pose, size, support relations, how it can be moved
+        and, with several rooms, its room.
     """
     parents = support_parents(scene)
     box = obj.box
+    room = rooms.name_of(rooms.object_rooms.get(obj.object_id, 0)) if rooms else None
     return {
         "id": obj.object_id,
         "label": obj.label,
@@ -99,6 +108,7 @@ def describe_object(scene: Scene, obj: SceneObject) -> JsonDict:
         "carries": carried_objects(scene, obj.object_id),
         "people_needed": people_needed(obj),
         "can_be_carried": can_be_carried(obj),
+        **({"room": room} if room and rooms and len(rooms.rooms) > 1 else {}),
     }
 
 
@@ -128,11 +138,15 @@ def list_objects(session: Session) -> JsonDict:
         session: The session.
 
     Returns:
-        The objects, the floor bounding box and, if known, the ceiling height.
+        The objects, the rooms and their doorways (if there are several), the
+        floor bounding box and, if known, the ceiling height.
     """
     scene = session.scene
-    result: JsonDict = {"objects": [describe_object(scene, o) for o in
+    rooms = find_rooms(scene)
+    result: JsonDict = {"objects": [describe_object(scene, o, rooms) for o in
                                     sorted(scene.objects.values(), key=lambda o: o.object_id)]}
+    if rooms is not None and len(rooms.rooms) > 1:
+        result["rooms"] = _describe_rooms(rooms)
     if scene.floor is not None:
         rows, cols = np.nonzero(scene.floor.floor)
         lo = scene.floor.origin + np.array([cols.min(), rows.min()]) * scene.floor.resolution
@@ -141,6 +155,26 @@ def list_objects(session: Session) -> JsonDict:
                                     "max_xy": [_round(v) for v in hi]}
     if scene.ceiling is not None:
         result["ceiling_height_m"] = _round(scene.ceiling)
+    return result
+
+
+def _describe_rooms(rooms: RoomMap) -> list[JsonDict]:
+    """Summarizes the rooms for the model: size, and doorways to the others.
+
+    Args:
+        rooms: The rooms.
+
+    Returns:
+        One entry per room.
+    """
+    result = []
+    for room in rooms.rooms:
+        doorways = [{"to": rooms.name_of(p.rooms[1] if p.rooms[0] == room.room_id
+                                         else p.rooms[0]),
+                     "width_m": _round(p.width, 2), "door_id": p.door_id}
+                    for p in rooms.passages if room.room_id in p.rooms]
+        result.append({"name": room.name, "area_m2": _round(room.area, 1),
+                       "center_xy": [_round(v) for v in room.center], "doorways": doorways})
     return result
 
 
@@ -155,7 +189,9 @@ def find_objects(session: Session, query: str) -> JsonDict:
         The matching objects.
     """
     scene = session.scene
-    return {"query": query, "matches": [describe_object(scene, o) for o in scene.find(query)]}
+    rooms = find_rooms(scene)
+    return {"query": query,
+            "matches": [describe_object(scene, o, rooms) for o in scene.find(query)]}
 
 
 def measure_gap(session: Session, object_a: int, object_b: int) -> JsonDict:
@@ -382,6 +418,23 @@ def _warnings(session: Session, goal: OrientedBox) -> JsonDict:
     return {"warnings": warnings} if warnings else {}
 
 
+def _route_notes(scene: Scene, plan: MotionPlan) -> JsonDict:
+    """Says which rooms and doorways a motion goes through, when there are several rooms.
+
+    Args:
+        scene: The scene the motion starts in.
+        plan: The motion.
+
+    Returns:
+        ``{"rooms_crossed": [...], "doorways": [...]}``, or an empty dictionary.
+    """
+    rooms = find_rooms(scene)
+    if rooms is None or len(rooms.rooms) < 2 or not plan.waypoints:
+        return {}
+    names, doorways = route(rooms, plan)
+    return {"rooms_crossed": names, "doorways": [d.to_dict() for d in doorways]}
+
+
 def plan_path(session: Session, **arguments: Any) -> JsonDict:
     """Checks whether an object can be moved to a pose, and how.
 
@@ -394,7 +447,8 @@ def plan_path(session: Session, **arguments: Any) -> JsonDict:
     """
     request = MoveRequest(**arguments)
     goal, notes = _goal(session, request)
-    return {**_plan(session, request, goal).to_dict(), **notes}
+    plan = _plan(session, request, goal)
+    return {**plan.to_dict(), **notes, **_route_notes(session.scene, plan)}
 
 
 def move_object(session: Session, **arguments: Any) -> JsonDict:
@@ -411,11 +465,152 @@ def move_object(session: Session, **arguments: Any) -> JsonDict:
     goal, notes = _goal(session, request)
     plan = _plan(session, request, goal)
     result: JsonDict = {"moved": plan.status is MotionStatus.SUCCESS, "plan": plan.to_dict(),
-                        **notes}
+                        **notes, **_route_notes(session.scene, plan)}
     if plan.status is MotionStatus.SUCCESS:
         result["carried_along"] = carried_objects(session.scene, request.object_id)
         session.record(session.scene.moved(request.object_id, goal), [plan])
     return result
+
+
+def _narrowest_way(rooms: RoomMap, start: int, goal: int) -> Passage | None:
+    """Finds the narrowest doorway on the way between two rooms (through the widest way).
+
+    Args:
+        rooms: The rooms.
+        start: Room id of departure.
+        goal: Room id of arrival.
+
+    Returns:
+        The narrowest passage of the way whose narrowest passage is widest,
+        or None if the rooms are not connected (or are the same room).
+    """
+    best: dict[int, float] = {start: math.inf}
+    via: dict[int, Passage] = {}
+    frontier = [start]
+    while frontier:
+        room = frontier.pop()
+        for passage in rooms.passages:
+            if room not in passage.rooms:
+                continue
+            other = passage.rooms[1] if passage.rooms[0] == room else passage.rooms[0]
+            width = min(best[room], passage.width)
+            if width > best.get(other, -1.0):
+                best[other] = width
+                via[other] = passage if passage.width <= best[room] else via.get(room, passage)
+                frontier.append(other)
+    return via.get(goal) if goal != start else None
+
+
+def _too_wide(rooms: RoomMap, obj: SceneObject, room_id: int, clearance_m: float) -> str | None:
+    """Says why an object cannot pass the doorways on its way to a room, if it cannot.
+
+    Args:
+        rooms: The rooms.
+        obj: The object.
+        room_id: The target room.
+        clearance_m: Required gap to obstacles and walls, in meters.
+
+    Returns:
+        The reason, or None if the object is narrower than every doorway.
+    """
+    narrow = _narrowest_way(rooms, rooms.object_rooms.get(obj.object_id, 0), room_id)
+    smallest = float(min(obj.box.size[:2]))
+    if narrow is None or smallest + clearance_m <= narrow.width - _DOORWAY_TOLERANCE:
+        return None
+    door = f" (door #{narrow.door_id})" if narrow.door_id is not None else ""
+    return (f"Even turned, the {obj.label} is {100 * smallest:.0f} cm wide; the narrowest "
+            f"doorway on the way{door} is {100 * narrow.width:.0f} cm wide. It cannot pass "
+            "flat; tilting it on its side is not modeled.")
+
+
+def _to_room(session: Session, object_id: int, room: str, clearance_m: float,
+             execute: bool) -> JsonDict:
+    """Finds a free spot in a room and a verified path to it, and moves there if asked.
+
+    Args:
+        session: The session.
+        object_id: The object.
+        room: Name of the target room.
+        clearance_m: Required gap to obstacles and walls, in meters.
+        execute: Whether to move the object once a path is found.
+
+    Returns:
+        The spot, the motion plan with the rooms and doorways crossed, or why
+        none was found (the object is wider than a doorway, or something is in
+        the way: then the best spot, to make room for it).
+    """
+    scene = session.scene
+    rooms = find_rooms(scene)
+    if rooms is None or len(rooms.rooms) < 2:
+        return {"error": "This scene has a single room."}
+    target = rooms.find(room)
+    if target is None:
+        return {"error": f"No room called {room!r}.", "rooms": [r.name for r in rooms.rooms]}
+    result: JsonDict = {"object_id": object_id, "from_room": rooms.name_of(
+        rooms.object_rooms.get(object_id, 0)), "to_room": target.name,
+        "found": False, "moved": False}
+    reason = _too_wide(rooms, scene[object_id], target.room_id, clearance_m)
+    if reason is not None:
+        # Wider than a doorway even turned: no path to search for.
+        return {**result, "too_wide": reason}
+    spots = spots_in_room(scene, object_id, rooms, target.room_id, clearance_m)[:_ROOM_TRIES]
+    tried = []
+    for spot in spots:
+        goal = resting_box(scene, object_id, spot, 0.0)
+        plan = _plan(session, MoveRequest(object_id, float(spot.center[0]), float(spot.center[1]),
+                                          math.degrees(spot.yaw), clearance_m, auto_carry=True),
+                     goal)
+        if plan.status is MotionStatus.SUCCESS:
+            result.update({"found": True, "moved": execute, "spot_xy": [
+                _round(v) for v in goal.center[:2]], "yaw_deg": _round(math.degrees(goal.yaw), 1),
+                "plan": plan.to_dict(), **_route_notes(scene, plan), **_warnings(session, goal)})
+            if execute:
+                result["carried_along"] = carried_objects(scene, object_id)
+                session.record(scene.moved(object_id, goal), [plan])
+            return result
+        tried.append(plan.message)
+        if plan.status is MotionStatus.NO_PATH:
+            # Nothing reaches this spot: the others of the room are as far out of reach.
+            break
+    result["reason"] = tried[0] if tried else f"No free spot for it in the {target.name}."
+    if spots:
+        result.update({"spot_xy": [_round(v) for v in spots[0].center[:2]],
+                       "yaw_deg": _round(math.degrees(spots[0].yaw), 1),
+                       "hint": "Objects may be in the way: make_room_and_move with this spot "
+                               "moves them aside first."})
+    return result
+
+
+def plan_to_room(session: Session, object_id: int, room: str,
+                 clearance_m: float = 0.0) -> JsonDict:
+    """Checks whether an object can be moved into another room, and how. Nothing moves.
+
+    Args:
+        session: The session.
+        object_id: The object.
+        room: Name of the target room.
+        clearance_m: Required gap to obstacles and walls, in meters.
+
+    Returns:
+        See :func:`_to_room`.
+    """
+    return _to_room(session, object_id, room, clearance_m, execute=False)
+
+
+def move_to_room(session: Session, object_id: int, room: str,
+                 clearance_m: float = 0.0) -> JsonDict:
+    """Moves an object into another room, if a free spot and a verified path exist.
+
+    Args:
+        session: The session.
+        object_id: The object.
+        room: Name of the target room.
+        clearance_m: Required gap to obstacles and walls, in meters.
+
+    Returns:
+        See :func:`_to_room`.
+    """
+    return _to_room(session, object_id, room, clearance_m, execute=True)
 
 
 def make_room(session: Session, **arguments: Any) -> JsonDict:
@@ -533,6 +728,7 @@ def _object_schema(properties: dict[str, JsonDict], required: list[str]) -> Json
 
 
 _ID = {"type": "integer", "description": "Object id, from list_objects."}
+_ROOM = {"type": "string", "description": "Room name, from the rooms of list_objects."}
 _POSE = {
     "object_id": _ID,
     "x": {"type": "number", "description": "Target x of the object's center, meters."},
@@ -584,6 +780,17 @@ TOOLS = [
          "happens if every step is a verified collision-free motion; one undo reverts all.",
          _object_schema({k: _POSE[k] for k in ("object_id", "x", "y", "yaw_deg")}
                         | {"snap_m": _SNAP}, ["object_id", "x", "y"]), make_room_and_move),
+    Tool("plan_to_room", "Check whether an object can be moved into another room: finds a "
+         "free spot there (against a wall when possible) and a verified path through the "
+         "doorways. Nothing moves.",
+         _object_schema({"object_id": _ID, "room": _ROOM,
+                         "clearance_m": _POSE["clearance_m"]}, ["object_id", "room"]),
+         plan_to_room),
+    Tool("move_to_room", "Move an object into another room, through the doorways. Only "
+         "happens if a free spot and a collision-free path exist.",
+         _object_schema({"object_id": _ID, "room": _ROOM,
+                         "clearance_m": _POSE["clearance_m"]}, ["object_id", "room"]),
+         move_to_room),
     Tool("check_access", "Check that a person can still get around the room from the doors: "
          "reachable floor, blocked doors, objects nobody can reach. width_m: 0.6 walking "
          "(default), 0.9 a wheelchair.",
