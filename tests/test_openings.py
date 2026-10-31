@@ -68,9 +68,9 @@ def test_an_inner_door_goes_into_the_partition_between_two_rooms() -> None:
 
 def test_pieces_of_one_door_are_joined() -> None:
     rng = np.random.default_rng(2)
-    # The top and bottom of a door in the wall y = 3, segmented apart, its middle missed.
-    top = rng.uniform([1.0, 2.95, 1.4], [1.9, 3.05, 2.0], (300, 3))
-    bottom = rng.uniform([1.0, 2.95, 0.0], [1.9, 3.05, 0.8], (200, 3))
+    # The top and bottom of a door in the wall y = 3, segmented apart around its handle.
+    top = rng.uniform([1.0, 2.95, 1.2], [1.9, 3.05, 2.0], (300, 3))
+    bottom = rng.uniform([1.0, 2.95, 0.0], [1.9, 3.05, 1.0], (200, 3))
     doors = [SceneObject(1, "door", box((1.45, 3.0, 1.55), (0.9, 0.1, 0.9)), movable=False),
              SceneObject(2, "door", box((1.45, 3.0, 0.5), (0.9, 0.1, 1.0)), movable=False)]
     cleaned = clean_openings(doors, {1: top, 2: bottom}, WALLS)
@@ -122,3 +122,14 @@ def test_a_curtain_by_its_window_is_fixed() -> None:
     cleaned = clean_openings([curtain], {7: drape}, WALLS)
     assert len(cleaned) == 1 and not cleaned[0].movable
     assert cleaned[0].box.size[1] == pytest.approx(0.15)
+
+
+
+def test_kitchen_cabinet_doors_are_not_a_door() -> None:
+    rng = np.random.default_rng(6)
+    # Upper and lower cabinet doors, the backsplash between them unsegmented.
+    upper = rng.uniform([1.0, 2.95, 1.5], [1.9, 3.05, 2.2], (300, 3))
+    lower = rng.uniform([1.0, 2.95, 0.1], [1.9, 3.05, 0.85], (300, 3))
+    doors = [SceneObject(1, "door", box((1.45, 3.0, 1.85), (0.9, 0.1, 0.7)), movable=False),
+             SceneObject(2, "door", box((1.45, 3.0, 0.47), (0.9, 0.1, 0.75)), movable=False)]
+    assert not clean_openings(doors, {1: upper, 2: lower}, WALLS)

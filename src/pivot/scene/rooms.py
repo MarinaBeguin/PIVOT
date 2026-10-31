@@ -415,8 +415,13 @@ def find_rooms(scene: Scene) -> RoomMap | None:
         inside = [scene[i] for i, r in object_rooms.items() if r == room_id]
         kinds[room_id] = _kind(inside, 2.0 * float(clearance[labels == room_id].max()))
     doors = [o for o in scene.objects.values() if o.label.lower() == "door"]
+    passages = _passages(labels, clearance, floor, doors)
+    for room_id, kind in kinds.items():
+        # A room with no telling furniture that leads to two others is a hall.
+        if kind == "room" and sum(room_id in p.rooms for p in passages) >= 2:
+            kinds[room_id] = "hallway"
     return RoomMap(floor, labels, _named_rooms(kinds, labels, clearance, floor),
-                   _passages(labels, clearance, floor, doors), object_rooms)
+                   passages, object_rooms)
 
 
 def _named_rooms(kinds: dict[int, str], labels: IntArray, clearance: FloatArray,

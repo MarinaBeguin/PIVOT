@@ -7,6 +7,7 @@ import numpy as np
 import pytest
 
 from pivot.agent.tools import Session, call_tool
+from pivot.geometry.floor import FloorMap
 from pivot.planning.instructions import instructions
 from pivot.scene.examples import apartment_scene, box, office_scene, sofa_scene
 from pivot.scene.graph import Scene, SceneObject
@@ -102,3 +103,16 @@ def test_the_viewer_colors_the_floor_by_room() -> None:
     floor = payload["floor"]
     assert [len(r) for r in floor["rooms"]] == [len(c) for c in floor["cells"]]
     assert scene_payload(office_scene(), points, colors, "office")["rooms"] == []
+
+
+def test_a_bare_room_between_two_others_is_a_hallway() -> None:
+    xs, ys = np.meshgrid(np.arange(0.0, 12.1, 0.02), np.arange(0.0, 4.0, 0.02))
+    points = np.column_stack([xs.ravel(), ys.ravel()])
+    walls = (np.abs(points[:, 0] - 4.05) < 0.06) | (np.abs(points[:, 0] - 8.05) < 0.06)
+    doors = np.abs(points[:, 1] - 2.0) < 0.45
+    floor = FloorMap.from_points(points[~walls | doors], resolution=0.05, close_radius=0)
+    bed = SceneObject(1, "bed", box((1.5, 2.0, 0.25), (2.0, 1.6, 0.5)))
+    sofa = SceneObject(2, "sofa", box((10.5, 2.0, 0.4), (2.0, 0.9, 0.8)))
+    rooms = find_rooms(Scene.from_objects([bed, sofa], floor))
+    assert rooms is not None
+    assert sorted(r.name for r in rooms.rooms) == ["bedroom", "hallway", "living room"]
