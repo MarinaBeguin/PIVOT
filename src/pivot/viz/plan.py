@@ -14,7 +14,7 @@ import numpy as np
 from pivot.geometry.types import BoolArray, FloatArray
 from pivot.planning.access import WALKING_WIDTH, WHEELCHAIR_WIDTH, AccessReport, check_access
 from pivot.planning.instructions import Step
-from pivot.scene.graph import Scene, is_opening
+from pivot.scene.graph import Scene, SceneObject, is_opening
 from pivot.scene.rooms import find_rooms
 
 # Opens the print dialog once the page is shown; "Save as PDF" is one of its printers.
@@ -248,7 +248,8 @@ def _access_text(final: Scene) -> tuple[str, bool]:
 
 def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
                       save_pdf: bool = False,
-                      removed: list[tuple[str, int]] | None = None) -> str:
+                      removed: list[tuple[str, int]] | None = None,
+                      added: list[SceneObject] | None = None) -> str:
     """Builds the printable instructions page.
 
     Args:
@@ -258,6 +259,7 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
         save_pdf: Whether the page opens the browser's print dialog as soon as
             it is loaded, where "Save as PDF" gives the PDF.
         removed: Objects taken out of the room, as ``(label, id)``: they go first.
+        added: Objects brought into the room: they come after, where the plan shows them.
 
     Returns:
         A standalone HTML page.
@@ -272,6 +274,11 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
     if removed:
         names = ", ".join(f"the {label} (#{object_id})" for label, object_id in removed)
         body = f"<p class='removed'>First take out of the room: {html.escape(names)}.</p>" + body
+    if added:
+        names = ", ".join(f"the {o.label} (#{o.object_id}), "
+                          + " x ".join(f"{100 * v:.0f}" for v in o.box.size) + " cm"
+                          for o in added)
+        body += f"<p class='added'>Then bring in: {html.escape(names)}.</p>"
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
             f"<title>Moving plan - {html.escape(title)}</title><style>{_STYLE}</style></head>"

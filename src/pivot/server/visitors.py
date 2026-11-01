@@ -28,10 +28,13 @@ class Visitor:
     Attributes:
         session: Their copy of the scene and its history.
         agent: Their conversation with the agent, created on first use.
+        photos: Objects they brought in from a photo, by id: what each shows
+            (e.g. "the new armchair (#41)") and its picture, for realistic views.
     """
 
     session: Session
     agent: Any = None
+    photos: dict[int, tuple[str, bytes]] = field(default_factory=dict)
 
 
 @dataclass

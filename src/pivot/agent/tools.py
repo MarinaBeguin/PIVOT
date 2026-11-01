@@ -19,6 +19,7 @@ from typing import Any
 import numpy as np
 
 from pivot.geometry.box import OrientedBox
+from pivot.geometry.types import FloatArray
 from pivot.geometry.collision import (
     box_distance, footprint_overlap, polygon_distance, polygon_penetration,
 )
@@ -728,6 +729,103 @@ def remove_object(session: Session, object_id: int) -> JsonDict:
             "floor_freed_m2": _round(float(obj.box.size[0] * obj.box.size[1]), 2)}
 
 
+# How far from the requested point a new object may be put, at most, in meters.
+_ADD_SEARCH_M = 15.0
+# How far a resized object may slide to fit, at most, in meters.
+_RESIZE_SHIFT_M = 1.5
+
+
+def add_object(session: Session, label: str, width_m: float, depth_m: float, height_m: float,
+               x: float | None = None, y: float | None = None,
+               yaw_deg: float | None = None) -> JsonDict:
+    """Brings a new object into the room, at the free spot nearest to a point.
+
+    Args:
+        session: The session.
+        label: What it is, e.g. ``"armchair"``.
+        width_m: Its width (long side of its footprint), in meters.
+        depth_m: Its depth, in meters.
+        height_m: Its height, in meters.
+        x: Where it should go; the middle of the floor if None.
+        y: Where it should go; the middle of the floor if None.
+        yaw_deg: Its orientation; free if None.
+
+    Returns:
+        The object and where it went; or why it fits nowhere.
+    """
+    scene = session.scene
+    size = np.array([width_m, depth_m, height_m], dtype=float)
+    if not np.all((size >= 0.05) & (size <= 6.0)):
+        return {"added": False, "reason": "Sizes must be between 5 cm and 6 m."}
+    if x is None or y is None:
+        x, y = scene.floor.middle() if scene.floor is not None else (0.0, 0.0)
+    object_id = max(scene.objects, default=0) + 1
+    box = OrientedBox(np.array([x, y, 0.5 * height_m]), size,
+                      math.radians(yaw_deg) if yaw_deg is not None else 0.0)
+    trial = Scene.from_objects([*scene.objects.values(), SceneObject(object_id, label, box)],
+                               scene.floor, scene.metadata, scene.ceiling)
+    pose = (box if check_placement(trial, object_id, box).feasible else
+            nearest_feasible_pose(trial, object_id, box, _ADD_SEARCH_M,
+                                  allow_rotation=yaw_deg is None))
+    if pose is None:
+        return {"added": False, "reason": f"No free spot fits a {label} of "
+                f"{_size_text(size)}: take something out first, or try another room."}
+    session.record(trial.with_box(object_id, pose), [])
+    return {"added": True, "object_id": object_id, "label": label,
+            "x": _round(pose.center[0]), "y": _round(pose.center[1]),
+            "yaw_deg": _round(math.degrees(pose.yaw), 1), "size_m": [_round(v) for v in size],
+            "shift_m": _round(float(np.hypot(pose.center[0] - x, pose.center[1] - y)))}
+
+
+def resize_object(session: Session, object_id: int, width_m: float, depth_m: float,
+                  height_m: float) -> JsonDict:
+    """Corrects the size of an object known only by a box (one added from a photo).
+
+    Args:
+        session: The session.
+        object_id: The object.
+        width_m: Its width, in meters.
+        depth_m: Its depth, in meters.
+        height_m: Its height, in meters.
+
+    Returns:
+        Whether the new size fits where the object stands; or why not.
+    """
+    scene = session.scene
+    obj = scene[object_id]
+    if obj.shape is not None or not obj.movable:
+        return {"resized": False, "reason": f"The {obj.label} (#{object_id}) was measured in "
+                                            "the scan: its size cannot be changed."}
+    size = np.array([width_m, depth_m, height_m], dtype=float)
+    if not np.all((size >= 0.05) & (size <= 6.0)):
+        return {"resized": False, "reason": "Sizes must be between 5 cm and 6 m."}
+    center = obj.box.center.copy()
+    center[2] = obj.box.z_min + 0.5 * height_m
+    box = OrientedBox(center, size, obj.box.yaw)
+    resized = scene.with_box(object_id, box)
+    # Bigger, it may no longer fit where it stands: it goes to the nearest spot where it does.
+    pose = (box if check_placement(resized, object_id, box).feasible else
+            nearest_feasible_pose(resized, object_id, box, _RESIZE_SHIFT_M))
+    if pose is None:
+        return {"resized": False, "reason": f"At {_size_text(size)} it fits nowhere near where "
+                                            "it stands: take something out first."}
+    session.record(resized.with_box(object_id, pose), [])
+    return {"resized": True, "object_id": object_id, "size_m": [_round(v) for v in size],
+            "shift_m": _round(float(np.hypot(*(pose.center[:2] - center[:2]))))}
+
+
+def _size_text(size: FloatArray) -> str:
+    """Says a size the way people do.
+
+    Args:
+        size: Width, depth and height, in meters.
+
+    Returns:
+        E.g. ``"80 x 85 x 90 cm"``.
+    """
+    return " x ".join(f"{100 * v:.0f}" for v in size) + " cm"
+
+
 def undo(session: Session) -> JsonDict:
     """Reverts the last executed move.
 
@@ -853,6 +951,20 @@ TOOLS = [
          "(default), 0.9 a wheelchair.",
          _object_schema({"width_m": {"type": "number"}}, []), check_passages),
     Tool("undo", "Revert the last move or removal.", _object_schema({}, []), undo),
+    Tool("add_object", "Bring a new object into the room (one the user wants to buy or to bring "
+         "from elsewhere), with its size, at the free spot nearest to a point (the middle of "
+         "the floor by default). Only when the user asks; undo takes it out again.",
+         _object_schema({"label": {"type": "string", "description": "What it is, e.g. sofa."},
+                         "width_m": {"type": "number"}, "depth_m": {"type": "number"},
+                         "height_m": {"type": "number"},
+                         "x": {"type": "number"}, "y": {"type": "number"},
+                         "yaw_deg": {"type": "number"}},
+                        ["label", "width_m", "depth_m", "height_m"]), add_object),
+    Tool("resize_object", "Correct the size of an object that was added (its size was "
+         "estimated); objects measured in the scan keep theirs.",
+         _object_schema({"object_id": _ID, "width_m": {"type": "number"},
+                         "depth_m": {"type": "number"}, "height_m": {"type": "number"}},
+                        ["object_id", "width_m", "depth_m", "height_m"]), resize_object),
     Tool("remove_object", "Take an object out of the room, with what rests on it: to get rid of "
          "it, or to replace it with another one. Only when the user asks for it; undo puts it "
          "back.", _object_schema({"object_id": _ID}, ["object_id"]), remove_object),

@@ -215,6 +215,16 @@ class FloorMap:
         nearest = float(max(0.0, gaps.min()))
         return nearest if nearest <= search_radius else math.inf
 
+    def middle(self) -> tuple[float, float]:
+        """Finds the centroid of the walkable floor.
+
+        Returns:
+            ``(x, y)``, in meters.
+        """
+        rows, cols = np.nonzero(self.floor)
+        middle = self.origin + (np.array([cols.mean(), rows.mean()]) + 0.5) * self.resolution
+        return float(middle[0]), float(middle[1])
+
     def is_floor(self, point_xy: FloatArray) -> bool:
         """Tests whether a single point lies on walkable floor.
 
