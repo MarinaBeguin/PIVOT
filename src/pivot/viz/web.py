@@ -14,6 +14,8 @@ from pivot.scene.rooms import find_rooms
 from pivot.viz.pointcloud import ColorArray
 
 _PLACEHOLDER = "__PIVOT_SCENE_DATA__"
+# The texts of the page in every language (i18n.js), inlined like the data.
+_LANGUAGES_PLACEHOLDER = "__PIVOT_LANGUAGES__"
 
 
 def scene_payload(scene: Scene, points: FloatArray, colors: ColorArray,
@@ -99,7 +101,9 @@ def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,
     payload["scenes"] = [{"id": i, "title": t} for i, t in menu.rooms] if menu else []
     payload["scene"] = menu.current if menu else ""
     # "</" must not appear inside the inline JSON script element.
-    return template.replace(_PLACEHOLDER, json.dumps(payload).replace("</", "<\\/"))
+    languages = resources.files("pivot.viz").joinpath("i18n.js").read_text(encoding="utf-8")
+    return (template.replace(_LANGUAGES_PLACEHOLDER, languages)
+            .replace(_PLACEHOLDER, json.dumps(payload).replace("</", "<\\/")))
 
 
 def export_viewer(scene: Scene, points: FloatArray, colors: ColorArray, output: Path,

@@ -74,6 +74,11 @@ leaves 7 cm").
 - Answer in the user's language, briefly."""
 
 
+# Languages of the viewer, by code, as the agent is told to answer in them.
+LANGUAGE_NAMES = {"en": "English", "fr": "French", "de": "German", "es": "Spanish",
+                  "it": "Italian", "zh": "Simplified Chinese"}
+
+
 @dataclass
 class Step:
     """One tool call of an agent run.
@@ -122,6 +127,7 @@ class Agent:
         self._max_steps = max_steps
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.usage = Usage()
+        self._language: str | None = None
 
     def _complete(self, tools: bool = True) -> Any:
         """Requests the next model message.
@@ -147,15 +153,24 @@ class Agent:
         self.usage.add(response)
         return response.choices[0].message
 
-    def ask(self, request: str) -> AgentRun:
+    def ask(self, request: str, language: str | None = None) -> AgentRun:
         """Handles one user request, keeping the conversation history.
 
         Args:
             request: The user's message.
+            language: Code of the language of the user's page (see
+                :data:`LANGUAGE_NAMES`); the answer is in it unless the user
+                writes in another one.
 
         Returns:
             The answer and the tool calls that support it.
         """
+        name = LANGUAGE_NAMES.get(language or "")
+        if name and language != self._language:
+            self._language = language
+            self.messages.append({"role": "system", "content": (
+                f"The user's page is in {name}. Answer in {name} unless the user writes in "
+                f"another language, then in theirs; name objects and rooms in that language.")})
         self.messages.append({"role": "user", "content": request})
         run = AgentRun(answer="")
         for _ in range(self._max_steps):
