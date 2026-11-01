@@ -462,6 +462,20 @@ computation, and static questions such as "does this van fit in this garage?".
 
 ## Citation
 
+If you use PIVOT or build on it, please cite it (GitHub's "Cite this repository" button gives
+the same entry, from [CITATION.cff](CITATION.cff)):
+
+```bibtex
+@software{beguin2026pivot,
+  title  = {{PIVOT}: From seeing a room to proving how to change it},
+  author = {Beguin, Marina},
+  year   = {2026},
+  month  = nov,
+  url    = {https://github.com/MarinaBeguin/PIVOT},
+  note   = {Verified spatial reasoning with Meta models, built for the Meta Global AI Hackathon 2026}
+}
+```
+
 The rooms come from the ScanNet++ dataset. If you use PIVOT with ScanNet++ data, please cite it
 as its authors ask:
 
