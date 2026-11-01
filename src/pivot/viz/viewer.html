@@ -102,6 +102,7 @@
   <div class="row">
     <button id="check" disabled data-i18n="check">Check</button>
     <button id="move" class="primary" disabled data-i18n="move">Move</button>
+    <button id="remove" disabled data-i18n="remove">Remove</button>
     <button id="undo" data-i18n="undo">Undo</button>
     <button id="reset" data-i18n="reset">Reset</button>
   </div>
@@ -183,14 +184,39 @@ camera.up.set(0, 0, 1);
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 
-// Point cloud.
+// Point cloud. The points of each movable object are drawn apart and follow
+// it: moved, the object takes its own look along; removed, it leaves no ghost.
 const positions = decode(data.points, Float32Array);
 const colors = decode(data.colors, Uint8Array);
-const cloudGeometry = new THREE.BufferGeometry();
-cloudGeometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-cloudGeometry.setAttribute("color", new THREE.BufferAttribute(colors, 3, true));
-const cloud = new THREE.Points(cloudGeometry,
-  new THREE.PointsMaterial({ size: 0.025, vertexColors: true, sizeAttenuation: true }));
+const owners = data.owners ? decode(data.owners, Int32Array) : new Int32Array(positions.length / 3).fill(-1);
+const ownedPoints = new Map();  // Object id -> indices of its points.
+const fixedPoints = [];
+owners.forEach((id, i) => {
+  if (id < 0) { fixedPoints.push(i); return; }
+  if (!ownedPoints.has(id)) ownedPoints.set(id, []);
+  ownedPoints.get(id).push(i);
+});
+const pointMaterial = new THREE.PointsMaterial({ size: 0.025, vertexColors: true, sizeAttenuation: true });
+// Points with indices, positions made relative to a frame (center and yaw) when given.
+function pointsOf(indices, frame = null) {
+  const xyz = new Float32Array(3 * indices.length), rgb = new Uint8Array(3 * indices.length);
+  const [cx, cy, cz, yaw] = frame ?? [0, 0, 0, 0];
+  const c = Math.cos(-yaw), s = Math.sin(-yaw);
+  indices.forEach((i, k) => {
+    const dx = positions[3 * i] - cx, dy = positions[3 * i + 1] - cy;
+    xyz[3 * k] = c * dx - s * dy;
+    xyz[3 * k + 1] = s * dx + c * dy;
+    xyz[3 * k + 2] = positions[3 * i + 2] - cz;
+    rgb.set(colors.subarray(3 * i, 3 * i + 3), 3 * k);
+  });
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.BufferAttribute(xyz, 3));
+  geometry.setAttribute("color", new THREE.BufferAttribute(rgb, 3, true));
+  return new THREE.Points(geometry, pointMaterial);
+}
+const cloud = new THREE.Group();
+const fixedCloud = pointsOf(fixedPoints);
+cloud.add(fixedCloud);
 scene.add(cloud);
 
 // Walkable floor, drawn as a translucent texture just above z = 0.
@@ -270,7 +296,12 @@ data.objects.forEach((obj, i) => {
     volumeGroup.add(cubes);
   }
 
-  views.set(obj.id, { obj, edges, fill, cubes, z: obj.box.center[2] });
+  let points = null;
+  if (ownedPoints.has(obj.id)) {
+    points = pointsOf(ownedPoints.get(obj.id), [...obj.box.center, obj.box.yaw]);
+    cloud.add(points);
+  }
+  views.set(obj.id, { obj, edges, fill, cubes, points, label, z: obj.box.center[2], removed: false });
   setPose(obj.id, obj.box.center[0], obj.box.center[1], obj.box.yaw);
 });
 scene.add(boxGroup);
@@ -279,7 +310,7 @@ scene.add(volumeGroup);
 function setPose(id, x, y, yaw, z = null) {
   const view = views.get(id);
   if (z !== null) view.z = z;
-  for (const node of [view.edges, view.cubes]) {
+  for (const node of [view.edges, view.cubes, view.points]) {
     if (!node) continue;
     node.position.set(x, y, view.z);
     node.rotation.z = yaw;
@@ -305,6 +336,7 @@ function clearSelection() {
   });
   document.getElementById("selected").textContent = t("none");
   document.getElementById("deselect").style.display = "none";
+  document.getElementById("remove").disabled = true;
   // Options apply to one move: the next object starts with the defaults.
   document.getElementById("yaw").value = "";
   setTarget(null);
@@ -372,6 +404,7 @@ function select(id) {
   controls.target.set(view.edges.position.x, view.edges.position.y, view.z);
   document.getElementById("selected").textContent = objectName(view.obj);
   document.getElementById("deselect").style.display = data.interactive ? "" : "none";
+  document.getElementById("remove").disabled = !data.interactive;
   setTarget(null);
 }
 
@@ -420,7 +453,7 @@ renderer.domElement.addEventListener("pointerup", e => {
   const ndc = new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1,
                                 -(e.clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
-  const fills = [...views.values()].map(v => v.fill);
+  const fills = [...views.values()].filter(v => !v.removed).map(v => v.fill);
   // Without a selection, a click selects. With one, it aims, through objects
   // (under a table); ctrl-click selects another object.
   const selecting = selectedId === null || !data.interactive || e.ctrlKey || e.metaKey;
@@ -559,6 +592,30 @@ makeRoomButton.onclick = async () => {
 document.getElementById("deselect").onclick = clearSelection;
 document.getElementById("check").onclick = () => run("plan_motion");
 document.getElementById("move").onclick = () => run("move_object");
+// Takes the selected object out of the room (to replace it with another one, say).
+async function removeSelected() {
+  if (busy || selectedId === null) return;
+  busy = true;
+  try {
+    const view = views.get(selectedId);
+    const answer = await callTool("remove_object", { object_id: selectedId });
+    if (!answer.removed) {
+      result.innerHTML = `<span class="no">${t("notPossible")}</span>\n` +
+        escapeHtml(answer.reason ?? answer.error);
+      return;
+    }
+    applyObjects(answer.objects);
+    clearSelection();
+    result.textContent = t("removed", { name: objectName(view.obj) });
+    if (answer.removed_with.length) {
+      result.textContent += " " + t("removedWith", { names: answer.removed_with
+        .map(o => objectName({ label: o.label, id: o.id })).join(", ") });
+    }
+  } finally {
+    busy = false;
+  }
+}
+document.getElementById("remove").onclick = removeSelected;
 document.getElementById("undo").onclick = async () => {
   const answer = await callTool("undo", {});
   result.textContent = answer.undone ? t("undone") : answer.reason;
@@ -573,6 +630,13 @@ document.getElementById("reset").onclick = async () => {
 };
 
 function applyObjects(objects) {
+  // Objects taken out of the room are hidden, with their points and label; undo shows them again.
+  const present = new Set(objects.map(o => o.id));
+  views.forEach((view, id) => {
+    view.removed = !present.has(id);
+    for (const node of [view.edges, view.cubes, view.points, view.label])
+      if (node) node.visible = !view.removed;
+  });
   for (const obj of objects) {
     if (!views.has(obj.id)) continue;
     views.get(obj.id).z = obj.box.center[2];
@@ -775,11 +839,16 @@ window.pivot = {
   aim: (x, y) => setTarget(new THREE.Vector3(x, y, 0)),
   check: () => run("plan_motion"),
   move: () => run("move_object"),
+  remove: removeSelected,
   view: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); controls.target.set(tx, ty, tz); },
 };
 
 translatePage();
 clearSelection();
+// After a reload, show the visitor's room as they left it: moves and removals included.
+if (data.interactive) {
+  fetch(scoped("/api/objects")).then(r => r.json()).then(applyObjects).catch(() => {});
+}
 
 // ---------------------------------------------------------------------------
 // First-visit tour: a few speech bubbles, each pointing at one part of the page.
@@ -858,8 +927,8 @@ try { tourSeen = localStorage.getItem(TOUR_KEY) === "1"; } catch { /* Shown each
 if (!tourSeen) showTour(0);
 
 // Frame the scene from above at an angle.
-cloudGeometry.computeBoundingBox();
-const bounds = cloudGeometry.boundingBox;
+fixedCloud.geometry.computeBoundingBox();
+const bounds = fixedCloud.geometry.boundingBox;
 const center = bounds.getCenter(new THREE.Vector3());
 const extent = bounds.getSize(new THREE.Vector3()).length();
 controls.target.set(center.x, center.y, 0.5);

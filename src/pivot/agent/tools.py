@@ -705,6 +705,29 @@ def check_passages(session: Session, width_m: float = WALKING_WIDTH) -> JsonDict
     return report.to_dict()
 
 
+def remove_object(session: Session, object_id: int) -> JsonDict:
+    """Takes an object out of the room, with what rests on it; undo puts it back.
+
+    Args:
+        session: The session.
+        object_id: The object.
+
+    Returns:
+        Whether it was removed, and what went with it; or why not.
+    """
+    scene = session.scene
+    obj = scene[object_id]
+    if not obj.movable:
+        return {"removed": False, "object_id": object_id,
+                "reason": f"The {obj.label} (#{object_id}) is fixed (part of the building or "
+                          "built in): it cannot be taken out."}
+    along = carried_objects(scene, object_id)
+    session.record(scene.without([object_id, *along]), [])
+    return {"removed": True, "object_id": object_id, "label": obj.label,
+            "removed_with": [{"id": i, "label": scene[i].label} for i in along],
+            "floor_freed_m2": _round(float(obj.box.size[0] * obj.box.size[1]), 2)}
+
+
 def undo(session: Session) -> JsonDict:
     """Reverts the last executed move.
 
@@ -829,7 +852,10 @@ TOOLS = [
          "reachable floor, blocked doors, objects nobody can reach. width_m: 0.6 walking "
          "(default), 0.9 a wheelchair.",
          _object_schema({"width_m": {"type": "number"}}, []), check_passages),
-    Tool("undo", "Revert the last move.", _object_schema({}, []), undo),
+    Tool("undo", "Revert the last move or removal.", _object_schema({}, []), undo),
+    Tool("remove_object", "Take an object out of the room, with what rests on it: to get rid of "
+         "it, or to replace it with another one. Only when the user asks for it; undo puts it "
+         "back.", _object_schema({"object_id": _ID}, ["object_id"]), remove_object),
 ]
 TOOLS_BY_NAME = {tool.name: tool for tool in TOOLS}
 

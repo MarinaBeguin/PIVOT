@@ -15,6 +15,7 @@ const LANGUAGES = {
 
 const TEXTS = {
   en: {
+    remove: "Remove", removed: "{name} taken out of the room. Undo puts it back.", removedWith: "Also taken out: {names}.",
     tourNext: "Next",
     tourSkip: "Skip",
     tourDone: "Let's go!",
@@ -54,7 +55,7 @@ const TEXTS = {
     inFront: "Note: it stands in front of the {label} (#{id}).",
     adjusted: "Target adjusted by {cm} cm to leave room around the object.",
     lookingForRoom: "Looking for objects to move out of the way…",
-    undone: "Last move undone.", sceneReset: "Scene reset.",
+    undone: "Last change undone.", sceneReset: "Scene reset.",
     thinking: "Thinking…", checkedWith: "Checked with: ",
     budgetSpent: "The public demo has used its budget: run PIVOT yourself (see the README).",
     requestsLeft: "Public demo: {n} requests left today.",
@@ -62,6 +63,7 @@ const TEXTS = {
     heardNothing: "I did not hear anything.", micUnavailable: "Microphone unavailable: ",
   },
   fr: {
+    remove: "Supprimer", removed: "{name} retiré de la pièce. « Annuler » le remet.", removedWith: "Retiré aussi : {names}.",
     tourNext: "Suivant",
     tourSkip: "Passer",
     tourDone: "C'est parti !",
@@ -102,7 +104,7 @@ const TEXTS = {
     inFront: "Remarque : l'objet se trouve devant cet élément : {label} (#{id}).",
     adjusted: "Cible décalée de {cm} cm pour laisser de la place autour de l'objet.",
     lookingForRoom: "Recherche d'objets à pousser pour faire de la place…",
-    undone: "Dernier déplacement annulé.", sceneReset: "Scène réinitialisée.",
+    undone: "Dernière modification annulée.", sceneReset: "Scène réinitialisée.",
     thinking: "Réflexion…", checkedWith: "Vérifié avec : ",
     budgetSpent: "La démo publique a épuisé son budget : lancez PIVOT vous-même (voir le README).",
     requestsLeft: "Démo publique : encore {n} demandes aujourd'hui.",
@@ -110,6 +112,7 @@ const TEXTS = {
     heardNothing: "Je n'ai rien entendu.", micUnavailable: "Micro indisponible : ",
   },
   de: {
+    remove: "Entfernen", removed: "{name} aus dem Raum entfernt. „Rückgängig“ stellt es zurück.", removedWith: "Ebenfalls entfernt: {names}.",
     tourNext: "Weiter",
     tourSkip: "Überspringen",
     tourDone: "Los geht's!",
@@ -150,7 +153,7 @@ const TEXTS = {
     inFront: "Hinweis: Das Objekt steht vor diesem Element: {label} (#{id}).",
     adjusted: "Ziel um {cm} cm verschoben, um Platz um das Objekt zu lassen.",
     lookingForRoom: "Suche nach Objekten, die aus dem Weg geräumt werden können…",
-    undone: "Letzte Verschiebung rückgängig gemacht.", sceneReset: "Szene zurückgesetzt.",
+    undone: "Letzte Änderung rückgängig gemacht.", sceneReset: "Szene zurückgesetzt.",
     thinking: "Denke nach…", checkedWith: "Geprüft mit: ",
     budgetSpent: "Die öffentliche Demo hat ihr Budget aufgebraucht: Starten Sie PIVOT selbst " +
       "(siehe README).",
@@ -159,6 +162,7 @@ const TEXTS = {
     heardNothing: "Ich habe nichts gehört.", micUnavailable: "Mikrofon nicht verfügbar: ",
   },
   es: {
+    remove: "Quitar", removed: "{name} retirado de la habitación. «Deshacer» lo devuelve.", removedWith: "También retirado: {names}.",
     tourNext: "Siguiente",
     tourSkip: "Omitir",
     tourDone: "¡Vamos!",
@@ -199,7 +203,7 @@ const TEXTS = {
     inFront: "Nota: el objeto queda delante de este elemento: {label} (#{id}).",
     adjusted: "Destino desplazado {cm} cm para dejar espacio alrededor del objeto.",
     lookingForRoom: "Buscando objetos que apartar…",
-    undone: "Último movimiento deshecho.", sceneReset: "Escena restablecida.",
+    undone: "Último cambio deshecho.", sceneReset: "Escena restablecida.",
     thinking: "Pensando…", checkedWith: "Comprobado con: ",
     budgetSpent: "La demo pública ha agotado su presupuesto: ejecuta PIVOT tú mismo (ver el README).",
     requestsLeft: "Demo pública: quedan {n} peticiones hoy.",
@@ -207,6 +211,7 @@ const TEXTS = {
     heardNothing: "No he oído nada.", micUnavailable: "Micrófono no disponible: ",
   },
   it: {
+    remove: "Rimuovi", removed: "{name} tolto dalla stanza. «Annulla» lo rimette.", removedWith: "Tolto anche: {names}.",
     tourNext: "Avanti",
     tourSkip: "Salta",
     tourDone: "Iniziamo!",
@@ -247,7 +252,7 @@ const TEXTS = {
     inFront: "Nota: l'oggetto si trova davanti a questo elemento: {label} (#{id}).",
     adjusted: "Destinazione spostata di {cm} cm per lasciare spazio intorno all'oggetto.",
     lookingForRoom: "Cerco oggetti da spostare per fare spazio…",
-    undone: "Ultimo spostamento annullato.", sceneReset: "Scena ripristinata.",
+    undone: "Ultima modifica annullata.", sceneReset: "Scena ripristinata.",
     thinking: "Sto pensando…", checkedWith: "Verificato con: ",
     budgetSpent: "La demo pubblica ha esaurito il budget: esegui PIVOT da solo (vedi il README).",
     requestsLeft: "Demo pubblica: ancora {n} richieste oggi.",
@@ -255,6 +260,7 @@ const TEXTS = {
     heardNothing: "Non ho sentito nulla.", micUnavailable: "Microfono non disponibile: ",
   },
   zh: {
+    remove: "移除", removed: "已将{name}移出房间。“撤销”可将其放回。", removedWith: "一并移出：{names}。",
     tourNext: "下一步",
     tourSkip: "跳过",
     tourDone: "开始吧！",
@@ -290,7 +296,7 @@ const TEXTS = {
     inFront: "注意：该物体挡在{label}（#{id}）前面。",
     adjusted: "目标已移动 {cm} 厘米，以便在物体周围留出空间。",
     lookingForRoom: "正在寻找可以挪开的物体…",
-    undone: "已撤销上一步移动。", sceneReset: "场景已重置。",
+    undone: "已撤销上一步操作。", sceneReset: "场景已重置。",
     thinking: "思考中…", checkedWith: "检查工具：",
     budgetSpent: "公开演示的预算已用完：请自行运行 PIVOT（见 README）。",
     requestsLeft: "公开演示：今天还剩 {n} 次请求。",
