@@ -372,7 +372,27 @@ Next:
   needed), and PIVOT makes room if the spot is taken; afterwards it moves like any other object.
 - **A cleaner cut-out**: Muse Image isolates the object of the photo, without what stands on or in
   front of it, before SAM 3.1 cuts it out.
-- **Real-looking objects** with SAM 3D Objects, shown in place of the point cloud.
+
+## Possible extensions, and the Meta models for them
+
+PIVOT's core, a language model that may only state what a geometric verifier computed, does not
+depend on the room being indoors or on who asks. Each extension below names the Meta models that
+could take on the new part; the verifier stays the same.
+
+| Extension | What it would add | Meta models that could help |
+|---|---|---|
+| **Real-looking furniture** | Each object shown as a textured 3D model instead of points; a new piece of furniture tried in 3D from a single photo, with its real shape for the collision checks | SAM 3D Objects (open weights: one image to a 3D object); Meta 3D AssetGen 2.0 (text or image to a textured mesh) for furniture that exists only as a description |
+| **Outdoors, with Meta glasses** | "Can I get through here with the stroller?", "Is this path wide enough for my wheelchair?": the same passage checks on a street, a station, a park, from what the wearer sees | VGGT or MapAnything (metric 3D from plain video), SAM 3.1 (curbs, poles, benches), DINOv3 (features that hold outdoors); Project Aria glasses and their datasets to develop and test |
+| **Robots** | A delivery or home robot asks PIVOT before it moves: the plan in words is checked against the real geometry, and the robot gets a verified path | Habitat 3 and PARTNR (simulation and benchmark of rearrangement in homes), V-JEPA 2 (world model to plan the robot's actions), Locate 3D (finds the object a sentence refers to in a 3D scan) |
+| **People carrying** | The people holding the sofa modeled, not only the sofa: room for their bodies in a stairwell or a doorway | SAM 3D Body (the 3D shape and pose of a person from an image) |
+| **Loading the moving van** | "Does everything fit in a 12 m³ van, and in which order?": the same collision checks, applied to packing | No new model: the same geometry engine and agent, plus a search for the packing order |
+| **Mixed reality on Quest** | The plan shown in the room itself, each move animated in place, the room taken from the headset instead of a phone scan | The room mesh and anchors Quest already computes; Muse or Llama for the agent |
+| **Every language, spoken** | Speech in languages wav2vec 2.0 does not cover, with open weights | Omnilingual ASR (more than 1,600 languages, open weights) |
+
+**Autonomous driving is out of reach of this approach as it is.** PIVOT verifies a static scene
+in seconds; a car needs moving obstacles, decisions in milliseconds and safety certification,
+none of which PIVOT models. What carries over is the principle, an answer about space backed by a
+computation, and static questions such as "does this van fit in this garage?".
 
 ## Acknowledgements
 
