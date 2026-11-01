@@ -116,6 +116,63 @@ def polygon_distance(a: FloatArray, b: FloatArray) -> float:
     return best
 
 
+def rectangle_gaps(polygon: FloatArray, others: FloatArray) -> FloatArray:
+    """Computes the distances from one convex polygon to many, at once.
+
+    Args:
+        polygon: (P, 2) convex polygon, e.g. a footprint.
+        others: (N, Q, 2) convex polygons.
+
+    Returns:
+        (N,) distances; 0 where the polygons touch or overlap.
+    """
+    if len(others) == 0:
+        return np.zeros(0)
+    many = np.broadcast_to(polygon, (len(others), *polygon.shape))
+    gaps = np.minimum(_vertex_edge_distances(many, others), _vertex_edge_distances(others, many))
+    # Disjoint convex polygons are separated along the normal of one of their edges.
+    edges = np.concatenate([_edge_vectors(many), _edge_vectors(others)], axis=1)
+    axes = np.stack([-edges[..., 1], edges[..., 0]], axis=-1)
+    project_a = np.einsum("nkd,npd->nkp", axes, many)
+    project_b = np.einsum("nkd,nqd->nkq", axes, others)
+    separated = ((project_a.max(axis=2) < project_b.min(axis=2))
+                 | (project_b.max(axis=2) < project_a.min(axis=2))).any(axis=1)
+    result: FloatArray = np.where(separated, gaps, 0.0)
+    return result
+
+
+def _edge_vectors(polygons: FloatArray) -> FloatArray:
+    """Returns the edges of polygons as vectors.
+
+    Args:
+        polygons: (N, P, 2) polygons.
+
+    Returns:
+        (N, P, 2) vectors from each vertex to the next.
+    """
+    result: FloatArray = np.roll(polygons, -1, axis=1) - polygons
+    return result
+
+
+def _vertex_edge_distances(points: FloatArray, polygons: FloatArray) -> FloatArray:
+    """Computes, pair by pair, the smallest distance from vertices to polygon edges.
+
+    Args:
+        points: (N, P, 2) vertices.
+        polygons: (N, Q, 2) polygons.
+
+    Returns:
+        (N,) distances.
+    """
+    edges = _edge_vectors(polygons)
+    relative = points[:, :, None, :] - polygons[:, None, :, :]
+    lengths = np.maximum(np.einsum("nqd,nqd->nq", edges, edges), _EPS)
+    t = np.clip(np.einsum("npqd,nqd->npq", relative, edges) / lengths[:, None, :], 0.0, 1.0)
+    offsets = relative - t[..., None] * edges[:, None, :, :]
+    result: FloatArray = np.sqrt(np.einsum("npqd,npqd->npq", offsets, offsets)).min(axis=(1, 2))
+    return result
+
+
 def interval_gap(lo_a: float, hi_a: float, lo_b: float, hi_b: float) -> float:
     """Returns the gap between two closed intervals.
 

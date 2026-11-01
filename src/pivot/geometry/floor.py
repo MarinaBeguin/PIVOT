@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from functools import cached_property
 from typing import Any
 
 import numpy as np
 from scipy import ndimage
 
+from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import points_to_polygon_distance
 from pivot.geometry.types import BoolArray, FloatArray, IntArray
 
@@ -150,6 +152,38 @@ class FloorMap:
         keep = self._in_bounds(rows, cols)
         on_floor = int(self.floor[rows[keep], cols[keep]].sum())
         return on_floor / len(rows)
+
+    @cached_property
+    def _open_distance(self) -> FloatArray:
+        """Distance from each cell center to the nearest non-floor cell center, in meters.
+
+        Cells outside the grid count as non-floor.
+        """
+        padded = np.pad(self.floor, 1, constant_values=False)
+        distances: FloatArray = ndimage.distance_transform_edt(padded)[1:-1, 1:-1]
+        return distances * self.resolution
+
+    def open_distance(self, box: OrientedBox) -> float:
+        """Bounds from below the distance from a footprint to any non-floor cell center.
+
+        Every point of the footprint is within half a cell diagonal of the
+        center of a cell found by growing the footprint by that much, and
+        distances to the nearest non-floor center change by at most the
+        distance moved.
+
+        Args:
+            box: The box whose footprint is measured.
+
+        Returns:
+            The bound in meters; 0 if the footprint may hold a non-floor cell center.
+        """
+        half_diagonal = math.sqrt(0.5) * self.resolution
+        size = box.size.copy()
+        size[:2] += 2.0 * half_diagonal
+        rows, cols = self.cells_inside(OrientedBox(box.center, size, box.yaw).footprint())
+        if len(rows) == 0 or not self._in_bounds(rows, cols).all():
+            return 0.0
+        return max(0.0, float(self._open_distance[rows, cols].min()) - half_diagonal)
 
     def distance_to_walls(self, polygon: FloatArray, search_radius: float = 1.0) -> float:
         """Measures the gap between a footprint and the nearest non-floor cell.

@@ -17,18 +17,22 @@ from __future__ import annotations
 import dataclasses
 import heapq
 import math
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from enum import Enum
-from collections.abc import Collection
 from typing import Any
 
 import numpy as np
+from scipy import sparse
+from scipy.sparse import csgraph
 
-from pivot.geometry.box import OrientedBox, wrap_angle
+from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import box_distance_lower_bound, polygon_penetration
 from pivot.geometry.solid import solid_distance
+from pivot.geometry.types import FloatArray
 from pivot.planning.cspace import ConfigurationSpace, State
-from pivot.planning.placement import ConflictKind, PlacementReport, check_placement
+from pivot.planning.placement import check_placement
+from pivot.planning.validation import Validator, yaw_step
 from pivot.scene.graph import Scene, carried_objects, obstructs
 
 _NEIGHBORS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
@@ -77,7 +81,7 @@ class MotionPlan:
     @property
     def rotation(self) -> float:
         """Total absolute rotation along the path, in radians."""
-        return float(sum(abs(_yaw_step(a.yaw, b.yaw))
+        return float(sum(abs(yaw_step(a.yaw, b.yaw))
                          for a, b in zip(self.waypoints, self.waypoints[1:])))
 
     @property
@@ -120,136 +124,6 @@ class MotionPlan:
         return result
 
 
-def _yaw_step(yaw_a: float, yaw_b: float) -> float:
-    """Returns the smallest rotation between two rectangle orientations.
-
-    Rectangles are symmetric under a half turn, so the result lies in
-    [-pi/2, pi/2].
-
-    Args:
-        yaw_a: Start yaw, in radians.
-        yaw_b: End yaw, in radians.
-
-    Returns:
-        The signed rotation, in radians.
-    """
-    delta = wrap_angle(yaw_b - yaw_a)
-    if delta > 0.5 * math.pi:
-        delta -= math.pi
-    elif delta < -0.5 * math.pi:
-        delta += math.pi
-    return delta
-
-
-@dataclass(frozen=True)
-class _Validator:
-    """Exact collision checks of straight motions between poses.
-
-    Attributes:
-        scene: The scene.
-        object_id: The moving object.
-        clearance: Required distance to other objects, in meters.
-        floor_margin: Margin of the on-floor test, see ``check_placement``.
-        max_step: Maximum translation between two checked poses, in meters.
-        max_turn: Maximum rotation between two checked poses, in radians.
-        carried: Ids of the objects resting on the moving object.
-    """
-
-    scene: Scene
-    object_id: int
-    clearance: float
-    floor_margin: float
-    max_step: float = 0.02
-    max_turn: float = math.radians(2.0)
-    carried: tuple[int, ...] = ()
-
-    @classmethod
-    def create(cls, scene: Scene, object_id: int, clearance: float,
-               floor_margin: float) -> _Validator:
-        """Builds a validator, computing the carried objects once.
-
-        Args:
-            scene: The scene.
-            object_id: The moving object.
-            clearance: Required distance to other objects, in meters.
-            floor_margin: Margin of the on-floor test, see ``check_placement``.
-
-        Returns:
-            The validator.
-        """
-        return cls(scene, object_id, clearance, floor_margin,
-                   carried=tuple(carried_objects(scene, object_id)))
-
-    def pose_ok(self, box: OrientedBox) -> bool:
-        """Checks one pose exactly.
-
-        Args:
-            box: The object's box at that pose.
-
-        Returns:
-            True if the pose has no conflict.
-        """
-        return check_placement(self.scene, self.object_id, box, self.clearance,
-                               self.floor_margin, carried=self.carried).feasible
-
-    def segment_ok(self, start: OrientedBox, end: OrientedBox) -> bool:
-        """Checks a straight translation combined with a rotation, exactly.
-
-        Args:
-            start: Box at the start of the motion.
-            end: Box at its end.
-
-        Returns:
-            True if every interpolated pose is free.
-        """
-        turn = _yaw_step(start.yaw, end.yaw)
-        distance = float(np.linalg.norm(end.center[:2] - start.center[:2]))
-        steps = max(1, math.ceil(distance / self.max_step), math.ceil(abs(turn) / self.max_turn))
-        poses = [start.moved((1 - t) * start.center[:2] + t * end.center[:2], start.yaw + t * turn)
-                 for t in np.linspace(0.0, 1.0, steps + 1)[1:]]
-        index = 0
-        while index < len(poses):
-            report = self._report(poses[index])
-            if not report.feasible:
-                # Voxel aliasing: two volumes sliding past each other can overlap
-                # by one cell at a single intermediate pose. A real contact lasts.
-                last = index == len(poses) - 1
-                if last or not _aliasing(report) or not self.pose_ok(poses[index + 1]):
-                    return False
-                index += 1
-            index += 1
-        return True
-
-    def _report(self, box: OrientedBox) -> PlacementReport:
-        """Checks one pose exactly, with the details of its conflicts.
-
-        Args:
-            box: The object's box at that pose.
-
-        Returns:
-            The placement report.
-        """
-        return check_placement(self.scene, self.object_id, box, self.clearance,
-                               self.floor_margin, carried=self.carried)
-
-
-# Volumes are 4 cm cells: an isolated overlap up to this depth is a sampling artifact.
-_ALIASING_DEPTH = 0.05
-
-
-def _aliasing(report: PlacementReport) -> bool:
-    """Tells whether a pose's conflicts could be voxel aliasing only.
-
-    Args:
-        report: The pose's placement report.
-
-    Returns:
-        True if every conflict is a collision at most one cell deep.
-    """
-    return all(c.kind is ConflictKind.COLLISION and c.amount <= _ALIASING_DEPTH
-               for c in report.conflicts)
-
-
 # How far, and with how many exact checks, a pose is linked to the lattice.
 _CONNECT_RADIUS = 0.6
 # Loosenings of the on-floor test tried for a start or goal pose that pokes
@@ -262,7 +136,7 @@ _POCKET_RETRIES = 3
 _CONNECT_CHECKS = 40
 
 
-def _connect(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
+def _connect(cspace: ConfigurationSpace, validator: Validator, box: OrientedBox,
              to_lattice: bool, avoid: frozenset[State] = frozenset()
              ) -> tuple[State, list[OrientedBox]] | None:
     """Links an arbitrary pose to a nearby free lattice state.
@@ -290,7 +164,7 @@ def _connect(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox
     return _escape(cspace, validator, box, to_lattice, avoid=avoid)
 
 
-def _link(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
+def _link(cspace: ConfigurationSpace, validator: Validator, box: OrientedBox,
           to_lattice: bool, checks: int, avoid: frozenset[State] = frozenset()) -> State | None:
     """Links a pose to one of the nearest free lattice states by a straight motion.
 
@@ -320,7 +194,7 @@ def _link(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
             Translation offset plus rotation, weighted at 10 cm per radian.
         """
         offset = float(np.linalg.norm(cspace.position(state[1], state[2]) - box.center[:2]))
-        return offset + 0.1 * abs(_yaw_step(box.yaw, cspace.yaw(state[0])))
+        return offset + 0.1 * abs(yaw_step(box.yaw, cspace.yaw(state[0])))
 
     candidates.sort(key=distance)
     for state in candidates[:checks]:
@@ -332,7 +206,7 @@ def _link(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
     return None
 
 
-def _escape(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
+def _escape(cspace: ConfigurationSpace, validator: Validator, box: OrientedBox,
             to_lattice: bool, directions: int = 16, avoid: frozenset[State] = frozenset()
             ) -> tuple[State, list[OrientedBox]] | None:
     """Slides a pose straight out in several directions until it can be linked.
@@ -379,6 +253,7 @@ class _Search:
         tight: Transitions found to sweep closer than the comfort margin
             between their endpoints; they cost as much as tight states.
         reached: States reached by the last search.
+        distances: Distances over the floor to goal cells, see :meth:`floor_distances`.
     """
 
     cspace: ConfigurationSpace
@@ -387,6 +262,41 @@ class _Search:
     expansions: int = 0
     tight: set[tuple[State, State]] = field(default_factory=set)
     reached: Collection[State] = field(default_factory=tuple)
+    distances: dict[tuple[int, int], FloatArray] = field(default_factory=dict)
+
+    def floor_distances(self, goal: tuple[int, int]) -> FloatArray:
+        """Measures the shortest distances to a goal cell around obstacles, once per goal.
+
+        Steps join neighboring cells where the object fits at some yaw: every
+        path of the object follows such steps, so these distances never
+        exceed the cost of reaching the goal, and lead the search around walls.
+
+        Args:
+            goal: ``(row, col)`` of the goal cell.
+
+        Returns:
+            (rows, cols) distances in meters, infinite where the goal is out of reach.
+        """
+        if goal not in self.distances:
+            fits = self.cspace.free.any(axis=0)
+            rows, cols = fits.shape
+            index = np.arange(rows * cols).reshape(rows, cols)
+            sources, targets, weights = [], [], []
+            for dr, dc in _NEIGHBORS:
+                both = (fits[max(0, -dr):rows - max(0, dr), max(0, -dc):cols - max(0, dc)]
+                        & fits[max(0, dr):rows - max(0, -dr), max(0, dc):cols - max(0, -dc)])
+                sources.append(index[max(0, -dr):rows - max(0, dr),
+                                     max(0, -dc):cols - max(0, dc)][both])
+                targets.append(index[max(0, dr):rows - max(0, -dr),
+                                     max(0, dc):cols - max(0, -dc)][both])
+                weights.append(np.full(int(both.sum()),
+                                       self.cspace.floor.resolution * math.hypot(dr, dc)))
+            graph = sparse.csr_matrix((np.concatenate(weights),
+                                       (np.concatenate(sources), np.concatenate(targets))),
+                                      shape=(rows * cols, rows * cols))
+            self.distances[goal] = csgraph.dijkstra(
+                graph, indices=int(index[goal])).reshape(rows, cols)
+        return self.distances[goal]
 
     def neighbors(self, state: State) -> list[tuple[State, float]]:
         """Lists the free neighbors of a state with their step costs.
@@ -416,13 +326,14 @@ class _Search:
             goal: Goal state.
 
         Returns:
-            Straight-line distance plus the minimal number of turns' cost.
+            Distance over the floor, around obstacles, plus the minimal number
+            of turns' cost.
         """
         k, row, col = state
         gk, grow, gcol = goal
         bins = self.cspace.yaw_bins
         turns = min((k - gk) % bins, (gk - k) % bins)
-        distance = self.cspace.floor.resolution * math.hypot(row - grow, col - gcol)
+        distance = float(self.floor_distances((grow, gcol))[row, col])
         return distance + self.turn_cost * turns
 
     def run(self, start: State, goal: State, excluded: set[tuple[State, State]]
@@ -480,7 +391,7 @@ def _motion_signature(a: OrientedBox, b: OrientedBox) -> tuple[float, float, flo
     norm = float(np.linalg.norm(delta))
     direction = delta / norm if norm > 1e-9 else np.zeros(2)
     return (round(float(direction[0]), 3), round(float(direction[1]), 3),
-            float(np.sign(round(_yaw_step(a.yaw, b.yaw), 6))))
+            float(np.sign(round(yaw_step(a.yaw, b.yaw), 6))))
 
 
 def _simplify(boxes: list[OrientedBox]) -> list[OrientedBox]:
@@ -497,7 +408,7 @@ def _simplify(boxes: list[OrientedBox]) -> list[OrientedBox]:
     """
     kept = [boxes[0]]
     for i in range(1, len(boxes) - 1):
-        turn = abs(_yaw_step(kept[-1].yaw, boxes[i + 1].yaw))
+        turn = abs(yaw_step(kept[-1].yaw, boxes[i + 1].yaw))
         if (_motion_signature(boxes[i - 1], boxes[i]) != _motion_signature(boxes[i], boxes[i + 1])
                 or turn >= 0.5 * math.pi - 1e-6):
             kept.append(boxes[i])
@@ -550,7 +461,7 @@ def densify(boxes: list[OrientedBox], step: float = 0.05,
     """
     dense = [boxes[0]]
     for a, b in zip(boxes, boxes[1:]):
-        rotation = _yaw_step(a.yaw, b.yaw)
+        rotation = yaw_step(a.yaw, b.yaw)
         distance = float(np.linalg.norm(b.center[:2] - a.center[:2]))
         count = max(1, math.ceil(distance / step), math.ceil(abs(rotation) / turn))
         for t in np.linspace(0.0, 1.0, count + 1)[1:]:
@@ -558,11 +469,13 @@ def densify(boxes: list[OrientedBox], step: float = 0.05,
     return dense
 
 
-def _shortcut(boxes: list[OrientedBox], validator: _Validator) -> list[OrientedBox]:
+def _shortcut(boxes: list[OrientedBox], validator: Validator) -> list[OrientedBox]:
     """Replaces lattice staircases with straight motions where they are roomy.
 
-    From each kept pose, jumps to the farthest later pose reachable by one
-    straight motion that passes ``validator``. The validator should demand the
+    From each kept pose, jumps to a far later pose reachable by one straight
+    motion that passes ``validator``: jumps of 1, 2, 4... poses are tried
+    until one fails, then the longest passing jump is narrowed down by
+    bisection. The validator should demand the
     comfort margin: a shortcut must not trade the planner's preference for
     roomy configurations against a shorter, tighter motion. Consecutive
     waypoints are kept as they are, since they were already validated.
@@ -575,13 +488,21 @@ def _shortcut(boxes: list[OrientedBox], validator: _Validator) -> list[OrientedB
         A path with the same endpoints and fewer, longer segments.
     """
     smoothed = [boxes[0]]
+    last = len(boxes) - 1
     i = 0
-    while i < len(boxes) - 1:
-        j = len(boxes) - 1
-        while j > i + 1 and not validator.segment_ok(boxes[i], boxes[j]):
-            j -= 1
-        smoothed.append(boxes[j])
-        i = j
+    while i < last:
+        good, jump = i + 1, 2
+        while i + jump <= last and validator.segment_ok(boxes[i], boxes[i + jump]):
+            good, jump = i + jump, 2 * jump
+        bad = min(i + jump, last + 1)
+        while bad - good > 1:
+            middle = (good + bad) // 2
+            if validator.segment_ok(boxes[i], boxes[middle]):
+                good = middle
+            else:
+                bad = middle
+        smoothed.append(boxes[good])
+        i = good
     return smoothed
 
 
@@ -631,7 +552,7 @@ class MotionOptions:
 
 
 def _tight_sweeps(path: list[State], boxes: list[OrientedBox], cspace: ConfigurationSpace,
-                  roomy: _Validator) -> set[tuple[State, State]]:
+                  roomy: Validator) -> set[tuple[State, State]]:
     """Finds steps between roomy states whose sweep is nevertheless tight.
 
     Args:
@@ -667,8 +588,8 @@ class _Repairer:
 
     cspace: ConfigurationSpace
     search: _Search
-    validator: _Validator
-    roomy: _Validator
+    validator: Validator
+    roomy: Validator
 
     def run(self, start: tuple[OrientedBox, State], goal: tuple[OrientedBox, State],
             max_repairs: int) -> tuple[list[OrientedBox] | None, bool]:
@@ -722,7 +643,7 @@ class _Ends:
     after: list[OrientedBox]
 
 
-def _lenient(validator: _Validator, box: OrientedBox) -> list[_Validator]:
+def _lenient(validator: Validator, box: OrientedBox) -> list[Validator]:
     """Lets an object leave, or reach, a pose the reconstruction makes slightly wrong.
 
     Where an object really stands, the reconstruction may show conflicts: a
@@ -755,7 +676,7 @@ def _lenient(validator: _Validator, box: OrientedBox) -> list[_Validator]:
     return [c for c in candidates if c.pose_ok(box)]
 
 
-def _connect_ends(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
+def _connect_ends(cspace: ConfigurationSpace, validator: Validator, box: OrientedBox,
                   to_lattice: bool, avoid: frozenset[State] = frozenset()
                   ) -> tuple[State, list[OrientedBox]] | None:
     """Links a start or goal pose to the lattice, leniently if it must.
@@ -778,7 +699,7 @@ def _connect_ends(cspace: ConfigurationSpace, validator: _Validator, box: Orient
     return link
 
 
-def _link_ends(cspace: ConfigurationSpace, validator: _Validator, start: OrientedBox,
+def _link_ends(cspace: ConfigurationSpace, validator: Validator, start: OrientedBox,
                goal: OrientedBox, avoid: frozenset[State] = frozenset()) -> _Ends | str:
     """Links the start and goal poses to the lattice.
 
@@ -804,7 +725,7 @@ def _link_ends(cspace: ConfigurationSpace, validator: _Validator, start: Oriente
 
 
 def _search_with_repairs(scene: Scene, object_id: int, goal: OrientedBox,
-                         validator: _Validator, options: MotionOptions) -> MotionPlan:
+                         validator: Validator, options: MotionOptions) -> MotionPlan:
     """Plans on the lattice, then validates, repairs and smooths the path.
 
     Args:
@@ -824,7 +745,7 @@ def _search_with_repairs(scene: Scene, object_id: int, goal: OrientedBox,
     if isinstance(ends, str):
         return MotionPlan(MotionStatus.NO_PATH, object_id, message=ends)
 
-    roomy = _Validator.create(scene, object_id, options.clearance + options.comfort,
+    roomy = Validator.create(scene, object_id, options.clearance + options.comfort,
                               options.floor_margin)
     # Turning one bin moves the footprint corners by an arc of this length.
     search = _Search(cspace, 0.5 * float(np.hypot(*start.size[:2])) * math.pi / options.yaw_bins,
@@ -869,7 +790,7 @@ def plan_motion(scene: Scene, object_id: int, goal: OrientedBox,
         ``SEARCH_LIMIT_REACHED`` means the search could not conclude.
     """
     options = options or MotionOptions()
-    validator = _Validator.create(scene, object_id, options.clearance, options.floor_margin)
+    validator = Validator.create(scene, object_id, options.clearance, options.floor_margin)
     start = scene[object_id].box
     if not validator.pose_ok(start) and not _lenient(validator, start):
         return MotionPlan(MotionStatus.INVALID_START, object_id,
@@ -907,7 +828,7 @@ def straight_motion(scene: Scene, object_id: int, goal: OrientedBox,
         The one-segment plan, or None if the slide is not collision-free.
     """
     options = options or MotionOptions()
-    validator = _Validator.create(scene, object_id, options.clearance, options.floor_margin)
+    validator = Validator.create(scene, object_id, options.clearance, options.floor_margin)
     if not validator.pose_ok(goal) or not validator.segment_ok(scene[object_id].box, goal):
         return None
     return _success(scene, object_id, [scene[object_id].box, goal], expansions=0)
