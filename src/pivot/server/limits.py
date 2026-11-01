@@ -28,8 +28,8 @@ from pivot.meta.client import Usage
 TOKEN_PRICES = {"muse-spark-1.3": (1.25, 4.25), "muse-wonder-1.0": (4.00, 20.00)}
 # Muse Voice Transcribe: $0.18 per hour of audio.
 TRANSCRIBE_PER_SECOND = 0.18 / 3600
-# Muse Image, per edited image: an upper estimate until the price is published.
-IMAGE_PRICE = 0.10
+# Muse Image: $0.01 per generated image (dev.meta.ai pricing, Nov 1, 2026).
+IMAGE_PRICE = 0.01
 # An object from a photo: one Muse Spark call on an image and one SAM 3.1 image
 # segmentation; an upper estimate.
 PHOTO_PRICE = 0.05

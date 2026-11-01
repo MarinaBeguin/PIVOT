@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use PIVOT or build on it, please cite it as below."
+title: "PIVOT: From seeing a room to proving how to change it"
+abstract: >-
+  Verified spatial reasoning: a Muse or Llama agent answers questions about a real
+  room, scanned and segmented with SAM 3.1, only with what geometric tools computed
+  (collisions, paths, passages). Built for the Meta Global AI Hackathon 2026.
+type: software
+authors:
+  - family-names: Beguin
+    given-names: Marina
+repository-code: "https://github.com/MarinaBeguin/PIVOT"
+url: "https://github.com/MarinaBeguin/PIVOT"
+license: MIT
+version: 0.1.0
+date-released: 2026-11-01
+keywords:
+  - spatial reasoning
+  - language agents
+  - motion planning
+  - SAM 3.1
+  - Muse
+  - Llama
