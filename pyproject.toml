@@ -24,6 +24,8 @@ dependencies = [
 # Pinned, so that a new release cannot fail the CI on unchanged code.
 dev = ["pytest==8.3.3", "mypy==1.13.0", "pylint==3.3.1"]
 serve = ["fastapi>=0.115", "uvicorn>=0.30"]
+# Screening of requests by Llama Prompt Guard 2 and Llama Guard 3, on the CPU.
+guard = ["transformers>=4.45", "torch>=2.1"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

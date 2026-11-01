@@ -164,6 +164,9 @@ flowchart LR
 3. **The verifier.** Placement checks (collisions, walls, clearance, ceiling, warnings in front of
    doors and windows), A* motion planning in (x, y, yaw) by height slabs with exact re-validation,
    blocking objects moved aside and put back, carried moves (lift, carry, lower), passage checks.
+   Poses proven free are not checked one by one and checked segments are remembered, and A* is
+   guided around the walls: a battery of 33 moves takes 110 s instead of 235 s, with the same
+   verdicts, and planning a chair's way from the living room to the bedroom 7 s instead of 21 s.
 4. **The agent.** Muse or Llama gets the request and 16 tools. Its instructions forbid any claim
    no tool result supports, and require it to quote the measurements, in plain language.
 
@@ -255,7 +258,7 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 | `PIVOT_SAM_WORKERS` | 5 (API), 3 (GPU) | Prompts tracked at the same time |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
 | `PIVOT_AGENT_MODEL` | `muse-spark-1.3` | Agent model, e.g. `muse-wonder-1.0` for the stronger preview model |
-| `PIVOT_GUARD` | unset | Screen requests in words: `prompt-guard`, `llama-guard` or both (gated weights: `HF_TOKEN`) |
+| `PIVOT_GUARD` | unset | Screen requests in words: `prompt-guard`, `llama-guard` or both (`pip install -e ".[guard]"`; gated weights: `HF_TOKEN`) |
 | `PORT` | 8765 | Port of the viewer |
 | `PIVOT_SCRATCH` | `~/pivot_scratch` | Large storage: environments, weights, caches, logs |
 | `PIVOT_SLURM_PARTITION` | Slurm's default | Partition of the GPU jobs (open-weight version) |
@@ -267,15 +270,27 @@ first, e.g. `PIVOT_SCRATCH=/data/me` and `SLURM_CONF=...`.
 
 The [live demo](https://marina-beguin--pivot-demo-web.modal.run) serves the office of the results above, on Modal. Click an object then a
 spot to move it, or ask PIVOT in words or by voice (button "Speak"; answers can be read aloud);
-"Moving plan" opens the printable steps. Each visitor works on their own copy of the room.
-Requests to the agent cost real API calls, so the demo has a budget: 20 requests per visitor
-per day, and a total cap; the page shows how many are left. The first visit after a quiet
-period takes about 10 seconds, while the server starts.
+"Remove" takes an object out, "Add from a photo" brings a new one in, "Realistic view" draws the
+room as planned, and "Moving plan" opens the printable steps. A menu sets the language, and a
+short tour introduces the page on the first visit. Each visitor works on their own copy of the
+room, kept across reloads.
 
-Deploy your own (needs a Modal account; the key is read from .env):
+Requests cost real API calls, so the demo has a budget: per visitor and per day, 20 requests and
+$1 (a realistic view counts $0.10, a photo $0.05, a request what its tokens cost), and $25 in
+all; the page shows how many requests are left. The first visit after a quiet period takes
+about 10 seconds, while the server starts.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PIVOT_VISITOR_DAILY_REQUESTS` | 20 | Most requests per visitor per day |
+| `PIVOT_VISITOR_DAILY_USD` | 1.0 | Most a visitor may spend per day, in dollars |
+| `PIVOT_BUDGET_USD` | 25.0 | Most the deployment may ever spend, in dollars |
+
+Deploy your own (needs a Modal account; the key is read from .env). One or several rooms, each
+with the name shown in the room menu:
 
 ```bash
-PIVOT_DEMO_SCENE=<out_dir>/scene modal deploy deploy/modal_app.py
+PIVOT_DEMO_SCENES="Office=<out_dir>/scene;Bedroom=<other_out_dir>/scene" modal deploy deploy/modal_app.py
 ```
 
 ### Docker (serve a built scene)
@@ -297,7 +312,7 @@ python -m pivot.eval summary --help
 
 ## Engineering
 
-- **201 tests** (geometry, lifting on synthetic rooms rendered exactly, planning, agent with a
+- **266 tests** (geometry, lifting on synthetic rooms rendered exactly, planning, agent with a
   scripted model, server, evaluation), **mypy strict**,
   **pylint 10/10**, Google-style docstrings, all run by one script (scripts/check.sh).
 - **CI** on every pull request: install in a fresh environment, tests, mypy, pylint, and the
@@ -311,13 +326,13 @@ src/pivot/
 ├── geometry/     boxes, voxel shapes, collisions, floor map
 ├── data/         ScanNet++ loader, video encoding
 ├── perception/   object inventory, SAM 3.1 (self-hosted), detections and tracks
-├── meta/         Meta Model API client, SAM 3.1 through the API
+├── meta/         Meta Model API client, SAM 3.1 through the API, realistic view, objects from a photo
 ├── lifting/      masks to 3D: fusion, carved volumes, hidden parts, doors and windows
 ├── scene/        scene graph, supports, rooms and doorways, example scenes
 ├── planning/     placement, motion planning, make room, carry, passages, moving plan
-├── agent/        tool-calling agent (Muse or Llama) and its 16 tools
-├── server/       FastAPI server: viewer, chat, speech
-├── viz/          3D viewer (three.js), printable plan
+├── agent/        tool-calling agent (Muse or Llama) and its 16 tools (check, move, remove, add...)
+├── server/       FastAPI server: viewer, chat, speech, visitors' rooms, budget, request screening
+├── viz/          3D viewer (three.js) in six languages, printable plan
 └── eval/         task suite, variants, judge, metrics
 ```
 
@@ -332,7 +347,17 @@ Known limitations, measured rather than hidden:
 - 4 cm voxels: thin tubes can be missed; space never seen (behind a monitor) stays occupied.
   Hidden parts are inferred, not observed.
 - "No path" means no path exists at the planning resolution (5 cm, 22.5°), not a proof of
-  impossibility; making room can take up to about a minute and a half in hard cases.
+  impossibility; making room can still take tens of seconds in hard cases.
+- An object brought in from a photo has the size Muse Spark estimates from that photo alone: it
+  is approximate, which is why the form asks to correct it. It is then put at the nearest free
+  spot, and its first move must pass the doors assembled. Something standing on it in the photo
+  (a vase on a sideboard) is cut away by SAM 3.1, and the notch it leaves is filled by a geometric
+  rule, which can leave a trace of it.
+- Languages: the page, the objects and the agent's answers follow the six languages, but the
+  printable moving plan is still in English, wav2vec 2.0 (the open-weight voice) understands
+  English only, and the evaluation was run in English.
+- Request screening (Llama Prompt Guard 2, Llama Guard 3) is tested with stand-in classifiers;
+  it has not yet been run with the real weights on the public demo.
 - The realistic view is an illustration. Muse Image keeps the furniture and its look, but it may
   change the viewpoint (a view from above comes back at eye level) and add or drop details (one
   chair more than the scan holds). Next: hold the viewpoint (a view taken from inside the room,
@@ -342,14 +367,18 @@ Known limitations, measured rather than hidden:
 Next:
 
 - **Any phone video**, without depth sensor: poses and depth from Meta's VGGT or MapAnything.
-- **"Will the sofa from this photo fit?"**: insert an object from a picture and its size, then let
-  PIVOT find a spot and the rearrangement it needs.
+- **Choose where a new piece of furniture goes.** An object brought in from a photo is often
+  delivered flat-packed: click its spot on the plan, it is assembled there (no path from the door
+  needed), and PIVOT makes room if the spot is taken; afterwards it moves like any other object.
+- **A cleaner cut-out**: Muse Image isolates the object of the photo, without what stands on or in
+  front of it, before SAM 3.1 cuts it out.
 - **Real-looking objects** with SAM 3D Objects, shown in place of the point cloud.
 
 ## Acknowledgements
 
-- **Meta**, for the models PIVOT is built on (SAM 3.1, Muse Spark, Muse Voice Transcribe, Llama,
-  wav2vec 2.0), the access to the Meta Model API, and the Global AI Hackathon.
+- **Meta**, for the models PIVOT is built on (SAM 3.1, Muse Spark, Muse Image, Muse Voice
+  Transcribe, Llama, Llama Prompt Guard and Llama Guard, wav2vec 2.0), the access to the Meta
+  Model API, and the Global AI Hackathon.
 - **Modal**, which hosts the live demo.
 - **Cyber Valley**, for its support.
 - **ScanNet++**, whose iPhone captures are the rooms PIVOT rebuilds; the data is used under the
