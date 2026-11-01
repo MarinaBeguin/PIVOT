@@ -39,6 +39,8 @@ def test_the_page_carries_its_languages() -> None:
     page = render_viewer(office_scene(), points, np.zeros((1, 3), dtype=np.uint8), "office")
     assert "__PIVOT_LANGUAGES__" not in page and "window.PivotI18n" in page
     assert 'id="languageMenu"' in page
+    # The first-visit tour, and the button that shows it again.
+    assert 'id="tour"' in page and 'id="tourButton"' in page
 
 
 def test_the_agent_is_told_the_language_of_the_page_once() -> None:
