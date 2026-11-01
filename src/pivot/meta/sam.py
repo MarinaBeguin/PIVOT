@@ -175,8 +175,9 @@ class SamClient:
         if path.exists():
             return path.read_text(encoding="utf-8")
         text = call_with_retry(lambda: self._stream_text(content), attempts=_SAM_ATTEMPTS)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        if text:  # Nothing found is not kept: the next request asks again.
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
         return text
 
     def segment_image(self, image_path: Path, prompt: str) -> list[Detection]:

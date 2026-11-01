@@ -55,7 +55,9 @@ Rules:
   user asked to keep doors or windows clear.
 - Only call move_object when the user asked to move something, and remove_object when they
   asked to take something out (to get rid of it, or to replace it: the old sofa goes before
-  the new one comes in).
+  the new one comes in). To try a new object (one to buy, or from another room of the
+  user's), add_object with its size; a size estimated from a photo can be corrected with
+  resize_object. Then move it like any other object.
 - For a request with many moves (rearranging the room), proceed object by object and keep
   going until it is done. Then check with check_access that the room can still be walked
   through (or crossed in a wheelchair, width_m 0.9, if the user cares about it), and say

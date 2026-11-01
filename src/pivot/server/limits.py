@@ -30,6 +30,9 @@ TOKEN_PRICES = {"muse-spark-1.3": (1.25, 4.25), "muse-wonder-1.0": (4.00, 20.00)
 TRANSCRIBE_PER_SECOND = 0.18 / 3600
 # Muse Image, per edited image: an upper estimate until the price is published.
 IMAGE_PRICE = 0.10
+# An object from a photo: one Muse Spark call on an image and one SAM 3.1 image
+# segmentation; an upper estimate.
+PHOTO_PRICE = 0.05
 
 
 def chat_cost(model: str, usage: Usage) -> float:
@@ -225,6 +228,7 @@ class Meter:
         chat_price: Cost of the tokens of a request in words.
         audio_per_second: Cost of a second of transcribed audio.
         image_price: Cost of a realistic view.
+        photo_price: Cost of an object brought in from a photo.
     """
 
     ledger: SpendLedger
@@ -233,6 +237,7 @@ class Meter:
     chat_price: Callable[[Usage], float] = lambda usage: 0.0
     audio_per_second: float = 0.0
     image_price: float = 0.0
+    photo_price: float = 0.0
 
     def visitor(self, headers: Mapping[str, str], peer: str | None) -> str:
         """Identifies the visitor of a request.

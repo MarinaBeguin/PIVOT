@@ -24,6 +24,7 @@ import hmac
 import json
 import os
 import re
+import tempfile
 import wave
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -41,11 +42,13 @@ from pivot.agent.tools import TOOLS_BY_NAME, Session, call_tool
 from pivot.geometry.types import FloatArray
 from pivot.meta.client import MetaConfig, Usage
 from pivot.meta.image import photo_view
+from pivot.meta.photo import PhotoObject, object_from_photo
+from pivot.meta.sam import SamClient
 from pivot.planning.instructions import instructions
 from pivot.planning.motion import MotionPlan
 from pivot.scene.graph import Scene, carried_objects
 from pivot.server.limits import (
-    IMAGE_PRICE, TRANSCRIBE_PER_SECOND, Budget, Meter, SpendLedger, chat_cost,
+    IMAGE_PRICE, PHOTO_PRICE, TRANSCRIBE_PER_SECOND, Budget, Meter, SpendLedger, chat_cost,
 )
 from pivot.server.speech import Transcriber, read_wav, transcriber_from_env
 from pivot.server.visitors import COOKIE, Visitor, Visitors
@@ -53,13 +56,16 @@ from pivot.viz.plan import instructions_page
 from pivot.viz.pointcloud import ColorArray
 from pivot.viz.web import Features, RoomMenu, render_viewer
 
-_MUTATING = {"move_object", "make_room_and_move", "undo", "remove_object"}
+_MUTATING = {"move_object", "make_room_and_move", "undo", "remove_object", "add_object",
+             "resize_object"}
 # About a minute of 16 kHz 16-bit mono audio.
 MAX_AUDIO_BYTES = 2_000_000
 # A 3D view sent for a realistic one: a PNG of the page, at most this big.
 MAX_IMAGE_BYTES = 12_000_000
 # Edits a 3D view (PNG) into a realistic one, given photos of objects brought in.
 Painter = Callable[[bytes, list[tuple[str, bytes]]], bytes]
+# Names the object in a photo, sizes it and cuts it out; None if there is none.
+Photographer = Callable[[bytes], PhotoObject | None]
 
 
 def _objects(session: Session) -> list[dict[str, Any]]:
@@ -151,6 +157,81 @@ def _decode_data_url(url: str) -> bytes | None:
         return None
 
 
+def _render_reply(visitor: Visitor, painter: Painter, view_url: str, meter: Meter | None,
+                  key: str) -> JSONResponse:
+    """Draws a realistic view of a visitor's room, and charges it.
+
+    Args:
+        visitor: The visitor; the photos of the objects they brought in are drawn.
+        painter: Edits the 3D view into a realistic one.
+        view_url: The 3D view, as a PNG data address.
+        meter: Prices the request, if the deployment has a budget.
+        key: The visitor's key in the ledger.
+
+    Returns:
+        ``{"image": "data:image/...;base64,..."}``, or an error.
+    """
+    if meter is not None and (reason := meter.ledger.refusal(key)):
+        return JSONResponse({"error": reason}, status_code=429)
+    view = _decode_data_url(view_url)
+    if view is None or len(view) > MAX_IMAGE_BYTES:
+        return JSONResponse({"error": "The view could not be read."}, status_code=400)
+    brought = [photo for object_id, photo in visitor.photos.items()
+               if object_id in visitor.session.scene.objects]
+    try:
+        image = painter(view, brought)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        # A failed drawing must reach the page, not break the server.
+        return JSONResponse({"error": f"Could not draw the view: {error}"})
+    finally:
+        if meter is not None:
+            meter.ledger.record(key, meter.image_price)
+    kind = "png" if image.startswith(b"\x89PNG") else "jpeg"
+    return JSONResponse({"image": f"data:image/{kind};base64,{base64.b64encode(image).decode()}"})
+
+
+def _photo_reply(visitor: Visitor, photographer: Photographer, body: dict[str, Any],
+                 meter: Meter | None, key: str) -> JSONResponse:
+    """Brings an object into a visitor's room from a photo, and charges it.
+
+    Args:
+        visitor: The visitor.
+        photographer: Names, sizes and cuts out the object of a photo.
+        body: The photo as a data address, and optionally where the object should go.
+        meter: Prices the request, if the deployment has a budget.
+        key: The visitor's key in the ledger.
+
+    Returns:
+        The object added, its look, its picture and the updated objects; or
+        why it was not added.
+    """
+    if meter is not None and (reason := meter.ledger.refusal(key)):
+        return JSONResponse({"error": reason}, status_code=429)
+    picture = _decode_data_url(str(body.get("image", "")))
+    if picture is None or len(picture) > MAX_IMAGE_BYTES:
+        return JSONResponse({"error": "The photo could not be read."}, status_code=400)
+    try:
+        seen = photographer(picture)
+    except Exception as error:  # pylint: disable=broad-exception-caught
+        # A failed model call must reach the page, not break the server.
+        return JSONResponse({"error": f"Could not look at the photo: {error}"})
+    finally:
+        if meter is not None:
+            meter.ledger.record(key, meter.photo_price)
+    if seen is None:
+        return JSONResponse({"added": False, "reason": "no_object"})
+    where = {k: float(body[k]) for k in ("x", "y") if body.get(k) is not None}
+    result: dict[str, Any] = json.loads(call_tool(visitor.session, "add_object", json.dumps(
+        {"label": seen.label, **dict(zip(("width_m", "depth_m", "height_m"), seen.size)),
+         **(where if len(where) == 2 else {})})))
+    if result.get("added"):
+        object_id = int(result["object_id"])
+        visitor.photos[object_id] = (f"the new {seen.label} (#{object_id})", seen.picture)
+    cutout = "data:image/png;base64," + base64.b64encode(seen.picture).decode()
+    return JSONResponse({**result, "look": seen.look, "picture": cutout,
+                         "objects": _objects(visitor.session)})
+
+
 def _audio_seconds(audio: bytes) -> float:
     """Measures a recording, to price its transcription.
 
@@ -169,12 +250,29 @@ def _audio_seconds(audio: bytes) -> float:
 
 
 # The routes are local functions: each counts as a local variable.
+def _render_pages(rooms: list[Room], features: Features) -> dict[str, str]:
+    """Renders the viewer page of every room, with the menu of all rooms.
+
+    Args:
+        rooms: The rooms.
+        features: What the server offers.
+
+    Returns:
+        The pages, by room id.
+    """
+    menu = [(room.room_id, room.title) for room in rooms]
+    return {room.room_id: render_viewer(room.scene, room.points, room.colors, room.title,
+                                        features, RoomMenu(room.room_id, menu))
+            for room in rooms}
+
+
 # pylint: disable-next=too-many-locals
 def create_app(rooms: list[Room],
                agent_factory: Callable[[Session], Agent] | None = None,
                transcriber: Transcriber | None = None,
                meter: Meter | None = None,
-               painter: Painter | None = None) -> FastAPI:
+               painter: Painter | None = None,
+               photographer: Photographer | None = None) -> FastAPI:
     """Creates the web application for one or several rooms.
 
     The room of a request is given by its ``scene`` query parameter (the first
@@ -187,6 +285,8 @@ def create_app(rooms: list[Room],
         transcriber: Turns spoken requests into text; None disables the microphone.
         meter: Prices requests and enforces a budget; None for a private server.
         painter: Edits a 3D view into a realistic one; None disables realistic views.
+        photographer: Names an object in a photo, sizes it and cuts it out;
+            None disables objects from photos.
 
     Returns:
         The application.
@@ -196,13 +296,10 @@ def create_app(rooms: list[Room],
     app.add_middleware(GZipMiddleware, minimum_size=1000)
     by_id = {room.room_id: room for room in rooms}
     visitors = Visitors({room.room_id: room.scene for room in rooms})
-    menu = [(room.room_id, room.title) for room in rooms]
-    features = Features(interactive=True, chat=agent_factory is not None,
-                        voice=agent_factory is not None and transcriber is not None,
-                        render=painter is not None)
-    pages = {room.room_id: render_viewer(room.scene, room.points, room.colors, room.title,
-                                         features, RoomMenu(room.room_id, menu))
-             for room in rooms}
+    pages = _render_pages(rooms, Features(
+        interactive=True, chat=agent_factory is not None,
+        voice=agent_factory is not None and transcriber is not None,
+        render=painter is not None, photos=photographer is not None))
 
     @app.middleware("http")
     async def visitor_session(request: Request,
@@ -265,10 +362,11 @@ def create_app(rooms: list[Room],
         initial = session.history[0] if session.history else session.scene
         removed = [(o.label, o.object_id) for o in initial.objects.values()
                    if o.object_id not in session.scene.objects]
+        added = [o for o in session.scene.objects.values() if o.object_id not in initial.objects]
         return instructions_page(session.scene, instructions(initial, session.motions),
                                  request.state.room.title,
                                  save_pdf=request.query_params.get("pdf") == "1",
-                                 removed=removed)
+                                 removed=removed, added=added)
 
     @app.get("/api/objects")
     def objects(request: Request) -> list[dict[str, Any]]:
@@ -365,23 +463,26 @@ def create_app(rooms: list[Room],
         """
         if painter is None:
             return JSONResponse({"error": "Realistic views are not enabled."}, status_code=404)
-        visitor_key = key(request)
-        if meter is not None and (reason := meter.ledger.refusal(visitor_key)):
-            return JSONResponse({"error": reason}, status_code=429)
-        view = _decode_data_url(body.get("image", ""))
-        if view is None or len(view) > MAX_IMAGE_BYTES:
-            return JSONResponse({"error": "The view could not be read."}, status_code=400)
-        try:
-            image = painter(view, [])
-        except Exception as error:  # pylint: disable=broad-exception-caught
-            # A failed drawing must reach the page, not break the server.
-            return JSONResponse({"error": f"Could not draw the view: {error}"})
-        finally:
-            if meter is not None:
-                meter.ledger.record(visitor_key, meter.image_price)
-        kind = "png" if image.startswith(b"\x89PNG") else "jpeg"
-        return JSONResponse(
-            {"image": f"data:image/{kind};base64,{base64.b64encode(image).decode()}"})
+        return _render_reply(request.state.visitor, painter, body.get("image", ""), meter,
+                             key(request))
+
+    @app.post("/api/photo")
+    def photo(body: dict[str, Any], request: Request) -> JSONResponse:
+        """Brings an object into the room from a photo of it.
+
+        Args:
+            body: ``{"image": "data:image/...;base64,...", "x": ..., "y": ...}``;
+                the point where it should go is optional.
+            request: The request.
+
+        Returns:
+            The object added (as ``add_object`` says), its look, its picture,
+            and the updated objects; or why it was not added.
+        """
+        if photographer is None:
+            return JSONResponse({"error": "Objects from photos are not enabled."},
+                                status_code=404)
+        return _photo_reply(request.state.visitor, photographer, body, meter, key(request))
 
     @app.get("/api/limits")
     def limits(request: Request) -> dict[str, Any]:
@@ -493,7 +594,8 @@ def _public_meter(config: MetaConfig | None) -> Meter:
                  partial(chat_cost, config.agent_model) if api and config else
                  (lambda usage: 0.0),
                  TRANSCRIBE_PER_SECOND if api else 0.0,
-                 IMAGE_PRICE if api else 0.0)
+                 IMAGE_PRICE if api else 0.0,
+                 PHOTO_PRICE if api else 0.0)
 
 
 def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: int | None = None,
@@ -518,7 +620,23 @@ def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: in
                       agent_factory=factory,
                       transcriber=transcriber_from_env(config) if config else None,
                       meter=_public_meter(config) if public else None,
-                      painter=partial(photo_view, config) if api and config else None)
+                      painter=partial(photo_view, config) if api and config else None,
+                      photographer=_photographer(config) if api and config else None)
+
+
+def _photographer(config: MetaConfig) -> Photographer:
+    """Builds the function that brings objects in from photos, with the Meta API.
+
+    Args:
+        config: API configuration.
+
+    Returns:
+        Muse Spark names and sizes the object; SAM 3.1 cuts it out (its
+        answers cached under ``PIVOT_CACHE``, or a temporary folder).
+    """
+    cache = Path(os.environ.get("PIVOT_CACHE", tempfile.gettempdir())) / "sam_photos"
+    sam = SamClient(config, cache)
+    return partial(object_from_photo, config, segment=sam.segment_image)
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -141,3 +141,19 @@ def test_sam_client_caches_responses(tmp_path: Path) -> None:
     assert len(calls) == 1
     assert calls[0]["model"] == "sam-3.1"
     assert [d.bounds for d in first] == [d.bounds for d in second]
+
+
+def test_sam_client_asks_again_after_finding_nothing(tmp_path: Path) -> None:
+    calls: list[dict[str, Any]] = []
+
+    def stream(**kwargs: Any) -> FakeStream:
+        calls.append(kwargs)
+        return FakeStream("")
+
+    fake = SimpleNamespace(responses=SimpleNamespace(stream=stream))
+    image = tmp_path / "photo.jpg"
+    image.write_bytes(b"\xff\xd8 not really a jpeg")
+    config = MetaConfig(api_key="test")
+    sam = SamClient(config, tmp_path / "cache", client=fake)  # type: ignore[arg-type]
+    assert not sam.segment_image(image, "sideboard")
+    assert not sam.segment_image(image, "sideboard") and len(calls) == 2

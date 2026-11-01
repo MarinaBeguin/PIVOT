@@ -115,6 +115,8 @@
     <button id="plan" data-i18n="planButton" data-i18n-title="planTitle">Moving plan (PDF)</button>
     <button id="renderButton" style="display:none" data-i18n="realView" data-i18n-title="realViewTitle">Realistic view</button>
   </div>
+  <div class="row"><button id="photoButton" style="display:none" data-i18n="addPhoto" data-i18n-title="addPhotoTitle">Add from a photo</button>
+    <input type="file" id="photoInput" accept="image/*" style="display:none"></div>
   <div id="result"></div>
   <div class="row"><button id="makeRoom" class="primary" style="display:none" data-i18n="makeRoom">Make room &amp; move</button></div>
   <div id="chat">
@@ -272,7 +274,10 @@ const volumeGroup = new THREE.Group();
 const views = new Map();
 const palette = ["#e5484d", "#3e63dd", "#46a758", "#f5d90a", "#8e4ec6", "#12a594",
                  "#f76b15", "#d6409f", "#0090ff", "#a18072"];
-data.objects.forEach((obj, i) => {
+// Photos of the objects brought in from a photo, by id (shown in their labels).
+const pictures = new Map();
+const scannedIds = new Set(data.objects.map(o => o.id));
+function addView(obj, i) {
   const color = new THREE.Color(palette[i % palette.length]);
   const [sx, sy, sz] = obj.box.size;
   const edges = new THREE.LineSegments(
@@ -284,7 +289,17 @@ data.objects.forEach((obj, i) => {
   edges.add(fill);
   const tag = document.createElement("div");
   tag.className = "tag";
-  translators.push(() => { tag.textContent = objectName(obj); });
+  const nameTag = () => {
+    tag.textContent = objectName(obj);
+    if (pictures.has(obj.id)) {
+      const thumbnail = document.createElement("img");
+      thumbnail.src = pictures.get(obj.id);
+      thumbnail.style.cssText = "display:block;max-width:64px;max-height:64px;margin:2px auto 0";
+      tag.appendChild(thumbnail);
+    }
+  };
+  translators.push(nameTag);
+  nameTag();
   const label = new CSS2DObject(tag);
   label.position.set(0, 0, sz / 2 + 0.05);
   edges.add(label);
@@ -303,6 +318,11 @@ data.objects.forEach((obj, i) => {
       cubes.setMatrixAt(k, m);
     }
     volumeGroup.add(cubes);
+  } else if (!scannedIds.has(obj.id)) {
+    // Brought in (from a photo, or by the agent): no measured volume, a block of its size.
+    cubes = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz),
+                           new THREE.MeshLambertMaterial({ color }));
+    volumeGroup.add(cubes);
   }
 
   let points = null;
@@ -312,7 +332,18 @@ data.objects.forEach((obj, i) => {
   }
   views.set(obj.id, { obj, edges, fill, cubes, points, label, z: obj.box.center[2], removed: false });
   setPose(obj.id, obj.box.center[0], obj.box.center[1], obj.box.yaw);
-});
+}
+data.objects.forEach(addView);
+
+// Drops the view of an object, to draw it again (its size was corrected).
+function dropView(id) {
+  const view = views.get(id);
+  view.edges.remove(view.label);
+  boxGroup.remove(view.edges);
+  if (view.cubes) volumeGroup.remove(view.cubes);
+  if (view.points) cloud.remove(view.points);
+  views.delete(id);
+}
 scene.add(boxGroup);
 scene.add(volumeGroup);
 
@@ -647,7 +678,11 @@ function applyObjects(objects) {
       if (node) node.visible = !view.removed;
   });
   for (const obj of objects) {
-    if (!views.has(obj.id)) continue;
+    const known = views.get(obj.id);
+    if (known && known.obj.box.size.some((v, k) => Math.abs(v - obj.box.size[k]) > 1e-6)) {
+      dropView(obj.id);
+    }
+    if (!views.has(obj.id)) addView(obj, obj.id);  // Brought in, or resized.
     views.get(obj.id).z = obj.box.center[2];
     setPose(obj.id, obj.box.center[0], obj.box.center[1], obj.box.yaw);
   }
@@ -877,6 +912,91 @@ renderButton.onclick = realisticView;
 document.getElementById("realClose").onclick = () => {
   document.getElementById("realView").style.display = "none";
 };
+
+// Objects from a photo: taken with the camera or picked from the gallery, the
+// photo is shrunk, sent, and the object appears at the free spot nearest to the
+// target (or the middle of the floor), with its estimated size to correct.
+const photoButton = document.getElementById("photoButton");
+const photoInput = document.getElementById("photoInput");
+function shrunkPhoto(file, longest = 1280) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => {
+      const scale = Math.min(1, longest / Math.max(image.width, image.height));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.width * scale);
+      canvas.height = Math.round(image.height * scale);
+      canvas.getContext("2d").drawImage(image, 0, 0, canvas.width, canvas.height);
+      URL.revokeObjectURL(image.src);
+      resolve(canvas.toDataURL("image/jpeg", 0.9));
+    };
+    image.onerror = reject;
+    image.src = URL.createObjectURL(file);
+  });
+}
+async function addFromPhoto(file) {
+  if (busy || !file) return;
+  busy = true;
+  photoButton.disabled = true;
+  result.textContent = t("analyzing");
+  try {
+    const body = { image: await shrunkPhoto(file) };
+    if (target) Object.assign(body, { x: target.x, y: target.y });
+    const answer = await (await fetch(scoped("/api/photo"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body) })).json();
+    if (answer.error || !answer.added) {
+      const why = answer.reason === "no_object" ? t("noObjectInPhoto")
+        : escapeHtml(answer.error ?? answer.reason);
+      result.innerHTML = `<span class="no">${t("notPossible")}</span>\n${why}`;
+      return;
+    }
+    pictures.set(answer.object_id, answer.picture);
+    applyObjects(answer.objects);
+    clearSelection();
+    showSizeForm(answer.object_id, answer.label, answer.size_m);
+  } catch (error) {
+    result.innerHTML = `<span class="no">${t("error")}</span>\n${escapeHtml(error.message)}`;
+  } finally {
+    busy = false;
+    photoButton.disabled = false;
+    photoInput.value = "";
+    showLimits();
+  }
+}
+// The estimated size, in centimeters, with fields to correct it.
+function showSizeForm(id, label, size) {
+  const cm = size.map(v => Math.round(100 * v));
+  result.innerHTML = "";
+  const line = document.createElement("div");
+  line.textContent = t("added", { name: objectName({ label, id }), size: cm.join(" × ") + " cm" });
+  const form = document.createElement("div");
+  form.className = "row";
+  const inputs = cm.map(v => {
+    const input = document.createElement("input");
+    input.type = "number"; input.min = "5"; input.max = "600"; input.value = v;
+    input.style.width = "56px";
+    return input;
+  });
+  const apply = document.createElement("button");
+  apply.textContent = t("apply");
+  apply.onclick = async () => {
+    const [width, depth, height] = inputs.map(i => parseFloat(i.value) / 100);
+    const answer = await callTool("resize_object",
+      { object_id: id, width_m: width, depth_m: depth, height_m: height });
+    if (!answer.resized) {
+      result.appendChild(document.createTextNode("\n" + (answer.reason ?? answer.error)));
+      return;
+    }
+    applyObjects(answer.objects);
+    line.textContent = t("resized");
+  };
+  form.append(document.createTextNode(t("sizeCm")), ...inputs, apply);
+  result.append(line, form);
+}
+if (data.photos) photoButton.style.display = "";
+photoButton.onclick = () => photoInput.click();
+photoInput.onchange = () => addFromPhoto(photoInput.files[0]);
 
 // Scripting hook, for tests and recorded demos: the same actions as the controls.
 window.pivot = {
