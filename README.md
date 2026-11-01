@@ -117,11 +117,11 @@ tools on this scene):
 | Model | Role in PIVOT | API version | Open-weight version |
 |---|---|---|---|
 | **SAM 3.1** | Segments and tracks every object of the video from a noun ("chair", "lamp") | Meta Model API, read with Meta's SAM parser | Self-hosted weights (multiplex video predictor, 64 objects per prompt) |
-| **Muse Spark 1.3** | Agent with 13 geometric tools; lists the kinds of objects a video shows | Meta Model API | |
+| **Muse Spark 1.3** | Agent with 14 tools: geometric checks and moves, taking objects out; lists the kinds of objects a video shows | Meta Model API | |
 | **Llama 3.1 8B Instruct** | The same agent, with tool calling | | Served by vLLM on the GPU |
 | **Llama 3.2 11B Vision Instruct** | Lists the kinds of objects a video shows | | Hugging Face transformers, on the GPU |
-| **Muse Image 1.0** | Turns the 3D view of a planned room into a realistic photograph | Meta Model API | |
 | **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
+| **Muse Image 1.0** | Turns the 3D view of a planned room into a realistic photograph | Meta Model API | |
 | **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
 
 ![SAM 3.1 tracking the floor lamps through the video, one track per view](assets/sam_tracking.jpg)
@@ -153,7 +153,7 @@ flowchart LR
 3. **The verifier.** Placement checks (collisions, walls, clearance, ceiling, warnings in front of
    doors and windows), A* motion planning in (x, y, yaw) by height slabs with exact re-validation,
    blocking objects moved aside and put back, carried moves (lift, carry, lower), passage checks.
-4. **The agent.** Muse or Llama gets the request and 13 tools. Its instructions forbid any claim
+4. **The agent.** Muse or Llama gets the request and 14 tools. Its instructions forbid any claim
    no tool result supports, and require it to quote the measurements, in plain language.
 
 ## Results
@@ -302,7 +302,7 @@ src/pivot/
 ├── lifting/      masks to 3D: fusion, carved volumes, hidden parts, doors and windows
 ├── scene/        scene graph, supports, rooms and doorways, example scenes
 ├── planning/     placement, motion planning, make room, carry, passages, moving plan
-├── agent/        tool-calling agent (Muse or Llama) and its 13 tools
+├── agent/        tool-calling agent (Muse or Llama) and its 14 tools
 ├── server/       FastAPI server: viewer, chat, speech
 ├── viz/          3D viewer (three.js), printable plan
 └── eval/         task suite, variants, judge, metrics
