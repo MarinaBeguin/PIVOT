@@ -29,7 +29,7 @@ serve = ["fastapi>=0.115", "uvicorn>=0.30"]
 where = ["src"]
 
 [tool.setuptools.package-data]
-"pivot.viz" = ["viewer.html"]
+"pivot.viz" = ["viewer.html", "i18n.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

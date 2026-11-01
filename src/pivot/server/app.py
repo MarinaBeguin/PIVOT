@@ -84,7 +84,7 @@ def _motions(scene: Scene, motions: list[MotionPlan]) -> list[dict[str, Any]]:
 
 
 def _chat_reply(visitor: Visitor, agent_factory: Callable[[Session], Agent], message: str,
-                meter: Meter | None, key: str) -> JSONResponse:
+                meter: Meter | None, key: str, language: str | None = None) -> JSONResponse:
     """Answers a request in words on a visitor's session, and charges it.
 
     Args:
@@ -93,6 +93,7 @@ def _chat_reply(visitor: Visitor, agent_factory: Callable[[Session], Agent], mes
         message: The request.
         meter: Prices the request, if the deployment has a budget.
         key: The visitor's key in the ledger.
+        language: Code of the language of the visitor's page.
 
     Returns:
         The answer, the tools called, the motions executed (to animate) and
@@ -106,7 +107,7 @@ def _chat_reply(visitor: Visitor, agent_factory: Callable[[Session], Agent], mes
     before, count = session.scene, len(session.motions)
     spent = Usage(agent.usage.calls, agent.usage.prompt_tokens, agent.usage.completion_tokens)
     try:
-        run = agent.ask(message)
+        run = agent.ask(message, language)
     except Exception as error:  # pylint: disable=broad-exception-caught
         # An API failure must reach the page, not break the server.
         return JSONResponse({"error": f"The agent could not answer: {error}"})
@@ -273,7 +274,8 @@ def create_app(rooms: list[Room],
         """Answers a request in words with the agent, on the visitor's session.
 
         Args:
-            body: ``{"message": ...}``.
+            body: ``{"message": ..., "language": ...}``, the language of the page
+                being optional.
             request: The request.
 
         Returns:
@@ -284,7 +286,7 @@ def create_app(rooms: list[Room],
             return JSONResponse({"error": "Requests in words are not enabled."},
                                 status_code=404)
         return _chat_reply(request.state.visitor, agent_factory, body.get("message", ""),
-                           meter, key(request))
+                           meter, key(request), body.get("language"))
 
     @app.post("/api/transcribe")
     async def transcribe(request: Request) -> JSONResponse:
