@@ -11,6 +11,7 @@ import numpy as np
 from pivot.geometry.types import FloatArray
 from pivot.scene.graph import Scene
 from pivot.scene.rooms import find_rooms
+from pivot.viz.ownership import point_owners
 from pivot.viz.pointcloud import ColorArray
 
 _PLACEHOLDER = "__PIVOT_SCENE_DATA__"
@@ -36,6 +37,8 @@ def scene_payload(scene: Scene, points: FloatArray, colors: ColorArray,
         "points": base64.b64encode(points.astype("<f4").tobytes()).decode(),
         "colors": base64.b64encode(colors.astype(np.uint8).tobytes()).decode(),
         "objects": [o.to_dict() for o in sorted(scene.objects.values(), key=lambda o: o.object_id)],
+        # The movable object of each point (-1 for none): its points move with it.
+        "owners": base64.b64encode(point_owners(scene, points).astype("<i4").tobytes()).decode(),
     }
     payload["rooms"] = []
     floor_data: dict[str, Any] | None = None

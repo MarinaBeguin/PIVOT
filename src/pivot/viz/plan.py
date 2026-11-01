@@ -247,7 +247,8 @@ def _access_text(final: Scene) -> tuple[str, bool]:
 
 
 def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
-                      save_pdf: bool = False) -> str:
+                      save_pdf: bool = False,
+                      removed: list[tuple[str, int]] | None = None) -> str:
     """Builds the printable instructions page.
 
     Args:
@@ -256,6 +257,7 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
         title: Name of the scene.
         save_pdf: Whether the page opens the browser's print dialog as soon as
             it is loaded, where "Save as PDF" gives the PDF.
+        removed: Objects taken out of the room, as ``(label, id)``: they go first.
 
     Returns:
         A standalone HTML page.
@@ -267,6 +269,9 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
                + (f", {two} of them with two people" if two else "") + ".")
     body = (f"<ol>{items}</ol>" if steps else
             "<p>No move yet: ask PIVOT to rearrange the room, then open this page again.</p>")
+    if removed:
+        names = ", ".join(f"the {label} (#{object_id})" for label, object_id in removed)
+        body = f"<p class='removed'>First take out of the room: {html.escape(names)}.</p>" + body
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
             f"<title>Moving plan - {html.escape(title)}</title><style>{_STYLE}</style></head>"

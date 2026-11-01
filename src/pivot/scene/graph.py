@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -224,6 +225,19 @@ class Scene:
         objects = dict(self.objects)
         objects[object_id] = dataclasses.replace(self[object_id], box=box)
         return dataclasses.replace(self, objects=objects)
+
+    def without(self, object_ids: Collection[int]) -> Scene:
+        """Returns a copy of the scene without some objects.
+
+        Args:
+            object_ids: The objects taken out.
+
+        Returns:
+            The edited scene.
+        """
+        removed = set(object_ids)
+        return dataclasses.replace(self, objects={k: v for k, v in self.objects.items()
+                                                  if k not in removed})
 
     def moved(self, object_id: int, box: OrientedBox) -> Scene:
         """Moves an object, carrying along everything resting on it.

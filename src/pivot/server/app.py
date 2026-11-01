@@ -48,7 +48,7 @@ from pivot.viz.plan import instructions_page
 from pivot.viz.pointcloud import ColorArray
 from pivot.viz.web import RoomMenu, render_viewer
 
-_MUTATING = {"move_object", "make_room_and_move", "undo"}
+_MUTATING = {"move_object", "make_room_and_move", "undo", "remove_object"}
 # About a minute of 16 kHz 16-bit mono audio.
 MAX_AUDIO_BYTES = 2_000_000
 
@@ -233,9 +233,12 @@ def create_app(rooms: list[Room],
         """
         session: Session = request.state.visitor.session
         initial = session.history[0] if session.history else session.scene
+        removed = [(o.label, o.object_id) for o in initial.objects.values()
+                   if o.object_id not in session.scene.objects]
         return instructions_page(session.scene, instructions(initial, session.motions),
                                  request.state.room.title,
-                                 save_pdf=request.query_params.get("pdf") == "1")
+                                 save_pdf=request.query_params.get("pdf") == "1",
+                                 removed=removed)
 
     @app.get("/api/objects")
     def objects(request: Request) -> list[dict[str, Any]]:
