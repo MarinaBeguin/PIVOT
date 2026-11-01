@@ -47,6 +47,7 @@ from pivot.meta.sam import SamClient
 from pivot.planning.instructions import instructions
 from pivot.planning.motion import MotionPlan
 from pivot.scene.graph import Scene, carried_objects
+from pivot.server.guard import Guard, guard_from_env
 from pivot.server.limits import (
     IMAGE_PRICE, PHOTO_PRICE, TRANSCRIBE_PER_SECOND, Budget, Meter, SpendLedger, chat_cost,
 )
@@ -272,7 +273,8 @@ def create_app(rooms: list[Room],
                transcriber: Transcriber | None = None,
                meter: Meter | None = None,
                painter: Painter | None = None,
-               photographer: Photographer | None = None) -> FastAPI:
+               photographer: Photographer | None = None,
+               guard: Guard | None = None) -> FastAPI:
     """Creates the web application for one or several rooms.
 
     The room of a request is given by its ``scene`` query parameter (the first
@@ -287,6 +289,8 @@ def create_app(rooms: list[Room],
         painter: Edits a 3D view into a realistic one; None disables realistic views.
         photographer: Names an object in a photo, sizes it and cuts it out;
             None disables objects from photos.
+        guard: Screens requests in words before the agent sees them (Llama
+            Prompt Guard, Llama Guard); None screens nothing.
 
     Returns:
         The application.
@@ -416,6 +420,9 @@ def create_app(rooms: list[Room],
         if agent_factory is None:
             return JSONResponse({"error": "Requests in words are not enabled."},
                                 status_code=404)
+        if guard is not None and (reason := guard(body.get("message", ""))):
+            # Refused before any API call: it costs nothing.
+            return JSONResponse({"error": reason, "screened": True})
         return _chat_reply(request.state.visitor, agent_factory, body.get("message", ""),
                            meter, key(request), body.get("language"))
 
@@ -621,7 +628,8 @@ def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: in
                       transcriber=transcriber_from_env(config) if config else None,
                       meter=_public_meter(config) if public else None,
                       painter=partial(photo_view, config) if api and config else None,
-                      photographer=_photographer(config) if api and config else None)
+                      photographer=_photographer(config) if api and config else None,
+                      guard=guard_from_env() if config else None)
 
 
 def _photographer(config: MetaConfig) -> Photographer:
