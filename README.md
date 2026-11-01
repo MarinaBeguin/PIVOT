@@ -276,7 +276,7 @@ short tour introduces the page on the first visit. Each visitor works on their o
 room, kept across reloads.
 
 Requests cost real API calls, so the demo has a budget: per visitor and per day, 20 requests and
-$1 (a realistic view counts $0.10, a photo $0.05, a request what its tokens cost), and $25 in
+$1 (a realistic view counts $0.01, a photo $0.05, a request what its tokens cost), and $25 in
 all; the page shows how many requests are left. The first visit after a quiet period takes
 about 10 seconds, while the server starts.
 
@@ -313,9 +313,8 @@ python -m pivot.eval summary --help
 ## What it costs
 
 Every figure below is computed from what PIVOT measured (frames of the real videos, tokens of the
-36 evaluation requests, tracking times) and from public prices: the Meta Model API's list prices
-of October 30, 2026 and Modal's per-second rates. Muse Image has no published price yet; PIVOT
-budgets it at $0.10, an upper estimate. They are list prices: a deployment by Meta itself would
+36 evaluation requests, tracking times) and from public prices: the [Meta Model API's list prices](https://dev.meta.ai/docs/pricing-rate-limits)
+of November 1, 2026 and [Modal's per-second rates](https://modal.com/pricing). They are list prices: a deployment by Meta itself would
 pay its own compute cost instead.
 
 **Building a room, once.** SAM 3.1 is billed $0.0002 per frame and per kind of object tracked;
@@ -339,7 +338,7 @@ with no API cost. On a GPU you already own, the open-weight version costs nothin
 | The same with Llama 3.1 8B | No API cost; $1.95 per hour the GPU is up | vLLM on a rented 48 GB GPU, whether it answers or waits |
 | A spoken request | $0.0005 for 10 seconds | Muse Voice Transcribe, $0.18 per hour of audio |
 | Bringing in furniture from a photo | about $0.01 to $0.02 (estimated), budgeted $0.05 | One Muse Spark call on the image, one SAM 3.1 image segmentation ($0.0025) per noun tried, up to four |
-| A realistic view | budgeted $0.10 | Muse Image, price not yet published |
+| A realistic view | $0.01 | [Muse Image](https://dev.meta.ai/docs/guides/image-generation), $0.01 per generated image |
 | Screening a request (Llama Guard) | No API cost | On the server's CPU |
 
 For comparison, Muse alone answers for $0.02 a question, and is wrong in 15 of 36 cases: PIVOT
@@ -350,8 +349,8 @@ spends about 3 times more tokens to be right.
 | Scenario | Total |
 |---|---|
 | One room, 20 questions (API) | about $4.20, or $2.30 at fast quality |
-| One room, 20 questions, 3 pieces of furniture from photos, each with a realistic view | about $4.70 |
-| Whole apartment, 40 questions, 5 photos and 5 realistic views | about $14, or $7 at fast quality |
+| One room, 20 questions, 3 pieces of furniture from photos, each with a realistic view | about $4.30 |
+| Whole apartment, 40 questions, 5 photos and 5 realistic views | about $13.70, or $6.50 at fast quality |
 | One room with open weights, a rented GPU for 1 h of questions | about $3.50; nothing on your own GPU (no photos or realistic views: they need the API) |
 
 **Hosting.** The public demo runs on one Modal CPU with 2 GB, about $0.06 per hour while awake;
@@ -421,7 +420,7 @@ Known limitations:
 
 Next:
 
-- **Any phone video**, without depth sensor: poses and depth from Meta's VGGT or MapAnything.
+- **Any phone video**, without depth sensor: poses and depth from Meta's [VGGT](https://github.com/facebookresearch/vggt) or [MapAnything](https://github.com/facebookresearch/map-anything).
 - **Choose where a new piece of furniture goes.** An object brought in from a photo is often
   delivered flat-packed: click its spot on the plan, it is assembled there (no path from the door
   needed), and PIVOT makes room if the spot is taken; afterwards it moves like any other object.
@@ -436,13 +435,13 @@ could take on the new part; the verifier stays the same.
 
 | Extension | What it would add | Meta models that could help |
 |---|---|---|
-| **Real-looking furniture** | Each object shown as a textured 3D model instead of points; a new piece of furniture tried in 3D from a single photo, with its real shape for the collision checks | SAM 3D Objects (open weights: one image to a 3D object); Meta 3D AssetGen 2.0 (text or image to a textured mesh) for furniture that exists only as a description |
-| **Outdoors, with Meta glasses** | "Can I get through here with the stroller?", "Is this path wide enough for my wheelchair?": the same passage checks on a street, a station, a park, from what the wearer sees | VGGT or MapAnything (metric 3D from plain video), SAM 3.1 (curbs, poles, benches), DINOv3 (features that hold outdoors); Project Aria glasses and their datasets to develop and test |
-| **Robots** | A delivery or home robot asks PIVOT before it moves: the plan in words is checked against the real geometry, and the robot gets a verified path | Habitat 3 and PARTNR (simulation and benchmark of rearrangement in homes), V-JEPA 2 (world model to plan the robot's actions), Locate 3D (finds the object a sentence refers to in a 3D scan) |
-| **People carrying** | The people holding the sofa modeled, not only the sofa: room for their bodies in a stairwell or a doorway | SAM 3D Body (the 3D shape and pose of a person from an image) |
+| **Real-looking furniture** | Each object shown as a textured 3D model instead of points; a new piece of furniture tried in 3D from a single photo, with its real shape for the collision checks | [SAM 3D Objects](https://github.com/facebookresearch/sam-3d-objects) (open weights: one image to a 3D object); [Meta 3D AssetGen 2.0](https://developers.meta.com/horizon/blog/worlds/AssetGen2/) (text or image to a textured mesh) for furniture that exists only as a description |
+| **Outdoors, with Meta glasses** | "Can I get through here with the stroller?", "Is this path wide enough for my wheelchair?": the same passage checks on a street, a station, a park, from what the wearer sees | [VGGT](https://github.com/facebookresearch/vggt) or [MapAnything](https://github.com/facebookresearch/map-anything) (metric 3D from plain video), SAM 3.1 (curbs, poles, benches), [DINOv3](https://ai.meta.com/dinov3/) (features that hold outdoors); [Project Aria](https://www.projectaria.com/) glasses and their datasets to develop and test |
+| **Robots** | A delivery or home robot asks PIVOT before it moves: the plan in words is checked against the real geometry, and the robot gets a verified path | [Habitat 3](https://aihabitat.org/habitat3/) and [PARTNR](https://github.com/facebookresearch/partnr-planner) (simulation and benchmark of rearrangement in homes), [V-JEPA 2](https://ai.meta.com/vjepa/) (world model to plan the robot's actions), [Locate 3D](https://github.com/facebookresearch/locate-3d) (finds the object a sentence refers to in a 3D scan) |
+| **People carrying** | The people holding the sofa modeled, not only the sofa: room for their bodies in a stairwell or a doorway | [SAM 3D Body](https://github.com/facebookresearch/sam-3d-body) (the 3D shape and pose of a person from an image) |
 | **Loading a van** | "Does everything fit in a 12 m³ van, and in which order?": the same collision checks, applied to packing | No new model: the same geometry engine and agent, plus a search for the packing order |
-| **Mixed reality on Quest** | The plan shown in the room itself, each move animated in place, the room taken from the headset instead of a phone scan | The room mesh and anchors Quest already computes; Muse or Llama for the agent |
-| **Every language, spoken** | Speech in languages wav2vec 2.0 does not cover, with open weights | Omnilingual ASR (more than 1,600 languages, open weights) |
+| **Mixed reality on Quest** | The plan shown in the room itself, each move animated in place, the room taken from the headset instead of a phone scan | The room mesh and anchors Quest already computes ([Mixed Reality Utility Kit](https://developers.meta.com/horizon/documentation/unity/unity-mr-utility-kit-overview/)); Muse or Llama for the agent |
+| **Every language, spoken** | Speech in languages wav2vec 2.0 does not cover, with open weights | [Omnilingual ASR](https://github.com/facebookresearch/omnilingual-asr) (more than 1,600 languages, open weights) |
 
 **Autonomous driving is out of reach of this approach as it is.** PIVOT verifies a static scene
 in seconds; a car needs moving obstacles, decisions in milliseconds and safety certification,
