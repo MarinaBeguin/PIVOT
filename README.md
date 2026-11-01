@@ -371,6 +371,12 @@ as its authors ask:
 }
 ```
 
+## AI Assistance Disclosure
+
+Claude Code (Anthropic) was used as a development assistant throughout this project, primarily for code review, refactoring, debugging, and improving software engineering practices. It also assisted with development tooling (including Docker configuration and documentation) and drafting Git commit and pull request messages.
+
+The research methodology, algorithmic design, experimental setup, and interpretation of results remain the responsibility of the author. AI-assisted changes were reviewed and validated before integration.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
