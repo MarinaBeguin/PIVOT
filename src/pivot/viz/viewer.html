@@ -47,7 +47,30 @@
                font: inherit; resize: vertical; }
   #chatMic.recording { background: var(--bad); border-color: var(--bad); color: #fff; }
   #chat label { font-size: 12px; color: var(--muted); }
+  /* First-visit tour: comic speech bubbles pointing at each part of the page. */
+  #tour { position: fixed; inset: 0; z-index: 20; background: #0007; display: none; }
+  #tour .bubble { position: absolute; max-width: 300px; padding: 14px 16px 12px;
+    background: #fffdf3; color: #1d2421; border: 2.5px solid #1d2421; border-radius: 22px;
+    box-shadow: 4px 5px 0 #1d2421; font: 15px/1.45 "Comic Neue", "Comic Sans MS", system-ui, sans-serif; }
+  #tour .bubble::before, #tour .bubble::after { content: ""; position: absolute; border: solid transparent; }
+  #tour .bubble.left::before { right: 100%; top: 26px; border-width: 12px 18px 12px 0; border-right-color: #1d2421; }
+  #tour .bubble.left::after { right: calc(100% - 4px); top: 29px; border-width: 9px 14px 9px 0; border-right-color: #fffdf3; }
+  #tour .bubble.right::before { left: 100%; top: 26px; border-width: 12px 0 12px 18px; border-left-color: #1d2421; }
+  #tour .bubble.right::after { left: calc(100% - 4px); top: 29px; border-width: 9px 0 9px 14px; border-left-color: #fffdf3; }
+  #tour .bubble.down::before { top: 100%; left: 40px; border-width: 18px 12px 0 12px; border-top-color: #1d2421; }
+  #tour .bubble.down::after { top: calc(100% - 4px); left: 43px; border-width: 14px 9px 0 9px; border-top-color: #fffdf3; }
+  #tour .bubble .steps { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; }
+  #tour .bubble .dots { color: #9aa3ad; letter-spacing: 2px; }
+  #tour .bubble button { color: #1d2421; border-color: #1d2421; background: transparent; font: inherit; }
+  #tour .bubble button.primary { background: var(--accent); }
+  /* The panel holding the part shown rises above the shade; the part itself is outlined. */
+  .tour-raise { z-index: 21; }
+  .tour-focus { box-shadow: 0 0 0 3px var(--accent); border-radius: 8px; }
+  #tourButton { position: fixed; right: 12px; bottom: 12px; z-index: 10; width: 34px; height: 34px;
+    border-radius: 50%; padding: 0; font-weight: 700; font-size: 16px; background: var(--panel); }
+  @media (max-width: 720px) { #tour .bubble { max-width: calc(100vw - 48px); } }
 </style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap">
 <script type="importmap">
 { "imports": {
   "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
@@ -98,6 +121,8 @@
       <label><input type="checkbox" id="chatAloud"> <span data-i18n="readAloud">Read answers aloud</span></label></div>
   </div>
 </div>
+<div id="tour"></div>
+<button id="tourButton" data-i18n-title="tourHelp">?</button>
 <script>__PIVOT_LANGUAGES__</script>
 <script id="scene-data" type="application/json">__PIVOT_SCENE_DATA__</script>
 <script type="module">
@@ -148,6 +173,7 @@ const labels = new CSS2DRenderer();
 labels.domElement.style.position = "absolute";
 labels.domElement.style.top = "0";
 labels.domElement.style.pointerEvents = "none";
+labels.domElement.style.zIndex = "1";  // Under the panels' tour bubbles.
 document.body.appendChild(labels.domElement);
 
 const scene = new THREE.Scene();
@@ -754,6 +780,82 @@ window.pivot = {
 
 translatePage();
 clearSelection();
+
+// ---------------------------------------------------------------------------
+// First-visit tour: a few speech bubbles, each pointing at one part of the page.
+const tour = document.getElementById("tour");
+const TOUR_KEY = "pivot.tourSeen";
+function tourSteps() {
+  const shown = id => document.getElementById(id).offsetParent !== null;
+  const steps = [{ text: "tour1" }, { text: "tour2", target: "panel", side: "left" }];
+  if (data.interactive) steps.push({ text: "tour3", target: "controls", side: "right" });
+  if (data.chat && shown("chat")) steps.push({ text: "tour4", target: "chat", side: "right" });
+  return steps;
+}
+function showTour(index = 0) {
+  const steps = tourSteps();
+  document.querySelectorAll(".tour-focus, .tour-raise")
+    .forEach(node => node.classList.remove("tour-focus", "tour-raise"));
+  if (index >= steps.length) {
+    tour.style.display = "none";
+    try { localStorage.setItem(TOUR_KEY, "1"); } catch { /* Shown again next time. */ }
+    return;
+  }
+  const step = steps[index], last = index === steps.length - 1;
+  tour.style.display = "block";
+  tour.innerHTML = "";
+  const bubble = document.createElement("div");
+  bubble.className = "bubble";
+  const words = document.createElement("div");
+  words.textContent = t(step.text);
+  const row = document.createElement("div");
+  row.className = "steps";
+  const dots = document.createElement("span");
+  dots.className = "dots";
+  dots.textContent = steps.map((_, k) => (k === index ? "●" : "○")).join("");
+  const skip = document.createElement("button");
+  skip.textContent = t("tourSkip");
+  skip.onclick = () => showTour(steps.length);
+  const next = document.createElement("button");
+  next.className = "primary";
+  next.textContent = t(last ? "tourDone" : "tourNext");
+  next.onclick = () => showTour(index + 1);
+  row.append(dots, ...(last ? [] : [skip]), next);
+  bubble.append(words, row);
+  tour.appendChild(bubble);
+  const width = Math.min(300, window.innerWidth - 48);
+  if (!step.target) {
+    // The 3D view: the bubble points down at the middle of the room.
+    bubble.classList.add("down");
+    bubble.style.left = `${Math.max(16, window.innerWidth / 2 - 40)}px`;
+    bubble.style.top = `${Math.max(16, window.innerHeight / 2 - bubble.offsetHeight - 30)}px`;
+    return;
+  }
+  const target = document.getElementById(step.target);
+  target.classList.add("tour-focus");
+  target.closest(".panel").classList.add("tour-raise");
+  const box = target.getBoundingClientRect();
+  const top = Math.min(Math.max(16, box.top + 8), window.innerHeight - bubble.offsetHeight - 16);
+  bubble.style.top = `${top}px`;
+  if (step.side === "left" && box.right + width + 40 < window.innerWidth) {
+    bubble.classList.add("left");
+    bubble.style.left = `${box.right + 22}px`;
+  } else if (box.left - width - 40 > 0) {
+    bubble.classList.add("right");
+    bubble.style.left = `${box.left - width - 22 - 8}px`;
+  } else {
+    // A narrow screen: no room beside the panel, the bubble goes over it.
+    bubble.style.left = "16px";
+  }
+}
+document.getElementById("tourButton").onclick = () => showTour(0);
+window.addEventListener("resize", () => { if (tour.style.display === "block") showTour(0); });
+languageMenu.addEventListener("change", () => {
+  if (tour.style.display === "block") showTour(0);
+});
+let tourSeen = false;
+try { tourSeen = localStorage.getItem(TOUR_KEY) === "1"; } catch { /* Shown each time. */ }
+if (!tourSeen) showTour(0);
 
 // Frame the scene from above at an angle.
 cloudGeometry.computeBoundingBox();
