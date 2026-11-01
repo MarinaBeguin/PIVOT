@@ -15,6 +15,8 @@ const LANGUAGES = {
 
 const TEXTS = {
   en: {
+    realView: "Realistic view", realViewTitle: "A photo-like view of the room as planned, from this viewpoint (Muse Image)", drawing: "Drawing a realistic view… (about 20 s)", close: "Close",
+    download: "Download", realViewNote: "Drawn by Muse Image from the 3D view: an impression, not a measurement.",
     remove: "Remove", removed: "{name} taken out of the room. Undo puts it back.", removedWith: "Also taken out: {names}.",
     tourNext: "Next",
     tourSkip: "Skip",
@@ -63,6 +65,8 @@ const TEXTS = {
     heardNothing: "I did not hear anything.", micUnavailable: "Microphone unavailable: ",
   },
   fr: {
+    realView: "Vue réaliste", realViewTitle: "Une vue photo de la pièce telle que prévue, depuis ce point de vue (Muse Image)", drawing: "Dessin d'une vue réaliste… (environ 20 s)", close: "Fermer",
+    download: "Télécharger", realViewNote: "Dessinée par Muse Image à partir de la vue 3D : une impression, pas une mesure.",
     remove: "Supprimer", removed: "{name} retiré de la pièce. « Annuler » le remet.", removedWith: "Retiré aussi : {names}.",
     tourNext: "Suivant",
     tourSkip: "Passer",
@@ -112,6 +116,8 @@ const TEXTS = {
     heardNothing: "Je n'ai rien entendu.", micUnavailable: "Micro indisponible : ",
   },
   de: {
+    realView: "Realistische Ansicht", realViewTitle: "Eine fotoähnliche Ansicht des geplanten Raums aus diesem Blickwinkel (Muse Image)", drawing: "Realistische Ansicht wird gezeichnet… (etwa 20 s)", close: "Schließen",
+    download: "Herunterladen", realViewNote: "Von Muse Image aus der 3D-Ansicht gezeichnet: ein Eindruck, keine Messung.",
     remove: "Entfernen", removed: "{name} aus dem Raum entfernt. „Rückgängig“ stellt es zurück.", removedWith: "Ebenfalls entfernt: {names}.",
     tourNext: "Weiter",
     tourSkip: "Überspringen",
@@ -162,6 +168,8 @@ const TEXTS = {
     heardNothing: "Ich habe nichts gehört.", micUnavailable: "Mikrofon nicht verfügbar: ",
   },
   es: {
+    realView: "Vista realista", realViewTitle: "Una vista fotográfica de la habitación tal como está planeada, desde este punto de vista (Muse Image)", drawing: "Dibujando una vista realista… (unos 20 s)", close: "Cerrar",
+    download: "Descargar", realViewNote: "Dibujada por Muse Image a partir de la vista 3D: una impresión, no una medida.",
     remove: "Quitar", removed: "{name} retirado de la habitación. «Deshacer» lo devuelve.", removedWith: "También retirado: {names}.",
     tourNext: "Siguiente",
     tourSkip: "Omitir",
@@ -211,6 +219,8 @@ const TEXTS = {
     heardNothing: "No he oído nada.", micUnavailable: "Micrófono no disponible: ",
   },
   it: {
+    realView: "Vista realistica", realViewTitle: "Una vista fotografica della stanza come pianificata, da questo punto di vista (Muse Image)", drawing: "Disegno di una vista realistica… (circa 20 s)", close: "Chiudi",
+    download: "Scarica", realViewNote: "Disegnata da Muse Image dalla vista 3D: un'impressione, non una misura.",
     remove: "Rimuovi", removed: "{name} tolto dalla stanza. «Annulla» lo rimette.", removedWith: "Tolto anche: {names}.",
     tourNext: "Avanti",
     tourSkip: "Salta",
@@ -260,6 +270,8 @@ const TEXTS = {
     heardNothing: "Non ho sentito nulla.", micUnavailable: "Microfono non disponibile: ",
   },
   zh: {
+    realView: "逼真视图", realViewTitle: "从当前视角查看按计划布置后的房间照片效果（Muse Image）", drawing: "正在生成逼真视图…（约 20 秒）", close: "关闭",
+    download: "下载", realViewNote: "由 Muse Image 根据 3D 视图绘制：仅供参考，并非测量结果。",
     remove: "移除", removed: "已将{name}移出房间。“撤销”可将其放回。", removedWith: "一并移出：{names}。",
     tourNext: "下一步",
     tourSkip: "跳过",

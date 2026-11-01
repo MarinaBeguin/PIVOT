@@ -40,6 +40,7 @@ class MetaConfig:
         agent_model: Model driving the agent (tool calling).
         vision_model: Model naming the objects seen in keyframes.
         sam_model: Segmentation model.
+        image_model: Model that edits images (realistic views of a plan).
         reasoning_effort: Reasoning effort requested from the agent model;
             None for models that do not take it (Llama served by vLLM).
     """
@@ -49,6 +50,7 @@ class MetaConfig:
     agent_model: str = "muse-spark-1.3"
     vision_model: str = "muse-spark-1.3"
     sam_model: str = "sam-3.1"
+    image_model: str = "muse-image-1.0"
     reasoning_effort: str | None = "low"
 
     @classmethod
@@ -57,7 +59,7 @@ class MetaConfig:
 
         Variables: ``PIVOT_BACKEND`` (``api`` by default, or ``open``),
         ``META_API_KEY`` (required by ``api``), ``META_API_BASE_URL``,
-        ``PIVOT_AGENT_MODEL``, ``PIVOT_VISION_MODEL``, ``PIVOT_SAM_MODEL``,
+        ``PIVOT_AGENT_MODEL``, ``PIVOT_VISION_MODEL``, ``PIVOT_SAM_MODEL``, ``PIVOT_IMAGE_MODEL``,
         ``PIVOT_REASONING_EFFORT`` (empty for none). With ``open``, the agent
         defaults to Llama on a local vLLM server (``PIVOT_OPEN_URL``); any
         variable set explicitly still wins.
@@ -90,6 +92,7 @@ class MetaConfig:
             agent_model=os.environ.get("PIVOT_AGENT_MODEL", agent_model),
             vision_model=os.environ.get("PIVOT_VISION_MODEL", cls.vision_model),
             sam_model=os.environ.get("PIVOT_SAM_MODEL", cls.sam_model),
+            image_model=os.environ.get("PIVOT_IMAGE_MODEL", cls.image_model),
             reasoning_effort=os.environ.get("PIVOT_REASONING_EFFORT", effort) or None,
         )
 

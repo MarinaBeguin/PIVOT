@@ -17,6 +17,8 @@ Run locally::
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import hashlib
 import hmac
 import json
@@ -38,19 +40,26 @@ from pivot.agent.loop import Agent
 from pivot.agent.tools import TOOLS_BY_NAME, Session, call_tool
 from pivot.geometry.types import FloatArray
 from pivot.meta.client import MetaConfig, Usage
+from pivot.meta.image import photo_view
 from pivot.planning.instructions import instructions
 from pivot.planning.motion import MotionPlan
 from pivot.scene.graph import Scene, carried_objects
-from pivot.server.limits import TRANSCRIBE_PER_SECOND, Budget, Meter, SpendLedger, chat_cost
+from pivot.server.limits import (
+    IMAGE_PRICE, TRANSCRIBE_PER_SECOND, Budget, Meter, SpendLedger, chat_cost,
+)
 from pivot.server.speech import Transcriber, read_wav, transcriber_from_env
 from pivot.server.visitors import COOKIE, Visitor, Visitors
 from pivot.viz.plan import instructions_page
 from pivot.viz.pointcloud import ColorArray
-from pivot.viz.web import RoomMenu, render_viewer
+from pivot.viz.web import Features, RoomMenu, render_viewer
 
 _MUTATING = {"move_object", "make_room_and_move", "undo", "remove_object"}
 # About a minute of 16 kHz 16-bit mono audio.
 MAX_AUDIO_BYTES = 2_000_000
+# A 3D view sent for a realistic one: a PNG of the page, at most this big.
+MAX_IMAGE_BYTES = 12_000_000
+# Edits a 3D view (PNG) into a realistic one, given photos of objects brought in.
+Painter = Callable[[bytes, list[tuple[str, bytes]]], bytes]
 
 
 def _objects(session: Session) -> list[dict[str, Any]]:
@@ -124,6 +133,24 @@ def _chat_reply(visitor: Visitor, agent_factory: Callable[[Session], Agent], mes
         "objects": _objects(session)})
 
 
+def _decode_data_url(url: str) -> bytes | None:
+    """Reads the bytes of a ``data:...;base64,...`` address.
+
+    Args:
+        url: The address.
+
+    Returns:
+        The bytes, or None if it is not a base64 data address.
+    """
+    head, _, data = url.partition(",")
+    if not head.startswith("data:") or not head.endswith(";base64"):
+        return None
+    try:
+        return base64.b64decode(data, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+
+
 def _audio_seconds(audio: bytes) -> float:
     """Measures a recording, to price its transcription.
 
@@ -146,7 +173,8 @@ def _audio_seconds(audio: bytes) -> float:
 def create_app(rooms: list[Room],
                agent_factory: Callable[[Session], Agent] | None = None,
                transcriber: Transcriber | None = None,
-               meter: Meter | None = None) -> FastAPI:
+               meter: Meter | None = None,
+               painter: Painter | None = None) -> FastAPI:
     """Creates the web application for one or several rooms.
 
     The room of a request is given by its ``scene`` query parameter (the first
@@ -158,6 +186,7 @@ def create_app(rooms: list[Room],
         agent_factory: Creates the agent of a session; None disables requests in words.
         transcriber: Turns spoken requests into text; None disables the microphone.
         meter: Prices requests and enforces a budget; None for a private server.
+        painter: Edits a 3D view into a realistic one; None disables realistic views.
 
     Returns:
         The application.
@@ -168,11 +197,12 @@ def create_app(rooms: list[Room],
     by_id = {room.room_id: room for room in rooms}
     visitors = Visitors({room.room_id: room.scene for room in rooms})
     menu = [(room.room_id, room.title) for room in rooms]
-    pages = {room.room_id: render_viewer(
-        room.scene, room.points, room.colors, room.title, interactive=True,
-        chat=agent_factory is not None,
-        voice=agent_factory is not None and transcriber is not None,
-        menu=RoomMenu(room.room_id, menu)) for room in rooms}
+    features = Features(interactive=True, chat=agent_factory is not None,
+                        voice=agent_factory is not None and transcriber is not None,
+                        render=painter is not None)
+    pages = {room.room_id: render_viewer(room.scene, room.points, room.colors, room.title,
+                                         features, RoomMenu(room.room_id, menu))
+             for room in rooms}
 
     @app.middleware("http")
     async def visitor_session(request: Request,
@@ -322,6 +352,37 @@ def create_app(rooms: list[Room],
                                     request=False)
         return JSONResponse({"text": text})
 
+    @app.post("/api/render")
+    def render(body: dict[str, str], request: Request) -> JSONResponse:
+        """Draws a realistic view of the room from the visitor's 3D view.
+
+        Args:
+            body: ``{"image": "data:image/png;base64,..."}``, the 3D view.
+            request: The request.
+
+        Returns:
+            ``{"image": "data:image/...;base64,..."}``, or an error.
+        """
+        if painter is None:
+            return JSONResponse({"error": "Realistic views are not enabled."}, status_code=404)
+        visitor_key = key(request)
+        if meter is not None and (reason := meter.ledger.refusal(visitor_key)):
+            return JSONResponse({"error": reason}, status_code=429)
+        view = _decode_data_url(body.get("image", ""))
+        if view is None or len(view) > MAX_IMAGE_BYTES:
+            return JSONResponse({"error": "The view could not be read."}, status_code=400)
+        try:
+            image = painter(view, [])
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # A failed drawing must reach the page, not break the server.
+            return JSONResponse({"error": f"Could not draw the view: {error}"})
+        finally:
+            if meter is not None:
+                meter.ledger.record(visitor_key, meter.image_price)
+        kind = "png" if image.startswith(b"\x89PNG") else "jpeg"
+        return JSONResponse(
+            {"image": f"data:image/{kind};base64,{base64.b64encode(image).decode()}"})
+
     @app.get("/api/limits")
     def limits(request: Request) -> dict[str, Any]:
         """Says what the visitor may still use today on a public server.
@@ -431,7 +492,8 @@ def _public_meter(config: MetaConfig | None) -> Meter:
                  int(os.environ.get("PIVOT_PROXY_HOPS", "1")),
                  partial(chat_cost, config.agent_model) if api and config else
                  (lambda usage: 0.0),
-                 TRANSCRIBE_PER_SECOND if api else 0.0)
+                 TRANSCRIBE_PER_SECOND if api else 0.0,
+                 IMAGE_PRICE if api else 0.0)
 
 
 def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: int | None = None,
@@ -451,10 +513,12 @@ def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: in
     config = MetaConfig.from_env(env_file) if env_file else None
     # A conversation may rearrange a whole room: many more steps than one move.
     factory = partial(Agent, config=config, max_steps=40) if config else None
+    api = config is not None and os.environ.get("PIVOT_BACKEND", "api").lower() != "open"
     return create_app([load_room(spec, max_points) for spec in scene_dirs],
                       agent_factory=factory,
                       transcriber=transcriber_from_env(config) if config else None,
-                      meter=_public_meter(config) if public else None)
+                      meter=_public_meter(config) if public else None,
+                      painter=partial(photo_view, config) if api and config else None)
 
 
 def main(argv: list[str] | None = None) -> None:

@@ -28,6 +28,8 @@ from pivot.meta.client import Usage
 TOKEN_PRICES = {"muse-spark-1.3": (1.25, 4.25), "muse-wonder-1.0": (4.00, 20.00)}
 # Muse Voice Transcribe: $0.18 per hour of audio.
 TRANSCRIBE_PER_SECOND = 0.18 / 3600
+# Muse Image, per edited image: an upper estimate until the price is published.
+IMAGE_PRICE = 0.10
 
 
 def chat_cost(model: str, usage: Usage) -> float:
@@ -222,6 +224,7 @@ class Meter:
         proxy_hops: Trusted proxies in front of the server (see :func:`visitor_key`).
         chat_price: Cost of the tokens of a request in words.
         audio_per_second: Cost of a second of transcribed audio.
+        image_price: Cost of a realistic view.
     """
 
     ledger: SpendLedger
@@ -229,6 +232,7 @@ class Meter:
     proxy_hops: int = 1
     chat_price: Callable[[Usage], float] = lambda usage: 0.0
     audio_per_second: float = 0.0
+    image_price: float = 0.0
 
     def visitor(self, headers: Mapping[str, str], peer: str | None) -> str:
         """Identifies the visitor of a request.
