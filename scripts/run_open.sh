@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PIVOT, open-weight version: no API key needed. Llama runs on our own GPUs
-# (Slurm jobs); prerequisites: scripts/cluster/setup_sam3_env.sh and
-# scripts/cluster/setup_llama_env.sh, run once.
+# (Slurm jobs); prerequisites: scripts/gpu/setup_sam3_env.sh and
+# scripts/gpu/setup_llama_env.sh, run once.
 #
 #   bash scripts/run_open.sh [--quality fast|medium|full] <scannetpp_scene_dir> <video.mp4> \
 #       <out_dir> [prompt ...]
@@ -40,7 +40,7 @@ echo "== [3/4] Building the 3D scene"
 build_scene
 
 echo "== [4/4] Starting Llama (GPU job)"
-JOBS=("$(sbatch --parsable "$PIVOT_SRC/scripts/cluster/llama_server.sbatch")")
+JOBS=("$(submit llama llama_server)")
 LOG="$LOGS/llama_${JOBS[0]}.out"
 until [ -f "$LOG" ] && grep -q "OpenAI-compatible API at" "$LOG"; do sleep 10; done
 PIVOT_OPEN_URL=$(grep -o "http://[^ ]*/v1" "$LOG" | head -1)

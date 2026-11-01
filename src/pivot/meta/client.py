@@ -25,7 +25,7 @@ from openai import NotFoundError, OpenAI
 T = TypeVar("T")
 
 DEFAULT_BASE_URL = "https://api.meta.ai/v1"
-# Defaults of the open-weight version (see scripts/cluster/llama_server.sbatch).
+# Defaults of the open-weight version (see scripts/gpu/llama_server.sbatch).
 OPEN_BASE_URL = "http://localhost:8000/v1"
 OPEN_AGENT_MODEL = "meta-llama/Llama-3.1-8B-Instruct"
 

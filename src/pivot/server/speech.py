@@ -100,7 +100,7 @@ class OpenTranscriber:
         Returns:
             The transcript, lowercase (the model writes no punctuation).
         """
-        # Optional dependencies of the open version, installed on the cluster.
+        # Optional dependencies of the open version, installed on the GPU machine.
         # pylint: disable=import-outside-toplevel,import-error
         import torch
         from transformers import (  # type: ignore[import-not-found]

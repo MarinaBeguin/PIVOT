@@ -209,8 +209,8 @@ scene, then serves the viewer with the agent. Every step already done is skipped
 ### Open-weight version (no key)
 
 ```bash
-bash scripts/cluster/setup_sam3_env.sh     # once: SAM 3.1 environment and weights
-bash scripts/cluster/setup_llama_env.sh    # once: vLLM, Llama 3.1 8B and Llama 3.2 Vision
+bash scripts/gpu/setup_sam3_env.sh     # once: SAM 3.1 environment and weights
+bash scripts/gpu/setup_llama_env.sh    # once: vLLM, Llama 3.1 8B and Llama 3.2 Vision
 bash scripts/run_open.sh <scannetpp_scene_dir> <video.mp4> <out_dir>
 ```
 
@@ -231,6 +231,11 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 | `PIVOT_SAM_WORKERS` | 5 (API), 3 (GPU) | Prompts tracked at the same time |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
 | `PORT` | 8765 | Port of the viewer |
+| `PIVOT_SCRATCH` | `~/pivot_scratch` | Large storage: environments, weights, caches, logs |
+| `PIVOT_SLURM_PARTITION` | Slurm's default | Partition of the GPU jobs (open-weight version) |
+
+Settings of your machine can go in `scripts/site.env` (never committed), which the scripts read
+first, e.g. `PIVOT_SCRATCH=/data/me` and `SLURM_CONF=...`.
 
 ### The public demo
 
@@ -309,6 +314,31 @@ Next:
 - **"Will the sofa from this photo fit?"**: insert an object from a picture and its size, then let
   PIVOT find a spot and the rearrangement it needs.
 - **Real-looking objects** with SAM 3D Objects, shown in place of the point cloud.
+
+## Acknowledgements
+
+- **Meta**, for the models PIVOT is built on (SAM 3.1, Muse Spark, Muse Voice Transcribe, Llama,
+  wav2vec 2.0), the access to the Meta Model API, and the Global AI Hackathon.
+- **Modal**, which hosts the live demo.
+- **Cyber Valley**, for its support.
+- **ScanNet++**, whose iPhone captures are the rooms PIVOT rebuilds; the data is used under the
+  [ScanNet++ Terms of Use](https://kaldir.vc.in.tum.de/scannetpp/).
+- The open-source projects PIVOT runs on: PyTorch, Hugging Face Transformers, vLLM, NumPy,
+  SciPy, FastAPI and three.js.
+
+## Citation
+
+The rooms come from the ScanNet++ dataset. If you use PIVOT with ScanNet++ data, please cite it
+as its authors ask:
+
+```bibtex
+@inproceedings{yeshwanthliu2023scannetpp,
+  title     = {ScanNet++: A High-Fidelity Dataset of 3D Indoor Scenes},
+  author    = {Yeshwanth, Chandan and Liu, Yueh-Cheng and Nie{\ss}ner, Matthias and Dai, Angela},
+  booktitle = {Proceedings of the International Conference on Computer Vision ({ICCV})},
+  year      = {2023}
+}
+```
 
 ## License
 

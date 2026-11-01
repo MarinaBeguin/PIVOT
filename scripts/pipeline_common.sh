@@ -33,13 +33,18 @@ CAPTURE="$1"; VIDEO="$2"; OUT="$3"; shift 3
 PROMPTS=("$@")
 # Read by the GPU jobs, which run a copy of their script.
 export PIVOT_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export SLURM_CONF="${SLURM_CONF:-/home/sladmcvl/slurm/slurm.conf}"
+# Settings of this machine (PIVOT_SCRATCH, SLURM_CONF, PIVOT_SLURM_PARTITION...), if any;
+# never committed.
+[ ! -f "$PIVOT_SRC/scripts/site.env" ] || source "$PIVOT_SRC/scripts/site.env"
+# Large storage for environments, weights, caches and logs.
+export PIVOT_SCRATCH="${PIVOT_SCRATCH:-$HOME/pivot_scratch}"
 # Where the open weights are (speech model of the server, models of the GPU jobs).
-export HF_HUB_CACHE="${HF_HUB_CACHE:-/itet-stor/mbeguin/net_scratch/hf_cache}"
-PYTHON="${PIVOT_PYTHON:-/itet-stor/mbeguin/net_scratch/conda_envs/pivot_sam3/bin/python}"
+export HF_HUB_CACHE="${HF_HUB_CACHE:-$PIVOT_SCRATCH/hf_cache}"
+PYTHON="${PIVOT_PYTHON:-$PIVOT_SCRATCH/conda_envs/pivot_sam3/bin/python}"
 PORT="${PORT:-8765}"
-LOGS=/itet-stor/mbeguin/net_scratch/pivot/logs
-CACHE="${PIVOT_CACHE:-/itet-stor/mbeguin/net_scratch/pivot/cache}"
+LOGS="${PIVOT_LOGS:-$PIVOT_SCRATCH/pivot/logs}"
+CACHE="${PIVOT_CACHE:-$PIVOT_SCRATCH/pivot/cache}"
+mkdir -p "$LOGS"
 # The video keeps one frame out of VIDEO_STRIDE of the 60 fps capture.
 VIDEO_STRIDE="${PIVOT_VIDEO_STRIDE:-10}"
 SCENE="$OUT/scene"
@@ -48,6 +53,14 @@ mkdir -p "$OUT"
 
 # Slurm jobs and background requests, stopped on exit (Ctrl-C included).
 JOBS=()
+submit() {
+  # Submits the GPU job scripts/gpu/$2.sbatch with arguments "${@:3}", logging to
+  # $LOGS/$1_<job id>.out; prints the job id.
+  local log="$1" name="$2"; shift 2
+  sbatch --parsable --output="$LOGS/${log}_%j.out" \
+    ${PIVOT_SLURM_PARTITION:+--partition="$PIVOT_SLURM_PARTITION"} \
+    "$PIVOT_SRC/scripts/gpu/$name.sbatch" "$@"
+}
 cleanup() {
   [ "${#JOBS[@]}" -eq 0 ] || scancel "${JOBS[@]}"
   kill $(jobs -p) 2>/dev/null || true
@@ -131,8 +144,8 @@ list_objects_api() {
 
 list_objects_local() {
   # Llama 3.2 Vision lists the objects on a GPU (minutes, mostly loading the weights).
-  JOBS=("$(sbatch --parsable "$PIVOT_SRC/scripts/cluster/inventory.sbatch" "$VIDEO" \
-    "$DETECTIONS/prompts.txt" "${PIVOT_MAX_OBJECTS_OPEN:-8}")")
+  JOBS=("$(submit inventory inventory "$VIDEO" "$DETECTIONS/prompts.txt" \
+    "${PIVOT_MAX_OBJECTS_OPEN:-8}")")
   echo "   log: $LOGS/inventory_${JOBS[0]}.out"
   while squeue -h -j "${JOBS[0]}" 2>/dev/null | grep -q .; do sleep 5; done
   JOBS=()
@@ -245,8 +258,8 @@ segment_local() {
   announce local "$workers" "$video"
   for ((worker = 0; worker < workers; worker++)); do
     worker_prompts "$worker" "$workers"
-    [ "${#WORKER_PROMPTS[@]}" -eq 0 ] || JOBS+=("$(sbatch --parsable \
-      "$PIVOT_SRC/scripts/cluster/sam3_video.sbatch" "$video" "$DETECTIONS" "${WORKER_PROMPTS[@]}")")
+    [ "${#WORKER_PROMPTS[@]}" -eq 0 ] || JOBS+=("$(submit sam3 sam3_video "$video" \
+      "$DETECTIONS" "${WORKER_PROMPTS[@]}")")
   done
   if [ "${#JOBS[@]}" -gt 0 ]; then
     while squeue -h -j "$(IFS=,; echo "${JOBS[*]}")" 2>/dev/null | grep -q .; do

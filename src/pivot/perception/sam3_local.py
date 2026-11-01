@@ -252,7 +252,7 @@ def main(argv: list[str] | None = None) -> None:
                         help="Tracking slots per prompt (multiple of 16).")
     args = parser.parse_args(argv)
 
-    # Heavy GPU dependencies are only installed on the cluster.
+    # Heavy GPU dependencies are only installed on the GPU machine.
     # pylint: disable-next=import-outside-toplevel,import-error
     import cv2  # type: ignore[import-not-found]
     # pylint: disable-next=import-outside-toplevel,import-error

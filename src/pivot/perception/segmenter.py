@@ -99,7 +99,7 @@ class Segmenter:
         if self.backend is Backend.LOCAL:
             raise SegmentationUnavailable(
                 f"No local SAM 3.1 results for {prompt!r} in {self.local_dir}; run "
-                "scripts/cluster/sam3_video.sbatch.")
+                "scripts/gpu/sam3_video.sbatch.")
         if self.api is None:
             raise SegmentationUnavailable("No Meta Model API access configured.")
         try:
@@ -107,4 +107,4 @@ class Segmenter:
         except APIError as error:
             raise SegmentationUnavailable(
                 f"SAM 3.1 API failed for {prompt!r} ({error}); run "
-                "scripts/cluster/sam3_video.sbatch to segment on a GPU instead.") from error
+                "scripts/gpu/sam3_video.sbatch to segment on a GPU instead.") from error
