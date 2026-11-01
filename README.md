@@ -43,8 +43,8 @@ explains with the measured numbers why it is impossible and proposes the closest
 alternative.
 
 On a real office scanned with a phone, Muse alone wrongly claims a move is feasible in
-**15 of 36** requests; with PIVOT's verification, **3 of 36**, with no false refusal
-([results](#results)).
+**15 of 36** requests; with PIVOT's verification, **none**, with no false refusal
+([results](#results), development set).
 
 ## Who it is for
 
@@ -159,15 +159,21 @@ judge replays every executed motion with exact geometry. Four variants share the
 
 | Variant | Success (95% CI) | False claims | False refusals | Expected cost* | Latency p50 |
 |---|---|---|---|---|---|
-| Muse alone | 56% (40–70%) | 15/36 | 1/36 | 4.19 | 15 s |
-| Muse + a final feasibility check | 89% (75–96%) | 2/36 | 2/36 | 0.61 | 27 s |
-| **PIVOT: Muse + verifying tools** | **92% (78–97%)** | 3/36 | **0/36** | 0.83 | 23 s |
-| Geometric search alone | 97% (86–100%) | 1/36 | 0/36 | 0.28 | 12 s |
+| Muse alone | 53% (37–68%) | 15/36 | 2/36 | 4.22 | 20 s |
+| Muse + a final feasibility check | 86% (71–94%) | 3/36 | 2/36 | 0.89 | 41 s |
+| **PIVOT: Muse + verifying tools** | **100% (90–100%)** | **0/36** | **0/36** | **0.00** | 14 s |
+| Geometric search alone | 97% (86–100%) | 1/36 | 0/36 | 0.28 | 2 s |
 
 \*A false claim (saying a move works when it does not) is counted as 10 times worse than a false
-refusal. Muse alone, when wrong, puts objects through others by 14 cm on average.
+refusal. Muse alone, when wrong, puts objects through others by 15 cm on average.
 
-The geometric search alone scores highest **only on requests it can parse by construction**: the
+**These 36 tasks are a development set.** PIVOT first got 33 of them right; its 3 errors were
+studied and their causes fixed (a planner bug, a tool result the agent misread, and a judge
+stricter than the planner), then all four variants were run again. Since the tasks guided the
+fixes, 36/36 is an optimistic estimate, and with 36 tasks the 95% interval still reaches 90%. A
+held-out test, on rooms not used during development and run once, will follow.
+
+The geometric search alone comes close **only on requests it can parse by construction**: the
 task labels come from the same planner. It cannot take a request in words, nor constraints that
 exist only in the sentence ("without blocking the door"). PIVOT keeps the planner's reliability
 while understanding language. The evaluation can be reproduced from the command line (see below).

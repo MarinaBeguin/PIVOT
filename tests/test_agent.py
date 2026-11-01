@@ -9,7 +9,8 @@ import pytest
 from pivot.agent.loop import Agent
 from pivot.agent.tools import TOOLS, Session, call_tool
 from pivot.meta.client import MetaConfig
-from pivot.scene.examples import office_scene, sofa_scene
+from pivot.scene.examples import box, office_scene, rectangle_floor, sofa_scene
+from pivot.scene.graph import Scene, SceneObject
 
 
 def call(session: Session, name: str, **arguments: Any) -> dict[str, Any]:
@@ -152,3 +153,14 @@ def test_snapping_gives_up_beyond_its_radius() -> None:
     # The middle of the desk is more than 5 cm from any free spot.
     result = call(session, "move_object", object_id=3, x=1.5, y=2.5, snap_m=0.05)
     assert not result["moved"] and "goal_adjusted" not in result
+
+
+def test_a_chair_taller_than_the_table_top_only_stands_against_it() -> None:
+    table = SceneObject(1, "table", box((2.5, 2.0, 0.38), (1.6, 0.9, 0.76)))
+    chair = SceneObject(2, "chair", box((2.5, 0.8, 0.41), (0.5, 0.5, 0.82)))
+    session = Session(Scene.from_objects([table, chair], rectangle_floor(5.0, 4.0)))
+    result = call(session, "plan_motion", object_id=2, x=2.5, y=2.0, snap_m=0.8)
+    adjusted = result["goal_adjusted"]
+    assert "not the one asked for" in adjusted["reason"]
+    assert adjusted["aimed_at"] == [{"id": 1, "label": "table",
+                                     "share_of_footprint_over_it_pct": 0}]

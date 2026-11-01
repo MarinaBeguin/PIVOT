@@ -39,8 +39,16 @@ Rules:
 - If a request is infeasible, say why with the measured numbers, then look for the closest
   feasible alternative (another spot, another orientation, moving another object first).
   Propose it, but do not move anything to an alternative the user has not agreed to.
-- To push an object under or against another (a chair under a table), aim at the other
-  object's center with snap_m around 0.5: the nearest feasible pose is as far in as it goes.
+- A result with goal_adjusted is NOT the pose asked for: before moving, check that the
+  adjusted pose still does what the user asked (where, how far in, which side). If it does
+  not, the request is infeasible: say so and propose the adjusted pose, without moving.
+- To push an object under or against another (a chair under a table), first plan_motion
+  aimed at the other object's center, with snap_m enough to reach its edge (half its depth
+  plus half the object's, often 0.7 to 0.9): the nearest feasible pose is as far in as it
+  goes, and aimed_at gives the share of the object that ends up under the other.
+  If that share is below what the user asked (0 means it only stands against it, e.g. a
+  chair taller than the space under the table top), it does not fit under: say so with the
+  heights, and offer to push it against the table instead.
 - A warning "stands in front of the door" means the passage is blocked; beside the door,
   against the same wall, raises no warning. A warning does not make a pose infeasible: if
   the user asked for that exact spot, do it and mention the warning; avoid it only when the

@@ -19,7 +19,9 @@ from typing import Any
 import numpy as np
 
 from pivot.geometry.box import OrientedBox
-from pivot.geometry.collision import box_distance, polygon_distance
+from pivot.geometry.collision import (
+    box_distance, footprint_overlap, polygon_distance, polygon_penetration,
+)
 from pivot.planning.access import WALKING_WIDTH, check_access
 from pivot.planning.handling import can_be_carried, people_needed
 from pivot.planning.lift import carry_height, plan_carried_motion, resting_box
@@ -28,7 +30,9 @@ from pivot.planning.relocate import route, spots_in_room
 from pivot.planning.placement import check_placement, opening_warnings, propose_placements
 from pivot.planning.rearrange import plan_rearrangement
 from pivot.planning.snap import nearest_feasible_pose
-from pivot.scene.graph import Scene, SceneObject, carried_objects, support_parents
+from pivot.scene.graph import (
+    Scene, SceneObject, carried_objects, is_opening, support_parents,
+)
 from pivot.scene.rooms import Passage, RoomMap, find_rooms
 
 JsonDict = dict[str, Any]
@@ -317,7 +321,34 @@ def _goal(session: Session, request: MoveRequest) -> tuple[OrientedBox, JsonDict
         "x": _round(snapped.center[0]), "y": _round(snapped.center[1]),
         "yaw_deg": _round(math.degrees(snapped.yaw), 1),
         "shift_m": _round(float(np.linalg.norm(snapped.center[:2] - goal.center[:2]))),
-        "reason": "The requested pose was infeasible; this is the nearest feasible one."}}
+        "reason": "The requested pose was infeasible; this is the nearest feasible one, not "
+                  "the one asked for.",
+        "aimed_at": _aimed_at(session.scene, object_id, goal, snapped)}}
+
+
+def _aimed_at(scene: Scene, object_id: int, goal: OrientedBox,
+              snapped: OrientedBox) -> list[JsonDict]:
+    """Tells how far an adjusted pose gets under or over the objects the request aimed at.
+
+    Pushing a chair under a table aims at the table: the nearest feasible pose
+    may only stand against it.
+
+    Args:
+        scene: The scene.
+        object_id: The moved object.
+        goal: The requested pose.
+        snapped: The adjusted pose.
+
+    Returns:
+        For each object the requested footprint overlapped, the share of the
+        adjusted footprint over (or under) it.
+    """
+    footprint = goal.footprint()
+    return [{"id": o.object_id, "label": o.label,
+             "share_of_footprint_over_it_pct": round(100.0 * footprint_overlap(snapped, o.box))}
+            for o in scene.objects.values()
+            if o.object_id != object_id and not is_opening(o)
+            and polygon_penetration(footprint, o.box.footprint()) > 0.0]
 
 
 def _auto_height(session: Session, request: MoveRequest) -> float | None:

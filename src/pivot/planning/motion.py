@@ -223,20 +223,22 @@ def _escape(cspace: ConfigurationSpace, validator: Validator, box: OrientedBox,
         avoid: States not to link to.
 
     Returns:
-        The linked state and the escape pose, or None.
+        The linked state and the escape poses, outward from ``box``, or None.
+        Each step was checked on its own: the poses checked along a longer
+        segment would differ.
     """
     step = cspace.floor.resolution
     for angle in np.linspace(0.0, 2.0 * math.pi, directions, endpoint=False):
         direction = np.array([math.cos(angle), math.sin(angle)])
-        current = box
+        steps = [box]
         for distance in np.arange(step, _CONNECT_RADIUS + 1e-9, step):
             moved = box.moved(box.center[:2] + distance * direction)
-            if not validator.segment_ok(current, moved):
+            if not validator.segment_ok(steps[-1], moved):
                 break
-            current = moved
-            state = _link(cspace, validator, current, to_lattice, 4, avoid)
+            steps.append(moved)
+            state = _link(cspace, validator, moved, to_lattice, 4, avoid)
             if state is not None:
-                return state, [current]
+                return state, steps[1:]
     return None
 
 
@@ -394,14 +396,17 @@ def _motion_signature(a: OrientedBox, b: OrientedBox) -> tuple[float, float, flo
             float(np.sign(round(yaw_step(a.yaw, b.yaw), 6))))
 
 
-def _simplify(boxes: list[OrientedBox]) -> list[OrientedBox]:
+def _simplify(boxes: list[OrientedBox], validator: Validator) -> list[OrientedBox]:
     """Drops intermediate poses of straight runs and of consecutive turns.
 
     Merged turns stay below a quarter turn: beyond that, the rotation between
-    two rectangle poses becomes ambiguous.
+    two rectangle poses becomes ambiguous. A merged motion is checked again:
+    its poses are not those checked along its parts, and volumes made of
+    4 cm cells can meet between two checked poses.
 
     Args:
-        boxes: Dense path.
+        boxes: Dense path, every step checked.
+        validator: Exact checker of the merged motions.
 
     Returns:
         The path's endpoints and turning points.
@@ -410,7 +415,8 @@ def _simplify(boxes: list[OrientedBox]) -> list[OrientedBox]:
     for i in range(1, len(boxes) - 1):
         turn = abs(yaw_step(kept[-1].yaw, boxes[i + 1].yaw))
         if (_motion_signature(boxes[i - 1], boxes[i]) != _motion_signature(boxes[i], boxes[i + 1])
-                or turn >= 0.5 * math.pi - 1e-6):
+                or turn >= 0.5 * math.pi - 1e-6
+                or not validator.segment_ok(kept[-1], boxes[i + 1])):
             kept.append(boxes[i])
     if len(boxes) > 1:
         kept.append(boxes[-1])
@@ -633,8 +639,10 @@ class _Ends:
     Attributes:
         start: Pose linked to the lattice on the start side, and its state.
         goal: Pose linked to the lattice on the goal side, and its state.
-        before: Poses preceding ``start`` (the actual start, after an escape).
-        after: Poses following ``goal`` (the actual goal, after an escape).
+        before: Poses preceding ``start`` (the actual start and the steps of
+            its escape).
+        after: Poses following ``goal`` (the steps of its escape and the
+            actual goal).
     """
 
     start: tuple[OrientedBox, State]
@@ -719,9 +727,10 @@ def _link_ends(cspace: ConfigurationSpace, validator: Validator, start: Oriented
         side = "start" if start_link is None else "goal"
         return f"The {side} pose is wedged in: no room to move from it."
     (start_state, start_via), (goal_state, goal_via) = start_link, goal_link
-    # After an escape, the search runs from the escape pose.
+    # After an escape, the search runs from its last pose.
     return _Ends(([start, *start_via][-1], start_state), ([goal, *goal_via][-1], goal_state),
-                 [start] if start_via else [], [goal] if goal_via else [])
+                 [start, *start_via[:-1]] if start_via else [],
+                 [*goal_via[-2::-1], goal] if goal_via else [])
 
 
 def _search_with_repairs(scene: Scene, object_id: int, goal: OrientedBox,
@@ -767,7 +776,8 @@ def _search_with_repairs(scene: Scene, object_id: int, goal: OrientedBox,
             ends.start, ends.goal, options.max_repairs)
     if best is not None:
         best = [*ends.before, *best, *ends.after]
-        return _success(scene, object_id, _shortcut(_simplify(best), roomy), search.expansions)
+        return _success(scene, object_id, _shortcut(_simplify(best, validator), roomy),
+                        search.expansions)
     if exhausted:
         return MotionPlan(MotionStatus.NO_PATH, object_id, expansions=search.expansions,
                           message="No collision-free motion exists at this resolution.")
@@ -832,3 +842,30 @@ def straight_motion(scene: Scene, object_id: int, goal: OrientedBox,
     if not validator.pose_ok(goal) or not validator.segment_ok(scene[object_id].box, goal):
         return None
     return _success(scene, object_id, [scene[object_id].box, goal], expansions=0)
+
+
+def segment_free(scene: Scene, object_id: int, start: OrientedBox, end: OrientedBox,
+                 options: MotionOptions | None = None) -> bool:
+    """Checks one straight motion the way the planner accepts it.
+
+    Strictly, unless it leaves or reaches a pose that the reconstruction
+    makes slightly wrong (a chair pushed under a table, their volumes
+    interlocked): then the objects that pose overlaps are not obstacles, as
+    in :func:`plan_motion`.
+
+    Args:
+        scene: The scene; the object's own box is ignored.
+        object_id: The moving object.
+        start: Box at the start of the motion.
+        end: Box at its end.
+        options: Motion parameters (clearance, floor margin).
+
+    Returns:
+        True if the motion is collision-free.
+    """
+    options = options or MotionOptions()
+    validator = Validator.create(scene, object_id, options.clearance, options.floor_margin)
+    if validator.segment_ok(start, end):
+        return True
+    return any(lenient.segment_ok(start, end) for pose in (start, end)
+               for lenient in _lenient(validator, pose))

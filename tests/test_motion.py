@@ -9,7 +9,9 @@ from conftest import box
 from pivot.scene.examples import apartment_scene, rectangle_floor, sofa_scene
 from pivot.geometry.floor import FloorMap
 from pivot.planning.cspace import ConfigurationSpace, footprint_kernel
-from pivot.planning.motion import MotionOptions, MotionStatus, plan_motion, straight_motion
+from pivot.planning.motion import (
+    MotionOptions, MotionStatus, plan_motion, segment_free, straight_motion,
+)
 from pivot.planning.placement import Conflict, ConflictKind, PlacementReport, check_placement
 from pivot.planning.validation import Validator, aliasing
 from pivot.scene.graph import Scene, SceneObject
@@ -196,6 +198,9 @@ def test_a_chair_pushed_under_a_table_slides_out() -> None:
     assert not check_placement(scene, 2, scene[2].box).feasible  # The boxes overlap.
     plan = plan_motion(scene, 2, scene[2].box.moved(np.array([4.0, 0.8])))
     assert plan.status is MotionStatus.SUCCESS
+    # Each segment, replayed as it is, passes: the steps checked are the ones returned.
+    for a, b in zip(plan.waypoints, plan.waypoints[1:]):
+        assert segment_free(scene.moved(2, a), 2, a, b)
 
 
 def test_poses_skipped_by_the_cheap_bound_are_free() -> None:
