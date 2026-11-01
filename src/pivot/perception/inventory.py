@@ -122,7 +122,7 @@ def video_sheet(video: Path, frames: int = 16, tile_width: int = 448) -> bytes:
     Raises:
         RuntimeError: If the video cannot be read.
     """
-    # OpenCV is only installed on the cluster.
+    # OpenCV is only installed on the GPU machine.
     # pylint: disable-next=import-outside-toplevel,import-error
     import cv2  # type: ignore[import-not-found]
 
@@ -179,7 +179,7 @@ def ask_open(sheet: bytes, limit: int = MAX_PROMPTS, model: str = OPEN_VISION_MO
     Returns:
         The model's answer.
     """
-    # Heavy GPU dependencies are only installed on the cluster (vLLM no longer
+    # Heavy GPU dependencies are only installed on the GPU machine (vLLM no longer
     # serves this model, transformers does).
     # pylint: disable=import-outside-toplevel,import-error
     import io

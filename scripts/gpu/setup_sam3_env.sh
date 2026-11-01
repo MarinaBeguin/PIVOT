@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Creates the GPU environment for self-hosted SAM 3.1. Run once on hades:
-#   bash scripts/cluster/setup_sam3_env.sh
+# Creates the GPU environment for self-hosted SAM 3.1. Run once on the
+# machine that submits the GPU jobs:
+#   bash scripts/gpu/setup_sam3_env.sh
 # Prerequisites: access granted to https://huggingface.co/facebook/sam3.1
 # and a Hugging Face token (the script runs `hf auth login` if none is stored).
 set -euo pipefail
 
-SCRATCH="${SCRATCH:-/itet-stor/mbeguin/net_scratch}"
+SCRATCH="${PIVOT_SCRATCH:-$HOME/pivot_scratch}"
 CONDA="${CONDA_ROOT:-$SCRATCH/conda}/bin/conda"
 ENV="$SCRATCH/conda_envs/pivot_sam3"
 SAM3_SRC="$SCRATCH/external/sam3"
 PIVOT_SRC="$(cd "$(dirname "$0")/../.." && pwd)"
-# /tmp on hades is a 1 GB tmpfs, too small to unpack the CUDA wheels.
+# /tmp can be a small tmpfs, too small to unpack the CUDA wheels.
 export TMPDIR="$SCRATCH/tmp" PIP_CACHE_DIR="$SCRATCH/pip_cache"
 mkdir -p "$TMPDIR" "$PIP_CACHE_DIR"
 
@@ -19,7 +20,7 @@ if [ ! -x "$ENV/bin/python" ]; then
 fi
 PIP="$ENV/bin/python -m pip"
 $PIP install --upgrade pip
-# torch 2.8 + CUDA 12.6 is the combination already known to work on this cluster.
+# torch 2.8 + CUDA 12.6 is the combination known to work with SAM 3.1.
 $PIP install torch==2.8.0 torchvision==0.23.0 --index-url https://download.pytorch.org/whl/cu126
 
 if [ ! -d "$SAM3_SRC" ]; then
@@ -35,7 +36,7 @@ $PIP install einops opencv-python-headless psutil pycocotools scikit-image sciki
   matplotlib "numpy>=1.26,<2"
 # sam3 pins numpy<2; the constraint makes pip pick a matching scipy for PIVOT.
 $PIP install -e "$PIVOT_SRC" "numpy>=1.26,<2"
-# hades has no ffmpeg; this one encodes the faster, subsampled videos (--quality).
+# In case the machine has no ffmpeg; this one encodes the faster, subsampled videos (--quality).
 $PIP install imageio-ffmpeg
 # Spoken requests in the open version: wav2vec 2.0 on the server's CPU.
 $PIP install "transformers>=4.45,<5" "numpy>=1.26,<2"
