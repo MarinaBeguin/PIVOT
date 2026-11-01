@@ -19,16 +19,17 @@ import heapq
 import math
 from dataclasses import dataclass, field
 from enum import Enum
+from collections.abc import Collection
 from typing import Any
 
 import numpy as np
 
 from pivot.geometry.box import OrientedBox, wrap_angle
-from pivot.geometry.collision import box_distance_lower_bound
+from pivot.geometry.collision import box_distance_lower_bound, polygon_penetration
 from pivot.geometry.solid import solid_distance
 from pivot.planning.cspace import ConfigurationSpace, State
 from pivot.planning.placement import ConflictKind, PlacementReport, check_placement
-from pivot.scene.graph import Scene, carried_objects, is_opening
+from pivot.scene.graph import Scene, carried_objects, obstructs
 
 _NEIGHBORS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 # Cost multiplier of steps that leave less than the comfort margin to obstacles.
@@ -251,11 +252,19 @@ def _aliasing(report: PlacementReport) -> bool:
 
 # How far, and with how many exact checks, a pose is linked to the lattice.
 _CONNECT_RADIUS = 0.6
+# Loosenings of the on-floor test tried for a start or goal pose that pokes
+# past the floor map's edge, in meters.
+_LENIENT_FLOOR_MARGINS = (0.05, 0.1, 0.2, 0.3)
+# A search exhausting fewer states than this from the start was linked into a
+# closed pocket; the start is linked elsewhere this many times at most.
+_POCKET_STATES = 500
+_POCKET_RETRIES = 3
 _CONNECT_CHECKS = 40
 
 
 def _connect(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
-             to_lattice: bool) -> tuple[State, list[OrientedBox]] | None:
+             to_lattice: bool, avoid: frozenset[State] = frozenset()
+             ) -> tuple[State, list[OrientedBox]] | None:
     """Links an arbitrary pose to a nearby free lattice state.
 
     The lattice inflates obstacles, so an object tucked in a tight spot (a
@@ -269,19 +278,20 @@ def _connect(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox
         validator: Exact checker.
         box: The off-lattice pose.
         to_lattice: Direction of the link: from ``box`` to the lattice if True.
+        avoid: States not to link to (a closed pocket of free space).
 
     Returns:
         The linked state and the intermediate poses from ``box`` to it (empty
         for a direct link), or None if no nearby state can be reached.
     """
-    state = _link(cspace, validator, box, to_lattice, _CONNECT_CHECKS)
+    state = _link(cspace, validator, box, to_lattice, _CONNECT_CHECKS, avoid)
     if state is not None:
         return state, []
-    return _escape(cspace, validator, box, to_lattice)
+    return _escape(cspace, validator, box, to_lattice, avoid=avoid)
 
 
 def _link(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
-          to_lattice: bool, checks: int) -> State | None:
+          to_lattice: bool, checks: int, avoid: frozenset[State] = frozenset()) -> State | None:
     """Links a pose to one of the nearest free lattice states by a straight motion.
 
     Args:
@@ -290,6 +300,7 @@ def _link(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
         box: The off-lattice pose.
         to_lattice: Direction of the link: from ``box`` to the lattice if True.
         checks: Number of nearest states tried.
+        avoid: States not to link to.
 
     Returns:
         The linked state, or None.
@@ -298,7 +309,7 @@ def _link(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
     reach = int(math.ceil(_CONNECT_RADIUS / cspace.floor.resolution))
     candidates = [(k, row + dr, col + dc) for k in range(cspace.yaw_bins)
                   for dr in range(-reach, reach + 1) for dc in range(-reach, reach + 1)]
-    candidates = [s for s in candidates if cspace.is_free(s)]
+    candidates = [s for s in candidates if cspace.is_free(s) and s not in avoid]
     def distance(state: State) -> float:
         """Measures how far a lattice state is from ``box``.
 
@@ -322,7 +333,8 @@ def _link(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
 
 
 def _escape(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
-            to_lattice: bool, directions: int = 16) -> tuple[State, list[OrientedBox]] | None:
+            to_lattice: bool, directions: int = 16, avoid: frozenset[State] = frozenset()
+            ) -> tuple[State, list[OrientedBox]] | None:
     """Slides a pose straight out in several directions until it can be linked.
 
     A chair pushed under a desk can often only move straight back: any
@@ -334,6 +346,7 @@ def _escape(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
         box: The off-lattice pose.
         to_lattice: Direction of the link: from ``box`` to the lattice if True.
         directions: Number of directions tried, evenly spread.
+        avoid: States not to link to.
 
     Returns:
         The linked state and the escape pose, or None.
@@ -347,7 +360,7 @@ def _escape(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
             if not validator.segment_ok(current, moved):
                 break
             current = moved
-            state = _link(cspace, validator, current, to_lattice, checks=4)
+            state = _link(cspace, validator, current, to_lattice, 4, avoid)
             if state is not None:
                 return state, [current]
     return None
@@ -365,6 +378,7 @@ class _Search:
         expansions: Expansions used so far.
         tight: Transitions found to sweep closer than the comfort margin
             between their endpoints; they cost as much as tight states.
+        reached: States reached by the last search.
     """
 
     cspace: ConfigurationSpace
@@ -372,6 +386,7 @@ class _Search:
     budget: int
     expansions: int = 0
     tight: set[tuple[State, State]] = field(default_factory=set)
+    reached: Collection[State] = field(default_factory=tuple)
 
     def neighbors(self, state: State) -> list[tuple[State, float]]:
         """Lists the free neighbors of a state with their step costs.
@@ -425,6 +440,7 @@ class _Search:
         """
         frontier: list[tuple[float, float, State]] = [(self.heuristic(start, goal), 0.0, start)]
         parents: dict[State, State | None] = {start: None}
+        self.reached = parents.keys()
         costs = {start: 0.0}
         while frontier:
             if self.budget <= 0:
@@ -504,7 +520,7 @@ def _min_clearance(scene: Scene, object_id: int, boxes: list[OrientedBox]) -> fl
     ignored = {object_id, *carried_objects(scene, object_id)}
     shape = scene[object_id].shape
     obstacles = [o for o in scene.objects.values()
-                 if o.object_id not in ignored and not is_opening(o)]
+                 if o.object_id not in ignored and obstructs(o, scene[object_id])]
     horizon = 1.0  # Beyond 1 m, clearance is not resolved.
     nearest = horizon
     for box in boxes:
@@ -706,8 +722,64 @@ class _Ends:
     after: list[OrientedBox]
 
 
+def _lenient(validator: _Validator, box: OrientedBox) -> list[_Validator]:
+    """Lets an object leave, or reach, a pose the reconstruction makes slightly wrong.
+
+    Where an object really stands, the reconstruction may show conflicts: a
+    chair pushed under a table has their volumes interlocked or overlapping,
+    a dresser against a wall pokes past the edge of the floor map. The real
+    object slides out freely. Leaving or reaching such a pose, the objects
+    whose footprint the object's own overlaps are not obstacles, and the
+    on-floor test is loosened, step by step: specks missing from the floor
+    map next to the pose may need more than the pose itself.
+
+    Args:
+        validator: Exact checker.
+        box: The pose the object leaves or reaches.
+
+    Returns:
+        The checkers under which the pose is valid, least lenient first;
+        none if the pose is not merely imprecise.
+    """
+    scene = validator.scene
+    footprint = box.footprint()
+    tangled = {o.object_id for o in scene.objects.values()
+               if o.object_id != validator.object_id and o.object_id not in validator.carried
+               and polygon_penetration(footprint, o.box.footprint()) > 0.0}
+    kept = [o for o in scene.objects.values() if o.object_id not in tangled]
+    lenient = dataclasses.replace(validator, scene=Scene.from_objects(
+        kept, scene.floor, scene.metadata, scene.ceiling))
+    half_width = 0.5 * float(min(box.size[:2]))
+    candidates = [dataclasses.replace(lenient, floor_margin=max(
+        validator.floor_margin, min(margin, half_width))) for margin in _LENIENT_FLOOR_MARGINS]
+    return [c for c in candidates if c.pose_ok(box)]
+
+
+def _connect_ends(cspace: ConfigurationSpace, validator: _Validator, box: OrientedBox,
+                  to_lattice: bool, avoid: frozenset[State] = frozenset()
+                  ) -> tuple[State, list[OrientedBox]] | None:
+    """Links a start or goal pose to the lattice, leniently if it must.
+
+    Args:
+        cspace: The configuration space.
+        validator: Exact checker.
+        box: The pose.
+        to_lattice: Direction of the link: from ``box`` to the lattice if True.
+        avoid: States not to link to.
+
+    Returns:
+        See :func:`_connect`.
+    """
+    link = _connect(cspace, validator, box, to_lattice, avoid)
+    for lenient in _lenient(validator, box):
+        if link is not None:
+            break
+        link = _connect(cspace, lenient, box, to_lattice, avoid)
+    return link
+
+
 def _link_ends(cspace: ConfigurationSpace, validator: _Validator, start: OrientedBox,
-               goal: OrientedBox) -> _Ends | str:
+               goal: OrientedBox, avoid: frozenset[State] = frozenset()) -> _Ends | str:
     """Links the start and goal poses to the lattice.
 
     Args:
@@ -715,12 +787,13 @@ def _link_ends(cspace: ConfigurationSpace, validator: _Validator, start: Oriente
         validator: Exact checker.
         start: Start pose.
         goal: Goal pose.
+        avoid: States the start must not be linked to.
 
     Returns:
         The linked ends, or why one of them cannot be linked.
     """
-    start_link = _connect(cspace, validator, start, to_lattice=True)
-    goal_link = _connect(cspace, validator, goal, to_lattice=False)
+    start_link = _connect_ends(cspace, validator, start, True, avoid)
+    goal_link = _connect_ends(cspace, validator, goal, to_lattice=False)
     if start_link is None or goal_link is None:
         side = "start" if start_link is None else "goal"
         return f"The {side} pose is wedged in: no room to move from it."
@@ -758,6 +831,19 @@ def _search_with_repairs(scene: Scene, object_id: int, goal: OrientedBox,
                      options.max_expansions)
     best, exhausted = _Repairer(cspace, search, validator, roomy).run(
         ends.start, ends.goal, options.max_repairs)
+    pocket: frozenset[State] = frozenset()
+    for _ in range(_POCKET_RETRIES):
+        # The start was linked into a closed pocket of free space (between the
+        # object and a wall): link it elsewhere around it.
+        if best is not None or not exhausted or len(search.reached) > _POCKET_STATES:
+            break
+        pocket |= frozenset(search.reached)
+        relinked = _link_ends(cspace, validator, start, goal, pocket)
+        if isinstance(relinked, str):
+            break
+        ends = relinked
+        best, exhausted = _Repairer(cspace, search, validator, roomy).run(
+            ends.start, ends.goal, options.max_repairs)
     if best is not None:
         best = [*ends.before, *best, *ends.after]
         return _success(scene, object_id, _shortcut(_simplify(best), roomy), search.expansions)
@@ -784,7 +870,8 @@ def plan_motion(scene: Scene, object_id: int, goal: OrientedBox,
     """
     options = options or MotionOptions()
     validator = _Validator.create(scene, object_id, options.clearance, options.floor_margin)
-    if not validator.pose_ok(scene[object_id].box):
+    start = scene[object_id].box
+    if not validator.pose_ok(start) and not _lenient(validator, start):
         return MotionPlan(MotionStatus.INVALID_START, object_id,
                           message="The object's current pose already has conflicts.")
     if not validator.pose_ok(goal):

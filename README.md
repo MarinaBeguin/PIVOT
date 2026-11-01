@@ -80,6 +80,11 @@ tools on this scene):
   slide under a table top; every path is searched in (x, y, rotation) and re-validated exactly.
 - **Make room.** When other objects block the way, they are pushed aside, the object passes,
   then they are put back as close as possible to where they were.
+- **Room to room.** A home scan is split into rooms at its doorways, each named after what it
+  holds (a bed makes a bedroom, an oven a kitchen). "Move the armchair to the bedroom" finds a
+  free spot there, against a wall, and a verified path through the doors; PIVOT says which doors
+  it passes and how much room is left in the tightest one, or why it cannot (a 90 cm sofa does
+  not go through a 90 cm door).
 - **Carry** light objects over furniture, or put them on a desk; gravity keeps every object on a
   surface; nothing may rise above the **ceiling**.
 - **Accessibility.** After a rearrangement, PIVOT checks that a person (60 cm) or a wheelchair
@@ -107,7 +112,7 @@ tools on this scene):
 | Model | Role in PIVOT | API version | Open-weight version |
 |---|---|---|---|
 | **SAM 3.1** | Segments and tracks every object of the video from a noun ("chair", "lamp") | Meta Model API, read with Meta's SAM parser | Self-hosted weights (multiplex video predictor, 64 objects per prompt) |
-| **Muse Spark 1.3** | Agent with 11 geometric tools; lists the kinds of objects a video shows | Meta Model API | |
+| **Muse Spark 1.3** | Agent with 13 geometric tools; lists the kinds of objects a video shows | Meta Model API | |
 | **Llama 3.1 8B Instruct** | The same agent, with tool calling | | Served by vLLM on the GPU |
 | **Llama 3.2 11B Vision Instruct** | Lists the kinds of objects a video shows | | Hugging Face transformers, on the GPU |
 | **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
@@ -142,7 +147,7 @@ flowchart LR
 3. **The verifier.** Placement checks (collisions, walls, clearance, ceiling, warnings in front of
    doors and windows), A* motion planning in (x, y, yaw) by height slabs with exact re-validation,
    blocking objects moved aside and put back, carried moves (lift, carry, lower), passage checks.
-4. **The agent.** Muse or Llama gets the request and 11 tools. Its instructions forbid any claim
+4. **The agent.** Muse or Llama gets the request and 13 tools. Its instructions forbid any claim
    no tool result supports, and require it to quote the measurements, in plain language.
 
 ## Results
@@ -277,9 +282,9 @@ src/pivot/
 ├── perception/   object inventory, SAM 3.1 (self-hosted), detections and tracks
 ├── meta/         Meta Model API client, SAM 3.1 through the API
 ├── lifting/      masks to 3D: fusion, carved volumes, hidden parts, doors and windows
-├── scene/        scene graph, supports, example scenes
+├── scene/        scene graph, supports, rooms and doorways, example scenes
 ├── planning/     placement, motion planning, make room, carry, passages, moving plan
-├── agent/        tool-calling agent (Muse or Llama) and its 11 tools
+├── agent/        tool-calling agent (Muse or Llama) and its 13 tools
 ├── server/       FastAPI server: viewer, chat, speech
 ├── viz/          3D viewer (three.js), printable plan
 └── eval/         task suite, variants, judge, metrics
@@ -289,8 +294,9 @@ src/pivot/
 
 Known limitations, measured rather than hidden:
 
-- Objects slide and rotate about the vertical axis; they are never tilted. The person carrying an
-  object is not modeled, and masses are unknown (the two-person flag comes from size and kind).
+- Objects slide and rotate about the vertical axis; they are never tilted, so a sofa that would
+  pass a door on its side is reported as too wide. The person carrying an object is not modeled,
+  and masses are unknown (the two-person and "can be carried" flags come from size and kind).
 - SAM 3.1 tracks the kinds of objects it is given: an object never named is not detected.
 - 4 cm voxels: thin tubes can be missed; space never seen (behind a monitor) stays occupied.
   Hidden parts are inferred, not observed.
@@ -300,8 +306,6 @@ Known limitations, measured rather than hidden:
 Next:
 
 - **Any phone video**, without depth sensor: poses and depth from Meta's VGGT or MapAnything.
-- **Moving between rooms**: one scan covering several rooms; the planner already passes through
-  doors.
 - **"Will the sofa from this photo fit?"**: insert an object from a picture and its size, then let
   PIVOT find a spot and the rearrangement it needs.
 - **Real-looking objects** with SAM 3D Objects, shown in place of the point cloud.

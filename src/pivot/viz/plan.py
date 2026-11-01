@@ -15,6 +15,7 @@ from pivot.geometry.types import BoolArray, FloatArray
 from pivot.planning.access import WALKING_WIDTH, WHEELCHAIR_WIDTH, AccessReport, check_access
 from pivot.planning.instructions import Step
 from pivot.scene.graph import Scene, is_opening
+from pivot.scene.rooms import find_rooms
 
 # Opens the print dialog once the page is shown; "Save as PDF" is one of its printers.
 SAVE_PDF_ON_LOAD = " onload='print()'"
@@ -119,6 +120,27 @@ def _frame(final: Scene, steps: list[Step]) -> _Frame:
     return _Frame(points.min(axis=0) - 0.1, points.max(axis=0) + 0.1)
 
 
+def _rooms_svg(final: Scene, frame: _Frame) -> list[str]:
+    """Writes the name of each room on the plan, when there are several.
+
+    Args:
+        final: The scene.
+        frame: Coordinate mapping.
+
+    Returns:
+        SVG elements.
+    """
+    rooms = find_rooms(final)
+    if rooms is None or len(rooms.rooms) < 2:
+        return []
+    labels = []
+    for room in rooms.rooms:
+        x, y = frame.point(room.center)
+        labels.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="middle" font-size="14" '
+                      f'font-weight="600" fill="#5b6661">{html.escape(room.name)}</text>')
+    return labels
+
+
 def _objects_svg(final: Scene, frame: _Frame, moved: set[int]) -> list[str]:
     """Draws the objects where they end up, moved ones highlighted, numbered.
 
@@ -192,6 +214,7 @@ def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None) -> st
         parts.append(_cell_runs(final, final.floor.floor, frame, "#e7ebe9", 1.0))
         if access is not None:
             parts.append(_cell_runs(final, access.reachable, frame, "#2f9e6b", 0.25))
+    parts += _rooms_svg(final, frame)
     parts += _objects_svg(final, frame, {s.object_id for s in steps})
     parts += _steps_svg(steps, frame)
     parts.append("</svg>")

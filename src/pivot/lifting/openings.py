@@ -1,14 +1,21 @@
-"""Doors and windows: set in the walls, one per opening.
+"""Doors, windows and what hangs on walls: set in the walls, one per object.
 
 Depth seen through a window or an open door lands outside the room, so the
 points of an opening spread on both sides of its wall and its fitted box ends
-up diagonal and meters deep. An opening lies in a wall: it is snapped to the
-nearest wall of the room, keeps only its points near that wall, and becomes a
-thin box along it. Openings found twice (a glazed door also segmented as a
-window) are merged, and slivers narrower than any real opening are dropped.
+up diagonal and meters deep; so do those of a mirror, which shows the room
+behind the wall, and of a curtain drawn by a window. Such an object lies in
+or on a wall: it is snapped to the nearest wall of the room, keeps only its
+points near that wall, and becomes a thin box along it. Openings found twice
+(a glazed door also segmented as a window) are merged, as are pieces of one
+object found apart (the top and bottom halves of a door), and slivers
+narrower than any real opening are dropped. A wall-mounted object with no
+wall near it is a false detection and is dropped too.
 
-Walls are taken as the sides of the room's floor rectangle, in the room's
-orientation: right for rectangular rooms, approximate for others.
+Walls are taken as the sides of the floor's rectangle, in the room's
+orientation, which is right for one rectangular room. An opening far from
+those sides (a door between two rooms of a home) goes instead into the
+nearest wall found on the floor map: a strip without floor, with floor on at
+least one side.
 """
 
 from __future__ import annotations
@@ -19,31 +26,86 @@ from dataclasses import dataclass, replace
 import numpy as np
 
 from pivot.geometry.box import OrientedBox, rotation_2d
-from pivot.geometry.types import FloatArray
-from pivot.scene.graph import SceneObject, is_opening
+from pivot.geometry.floor import FloorMap
+from pivot.geometry.types import BoolArray, FloatArray
+from pivot.scene.graph import FIXED_WALL_LABELS, SceneObject, is_opening, is_wall_mounted
+
+
+# An opening farther than this from the floor rectangle's sides is set in an
+# inner wall, when one is found on the floor map.
+OUTER_WALL_REACH = 0.6
+# How far from an opening an inner wall is looked for, and how long a stretch
+# of it is examined, in meters.
+_INNER_SEARCH = 0.8
+_INNER_SPAN = 1.0
+# Share of a wall stretch without floor (a doorway leaves a gap), and largest
+# share of floor-less cells on its floor side.
+_WALL_SOLID = 0.4
+_ROOM_OPEN = 0.3
+# The floor side of a wall is looked at this many cells away from it, times three.
+_WALL_STEP_CELLS = 2
+# Thickness of the snapped boxes, across the wall, in meters: openings, then
+# objects hung on the wall (a drawn curtain is thicker than a frame).
+OPENING_THICKNESS = 0.1
+_HUNG_THICKNESS = {"curtain": 0.15}
+_DEFAULT_HUNG_THICKNESS = 0.05
+# Points of a hung object kept on each side of its densest layer, in meters.
+_HUNG_LAYER = 0.06
+# Widest object of a label hung on a wall: a wider one keeps its most
+# populated stretch of that width, in meters.
+_MAX_HUNG_WIDTH = {"mirror": 1.2}
+# Pieces of one object side by side, closer than this along the wall, are
+# joined; so are pieces one above the other with a gap in height of up to
+# _STACK_GAP (a door's handle may go unsegmented; the wider gap between the
+# upper and lower doors of kitchen cabinets is the counter's backsplash). Two
+# pieces may be snapped this far apart across the wall, in meters.
+_PIECE_GAP = 0.15
+_PIECE_OFFSET = 0.3
+_STACK_GAP = 0.3
+# Bins along a wall, and the largest empty run inside one object, in bins.
+_STRETCH_BIN = 0.05
+_STRETCH_GAP_BINS = 3
+# A door is at least this tall, once its pieces are joined (shorter ones are
+# the doors of a cabinet), in meters.
+MIN_DOOR_HEIGHT = 1.5
+# The floor in front of an object on a wall is looked at between these
+# distances from it; at least this share of it must be floor on one side
+# (what a mirror shows behind its wall has no floor in front of it).
+_FRONT_NEAR, _FRONT_FAR = 0.15, 0.6
+_MIN_FRONT_FLOOR = 0.3
+# One walks through a door: there is floor right at its foot, on one side at
+# least (cabinet doors over a counter have none). Looked at this far from it.
+_DOOR_STEP = (0.05, 0.35)
+_MIN_DOOR_STEP_FLOOR = 0.5
 
 
 @dataclass(frozen=True)
 class Walls:
-    """The four walls of a room, as the sides of its floor rectangle.
+    """The walls of a room: the sides of its floor rectangle, and inner walls.
 
     Attributes:
         yaw: Room orientation, in radians.
         low: (2,) minimum floor coordinates in the room frame, in meters.
         high: (2,) maximum floor coordinates in the room frame, in meters.
+        floor: Floor map to find inner walls on; outer walls only if None.
     """
 
     yaw: float
     low: FloatArray
     high: FloatArray
+    floor: FloorMap | None = None
 
     @classmethod
-    def from_floor(cls, floor_xy: FloatArray, yaw: float, quantile: float = 0.005) -> Walls:
+    def from_floor(cls, floor_xy: FloatArray, yaw: float, floor: FloorMap | None = None,
+                   quantile: float = 0.005) -> Walls:
         """Finds the walls from floor points.
 
         Args:
             floor_xy: (N, 2) floor points, in meters.
             yaw: Room orientation, in radians.
+            floor: Floor map with the walls taken off (see
+                :func:`~pivot.lifting.floor.remove_standing`), to find inner
+                walls on; built from the points if None.
             quantile: Fraction of points ignored on each side (floor seen
                 through doors and windows).
 
@@ -52,7 +114,8 @@ class Walls:
         """
         local = floor_xy @ rotation_2d(yaw)  # World to room frame.
         return cls(yaw, np.quantile(local, quantile, axis=0),
-                   np.quantile(local, 1.0 - quantile, axis=0))
+                   np.quantile(local, 1.0 - quantile, axis=0),
+                   floor if floor is not None else FloorMap.from_points(floor_xy, resolution=0.05))
 
     def to_room(self, xy: FloatArray) -> FloatArray:
         """Expresses world points in the room frame.
@@ -78,24 +141,116 @@ class Walls:
         local = self.to_room(xy[None])[0]
         sides = [(abs(local[a] - c), a, float(c))
                  for a in (0, 1) for c in (self.low[a], self.high[a])]
-        _, axis, coordinate = min(sides)
+        distance, axis, coordinate = min(sides)
+        if distance > OUTER_WALL_REACH:
+            inner = self._inner_wall(local)
+            if inner is not None:
+                return inner
         return axis, coordinate
+
+    def _floor_share(self, local: FloatArray) -> FloatArray:
+        """Tells which room-frame points lie on the floor map.
+
+        Args:
+            local: (..., 2) room-frame points.
+
+        Returns:
+            A boolean array, True on the floor.
+        """
+        assert self.floor is not None
+        world = local @ rotation_2d(self.yaw).T
+        cells = np.floor((world - self.floor.origin) / self.floor.resolution).astype(int)
+        rows, cols = cells[..., 1], cells[..., 0]
+        inside = ((rows >= 0) & (rows < self.floor.shape[0])
+                  & (cols >= 0) & (cols < self.floor.shape[1]))
+        on_floor = np.zeros(rows.shape, dtype=bool)
+        on_floor[inside] = self.floor.floor[rows[inside], cols[inside]]
+        return on_floor
+
+    def _inner_wall(self, local: FloatArray) -> tuple[int, float] | None:
+        """Finds the inner wall nearest to a room-frame point, on the floor map.
+
+        Args:
+            local: (2,) room-frame point.
+
+        Returns:
+            The room-frame axis the wall is perpendicular to, and its
+            coordinate; None if no wall is near.
+        """
+        if self.floor is None:
+            return None
+        step = self.floor.resolution
+        offsets = np.arange(-_INNER_SEARCH, _INNER_SEARCH + step, step)
+        along = np.arange(-_INNER_SPAN, _INNER_SPAN + step, step)
+        found: list[tuple[float, int, float]] = []
+        side = 3 * _WALL_STEP_CELLS
+        for axis in (0, 1):
+            # Points of strips across the axis, one strip per offset.
+            grid = np.zeros((len(offsets), len(along), 2))
+            grid[..., axis] = local[axis] + offsets[:, None]
+            grid[..., 1 - axis] = local[1 - axis] + along[None, :]
+            solid = 1.0 - self._floor_share(grid).mean(axis=1)
+            for k in np.argsort(np.abs(offsets)):
+                if solid[k] < _WALL_SOLID or solid[k] >= 0.999:
+                    continue
+                if min(solid[max(k - side, 0)], solid[min(k + side, len(offsets) - 1)]) \
+                        <= _ROOM_OPEN:
+                    found.append((abs(float(offsets[k])), axis, float(local[axis] + offsets[k])))
+                    break
+        if not found:
+            return None
+        _, axis, coordinate = min(found)
+        return axis, coordinate
+
+    def faces_floor(self, box: OrientedBox, near: float = _FRONT_NEAR, far: float = _FRONT_FAR,
+                    share: float = _MIN_FRONT_FLOOR) -> bool:
+        """Tests whether there is floor in front of a box set in a wall, on either side.
+
+        Args:
+            box: A snapped box; its first axis runs along the wall.
+            near: Distance from the box where the strip looked at starts, in meters.
+            far: Distance where it ends, in meters.
+            share: Smallest share of floor in the strip.
+
+        Returns:
+            True if enough of the strip in front of it, on one side, is floor;
+            True as well without a floor map.
+        """
+        if self.floor is None:
+            return True
+        along = np.array([math.cos(box.yaw), math.sin(box.yaw)])
+        normal = np.array([-along[1], along[0]])
+        offsets_along = np.linspace(-0.5, 0.5, 9) * box.size[0]
+        depths = np.linspace(near, far, 6)
+        for side in (1.0, -1.0):
+            world = (box.center[:2] + offsets_along[:, None, None] * along
+                     + side * depths[None, :, None] * normal)
+            if self._floor_share(self.to_room(world.reshape(-1, 2))).mean() >= share:
+                return True
+        return False
 
 
 def snap_opening(obj: SceneObject, points: FloatArray, walls: Walls, band: float = 0.25,
-                 thickness: float = 0.1, min_points: int = 30) -> SceneObject | None:
-    """Sets an opening in its nearest wall.
+                 thickness: float = OPENING_THICKNESS, min_points: int = 30,
+                 layer: float | None = None, max_width: float | None = None
+                 ) -> SceneObject | None:
+    """Sets an opening, or an object hung on a wall, in its nearest wall.
 
     Args:
-        obj: The door or window.
+        obj: The door, window or wall-mounted object.
         points: (N, 3) its fused points.
         walls: The room's walls.
         band: Points farther than this from the wall are dropped, in meters.
         thickness: Thickness of the snapped box, in meters.
         min_points: Openings with fewer points near the wall are dropped.
+        layer: If given, only the points within this distance of the densest
+            layer parallel to the wall are kept, and the box is set on that
+            layer: the frame of a mirror, rather than what it shows.
+        max_width: If given, the object keeps at most this width along the
+            wall, where it has the most points.
 
     Returns:
-        The opening with a thin box along the wall, or None if too few of its
+        The object with a thin box along the wall, or None if too few of its
         points lie near a wall.
     """
     axis, coordinate = walls.nearest(np.median(points[:, :2], axis=0))
@@ -103,10 +258,73 @@ def snap_opening(obj: SceneObject, points: FloatArray, walls: Walls, band: float
     near = np.abs(local[:, axis] - coordinate) <= band
     if near.sum() < min_points:
         return None
+    if layer is not None:
+        coordinate += _densest_layer(local[:, axis] - coordinate, near, band)
+        near &= np.abs(local[:, axis] - coordinate) <= layer
+    near &= _main_stretch(local[:, 1 - axis], near)
+    if max_width is not None:
+        near &= _densest_window(local[:, 1 - axis], near, max_width)
     span = np.quantile(local[near, 1 - axis], [0.02, 0.98])
     heights = np.quantile(points[near, 2], [0.02, 0.98])
     return replace(obj, box=_wall_box(walls, axis, coordinate, span, heights, thickness),
                    shape=None)
+
+
+def _densest_layer(depth: FloatArray, near: BoolArray, band: float) -> float:
+    """Finds the densest layer of points parallel to a wall.
+
+    Args:
+        depth: (N,) signed distances to the wall, in meters.
+        near: (N,) points near the wall.
+        band: Half-width of the band searched, in meters.
+
+    Returns:
+        The layer's signed distance to the wall, in meters.
+    """
+    counts, edges = np.histogram(depth[near], bins=np.arange(-band, band + 0.02, 0.02))
+    return float(edges[int(np.argmax(counts))] + 0.01)
+
+
+def _main_stretch(along: FloatArray, near: BoolArray) -> BoolArray:
+    """Keeps the points of the most populated unbroken stretch along a wall.
+
+    What a mirror shows meets the wall's plane here and there, away from the
+    mirror: those points are cut off from it by empty stretches of wall.
+
+    Args:
+        along: (N,) coordinates along the wall, in meters.
+        near: (N,) points near the wall.
+
+    Returns:
+        (N,) points near the wall and in its main stretch.
+    """
+    bins = np.floor(along[near] / _STRETCH_BIN).astype(int)
+    first = int(bins.min())
+    counts = np.bincount(bins - first)
+    occupied = np.flatnonzero(counts)
+    groups = np.split(occupied, np.flatnonzero(np.diff(occupied) > _STRETCH_GAP_BINS) + 1)
+    best = max(groups, key=lambda g: int(counts[g].sum()))
+    low, high = (first + best[0]) * _STRETCH_BIN, (first + best[-1] + 1) * _STRETCH_BIN
+    kept: BoolArray = near & (along >= low) & (along < high)
+    return kept
+
+
+def _densest_window(along: FloatArray, near: BoolArray, width: float) -> BoolArray:
+    """Keeps the points of the most populated stretch of a given width along a wall.
+
+    Args:
+        along: (N,) coordinates along the wall, in meters.
+        near: (N,) points near the wall.
+        width: Width of the stretch, in meters.
+
+    Returns:
+        (N,) points near the wall and in that stretch.
+    """
+    values = np.sort(along[near])
+    ends = np.searchsorted(values, values + width)
+    start = float(values[int(np.argmax(ends - np.arange(len(values))))])
+    kept: BoolArray = near & (along >= start) & (along <= start + width)
+    return kept
 
 
 def _wall_box(walls: Walls, axis: int, coordinate: float, span: FloatArray,
@@ -157,35 +375,113 @@ def _same_opening(a: OrientedBox, b: OrientedBox, min_overlap: float) -> bool:
                 and overlap_z >= min_overlap * min(a.size[2], b.size[2]))
 
 
-def clean_openings(objects: list[SceneObject], points: dict[int, FloatArray], walls: Walls,
-                   min_width: float = 0.3, min_overlap: float = 0.5) -> list[SceneObject]:
-    """Snaps every opening to its wall, merges duplicates and drops slivers.
-
-    Of two openings found at the same place, the one with more points is
-    kept, with the union of both extents.
+def _thickness(obj: SceneObject) -> float:
+    """Gives the thickness of an object's snapped box, across its wall.
 
     Args:
-        objects: All objects; those that are not openings are kept as they are.
-        points: Fused points of every object, keyed by id.
+        obj: An opening or a wall-mounted object.
+
+    Returns:
+        The thickness, in meters.
+    """
+    if is_opening(obj):
+        return OPENING_THICKNESS
+    return _HUNG_THICKNESS.get(obj.label.lower(), _DEFAULT_HUNG_THICKNESS)
+
+
+def _pieces_of_one(a: OrientedBox, b: OrientedBox) -> bool:
+    """Tests whether two snapped boxes are pieces of one object, side by side or stacked.
+
+    Args:
+        a: First snapped box.
+        b: Second snapped box.
+
+    Returns:
+        True if they lie on one wall, side by side and touching or nearly, or
+        one above the other with a small gap.
+    """
+    if abs(math.remainder(a.yaw - b.yaw, math.pi)) > 1e-3:
+        return False
+    offset = rotation_2d(-a.yaw) @ (b.center[:2] - a.center[:2])
+    gap_along = abs(offset[0]) - 0.5 * (a.size[0] + b.size[0])
+    gap_z = max(a.z_min, b.z_min) - min(a.z_max, b.z_max)
+    stacked = gap_along < 0.0 and gap_z <= _STACK_GAP
+    return bool(abs(offset[1]) <= _PIECE_OFFSET and gap_along <= _PIECE_GAP
+                and (stacked or gap_z <= _PIECE_GAP))
+
+
+def _walkable_door(box: OrientedBox, walls: Walls) -> bool:
+    """Tests whether a door is one people walk through, not a cabinet's.
+
+    Args:
+        box: The door's snapped box.
         walls: The room's walls.
-        min_width: Openings narrower than this along their wall are dropped, in meters.
+
+    Returns:
+        True if it is tall enough and has floor right at its foot.
+    """
+    return bool(box.size[2] >= MIN_DOOR_HEIGHT
+                and walls.faces_floor(box, *_DOOR_STEP, _MIN_DOOR_STEP_FLOOR))
+
+
+def _same_object(a: SceneObject, b: SceneObject, min_overlap: float) -> bool:
+    """Tests whether two snapped objects are one: found twice, or in pieces.
+
+    Args:
+        a: The kept object.
+        b: Another one.
         min_overlap: See :func:`_same_opening`.
 
     Returns:
-        The objects, with clean openings.
+        True for two openings at the same place, or two pieces of one object
+        of the same label.
     """
-    others = [o for o in objects if not is_opening(o)]
-    snapped = [s for o in objects if is_opening(o)
-               if (s := snap_opening(o, points[o.object_id], walls)) is not None
-               and s.box.size[0] >= min_width]
+    if is_opening(a) and is_opening(b) and _same_opening(a.box, b.box, min_overlap):
+        return True
+    return a.label == b.label and _pieces_of_one(a.box, b.box)
+
+
+def clean_openings(objects: list[SceneObject], points: dict[int, FloatArray], walls: Walls,
+                   min_width: float = 0.3, min_overlap: float = 0.5) -> list[SceneObject]:
+    """Snaps every opening and wall-mounted object to its wall, merges duplicates and pieces.
+
+    Of two openings found at the same place, the one with more points is
+    kept, with the union of both extents; so are pieces of one object. Then
+    doors too short to be doors or with no floor at their foot (cabinet
+    doors), and objects with no floor in front of them (seen in a mirror or
+    through a window), are dropped. Curtains and
+    blinds are fixed; a mirror or a painting can still be moved.
+
+    Args:
+        objects: All objects; the others are kept as they are.
+        points: Fused points of every object, keyed by id.
+        walls: The room's walls.
+        min_width: Openings narrower than this along their wall are dropped,
+            once their pieces are joined, in meters.
+        min_overlap: See :func:`_same_opening`.
+
+    Returns:
+        The objects, with clean openings and wall-mounted objects.
+    """
+    on_walls = [o for o in objects if is_opening(o) or is_wall_mounted(o)]
+    others = [o for o in objects if o not in on_walls]
+    snapped = [replace(s, movable=o.movable and o.label.lower() not in FIXED_WALL_LABELS)
+               for o in on_walls
+               if (s := snap_opening(o, points[o.object_id], walls, thickness=_thickness(o),
+                                     layer=None if is_opening(o) else _HUNG_LAYER,
+                                     max_width=_MAX_HUNG_WIDTH.get(o.label.lower())))
+               is not None]
     snapped.sort(key=lambda o: -len(points[o.object_id]))
     kept: list[SceneObject] = []
-    for opening in snapped:
-        match = next((k for k in kept if _same_opening(k.box, opening.box, min_overlap)), None)
+    for item in snapped:
+        match = next((k for k in kept if _same_object(k, item, min_overlap)), None)
         if match is None:
-            kept.append(opening)
+            kept.append(item)
         else:
-            kept[kept.index(match)] = replace(match, box=_union_along(match.box, opening.box))
+            kept[kept.index(match)] = replace(match, box=_union_along(match.box, item.box))
+    kept = [o for o in kept if (not is_opening(o) or o.box.size[0] >= min_width)
+            and (o.label.lower() != "door" or _walkable_door(o.box, walls))
+            and walls.faces_floor(o.box)]
     return others + sorted(kept, key=lambda o: o.object_id)
 
 

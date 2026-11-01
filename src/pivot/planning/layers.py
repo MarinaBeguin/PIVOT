@@ -22,7 +22,7 @@ from scipy import ndimage, signal
 from pivot.geometry.box import OrientedBox, rotation_2d
 from pivot.geometry.floor import FloorMap
 from pivot.geometry.types import BoolArray, FloatArray
-from pivot.scene.graph import Scene, SceneObject, is_opening
+from pivot.scene.graph import Scene, SceneObject, obstructs
 
 
 def slab_range(z_min: float, z_max: float, height: float) -> range:
@@ -228,7 +228,7 @@ def obstacle_slabs(scene: Scene, movers: list[int], floor: FloorMap, slabs: list
     band = _height_band(scene, movers, margin, tolerance)
     grids = {k: np.zeros(floor.shape, dtype=bool) for k in slabs}
     for other in scene.objects.values():
-        if (other.object_id in movers or is_opening(other)
+        if (other.object_id in movers or not obstructs(other, scene[movers[0]])
                 or other.box.z_max <= band[0] or other.box.z_min >= band[1]):
             continue
         touched = slab_range(other.box.z_min, other.box.z_max, height)

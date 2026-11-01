@@ -10,6 +10,7 @@ import numpy as np
 
 from pivot.geometry.types import FloatArray
 from pivot.scene.graph import Scene
+from pivot.scene.rooms import find_rooms
 from pivot.viz.pointcloud import ColorArray
 
 _PLACEHOLDER = "__PIVOT_SCENE_DATA__"
@@ -33,17 +34,26 @@ def scene_payload(scene: Scene, points: FloatArray, colors: ColorArray,
         "points": base64.b64encode(points.astype("<f4").tobytes()).decode(),
         "colors": base64.b64encode(colors.astype(np.uint8).tobytes()).decode(),
         "objects": [o.to_dict() for o in sorted(scene.objects.values(), key=lambda o: o.object_id)],
-        "floor": None,
     }
+    payload["rooms"] = []
+    floor_data: dict[str, Any] | None = None
     if scene.floor is not None:
         floor = scene.floor
-        payload["floor"] = {
+        floor_data = {
             "origin": floor.origin.tolist(),
             "resolution": floor.resolution,
             "rows": floor.shape[0],
             "cols": floor.shape[1],
             "cells": [np.flatnonzero(row).tolist() for row in floor.floor],
         }
+        rooms = find_rooms(scene)
+        if rooms is not None and len(rooms.rooms) > 1:
+            # The room of each floor cell, in the order of "cells".
+            floor_data["rooms"] = [rooms.labels[r, np.flatnonzero(row)].tolist()
+                                   for r, row in enumerate(floor.floor)]
+            payload["rooms"] = [{"id": room.room_id, "name": room.name,
+                                 "center": room.center.tolist()} for room in rooms.rooms]
+    payload["floor"] = floor_data
     return payload
 
 

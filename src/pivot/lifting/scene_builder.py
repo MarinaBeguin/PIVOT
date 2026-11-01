@@ -12,17 +12,24 @@ from pivot.geometry.plane import apply_transform
 from pivot.geometry.types import BoolArray, FloatArray
 from pivot.lifting.backproject import scene_points
 from pivot.lifting.completion import complete_hidden, drop_fragments
-from pivot.lifting.floor import detect_floor, estimate_ceiling, room_orientation
+from pivot.lifting.floor import detect_floor, estimate_ceiling, remove_standing, room_orientation
 from pivot.lifting.objects import (
     assign_by_votes, contained_tracks, distinct_pairs, duplicate_groups, lift_track,
     split_overlaps,
 )
 from pivot.lifting.openings import Walls, clean_openings
 from pivot.lifting.parts import join_parts
+from pivot.lifting.plausible import drop_implausible
 from pivot.lifting.volume import CarveConfig, carve_shapes
+from pivot.perception.inventory import BUILT_IN_KINDS
 from pivot.perception.tracks import Track
 from pivot.reconstruction.types import Reconstruction
-from pivot.scene.graph import STRUCTURAL_LABELS, Scene, SceneObject, is_supported_by
+from pivot.scene.graph import (
+    STRUCTURAL_LABELS, Scene, SceneObject, is_opening, is_supported_by, is_wall_mounted,
+)
+
+# Objects the agent never moves: the building's own parts and its fittings.
+_FIXED_LABELS = STRUCTURAL_LABELS | frozenset(BUILT_IN_KINDS)
 
 
 @dataclass(frozen=True)
@@ -50,7 +57,7 @@ class BuildConfig:
         support_tolerance: Gap or interpenetration under which an object counts
             as resting on another one, in meters.
         max_fall: Unsupported objects whose bottom is higher than this are
-            taken to be wall-mounted and left in place, in meters.
+            taken to be fixed to a wall or the ceiling, in meters.
         floor_band: Points below this height count as floor, in meters.
         floor_resolution: Floor map cell size, in meters.
         merge: Track merging parameters.
@@ -114,8 +121,10 @@ def settle(objects: list[SceneObject], tolerance: float,
     table reduced to its top, a chair to its seat). An object that rests on
     no other object is extended down to the floor; one that does is set
     exactly on its support's top. Objects floating higher than ``max_fall``
-    (wall shelves, lamp heads) are left as fitted, like structural objects.
-    Supports are tested on the fitted boxes, before any change.
+    (wall shelves, ceiling lights) are fixed to a wall or the ceiling: they
+    are left as fitted and are not moved by the agent. Objects hung on a wall
+    (a mirror, a painting) stay where they hang. Supports are tested on the
+    fitted boxes, before any change.
 
     Args:
         objects: Objects with fitted boxes.
@@ -127,11 +136,11 @@ def settle(objects: list[SceneObject], tolerance: float,
     """
     settled = []
     for obj in objects:
-        if obj.movable:
+        if obj.movable and not is_wall_mounted(obj):
             base = _resting_height(obj, objects, tolerance)
             box = obj.box
             if box.z_min - base > max_fall:
-                settled.append(obj)
+                settled.append(replace(obj, movable=False))
                 continue
             size, center = box.size.copy(), box.center.copy()
             size[2] = box.z_max - base
@@ -161,26 +170,49 @@ def build_scene(recon: Reconstruction, tracks: list[Track],
 
     room_yaw = room_orientation(points)
     objects, object_points, object_tracks = _lift_objects(leveled, tracks, room_yaw, config)
-    walls = Walls.from_floor(points[np.abs(points[:, 2]) < config.floor_band, :2], room_yaw)
-    objects = clean_openings(objects, object_points, walls)
+    objects = clean_openings(objects, object_points, _walls(points, objects, room_yaw, config))
 
-    objects = settle(objects, config.support_tolerance, config.max_fall)
+    objects = drop_implausible(settle(objects, config.support_tolerance, config.max_fall))
     if config.carve is not None:
         masks = {i: _merged_masks(group) for i, group in object_tracks.items()}
         objects = carve_shapes(leveled, objects, object_points, masks, config.carve)
     objects = complete_hidden(drop_fragments(objects))
     floor = _floor_map(points, objects, config)
     metadata = {"frames": len(recon), "tracks": len(tracks)}
-    scene = Scene.from_objects(objects, floor, metadata, estimate_ceiling(points))
+    scene = Scene.from_objects(objects, floor, metadata, estimate_ceiling(points, floor))
     return BuiltScene(scene, leveled, object_points)
 
 
+def _walls(points: FloatArray, objects: list[SceneObject], room_yaw: float,
+           config: BuildConfig) -> Walls:
+    """Finds the walls openings are set in, inner walls included.
+
+    Args:
+        points: (N, 3) leveled scene points.
+        objects: The lifted objects.
+        room_yaw: Orientation of the room's walls, in radians.
+        config: Assembly parameters.
+
+    Returns:
+        The walls.
+    """
+    floor_xy = points[np.abs(points[:, 2]) < config.floor_band, :2]
+    # Thin walls, erased by the floor map's gap filling, are found again from
+    # what stands outside the objects (openings excepted: their frames are walls).
+    wall_floor = remove_standing(FloorMap.from_points(floor_xy, config.floor_resolution),
+                                 points, [o.box for o in objects if not is_opening(o)],
+                                 config.floor_band)
+    return Walls.from_floor(floor_xy, room_yaw, wall_floor)
+
+
 def fit_object_box(cloud: FloatArray, room_yaw: float, trim: float = 0.02,
-                   align_tolerance_deg: float = 12.0) -> OrientedBox:
+                   align_tolerance_deg: float = 12.0, align_area_ratio: float = 1.1) -> OrientedBox:
     """Fits an object's box, robust to stray points and aligned with the walls.
 
     Furniture mostly stands parallel to the walls, while the minimum-area
-    orientation of a partial, noisy cloud can be off by several degrees.
+    orientation of a partial, noisy cloud can be off by several degrees, or
+    by more for a cloud with a few points of a neighbor: a sofa's box then
+    crosses the wall it stands against.
 
     Args:
         cloud: (N, 3) object points.
@@ -188,6 +220,8 @@ def fit_object_box(cloud: FloatArray, room_yaw: float, trim: float = 0.02,
         trim: Fraction of the points ignored at each end of every axis.
         align_tolerance_deg: Boxes within this angle of the walls are aligned
             with them, in degrees.
+        align_area_ratio: Boxes farther from the walls' angle are aligned too
+            when their footprint grows by less than this factor.
 
     Returns:
         The box.
@@ -195,8 +229,11 @@ def fit_object_box(cloud: FloatArray, room_yaw: float, trim: float = 0.02,
     box = fit_box(cloud, trim=trim)
     quarter = 0.5 * math.pi
     offset = (box.yaw - room_yaw + 0.5 * quarter) % quarter - 0.5 * quarter
-    if abs(offset) <= math.radians(align_tolerance_deg):
-        box = fit_box(cloud, yaw=box.yaw - offset, trim=trim)
+    aligned = fit_box(cloud, yaw=box.yaw - offset, trim=trim)
+    area = float(box.size[0] * box.size[1])
+    if (abs(offset) <= math.radians(align_tolerance_deg)
+            or aligned.size[0] * aligned.size[1] <= align_area_ratio * area):
+        return aligned
     return box
 
 
@@ -238,7 +275,7 @@ def _lift_objects(recon: Reconstruction, tracks: list[Track], room_yaw: float, c
         if box.z_max < config.floor_band:
             continue  # A patch of floor segmented as an object.
         first = group[0]
-        movable = first.label.lower() not in STRUCTURAL_LABELS
+        movable = first.label.lower() not in _FIXED_LABELS
         score = max(t.score for t in group)
         objects.append(SceneObject(first.track_id, first.label, box, movable, score))
         object_points[first.track_id] = cloud
@@ -306,7 +343,8 @@ def _floor_map(points: FloatArray, objects: list[SceneObject], config: BuildConf
 
     Floor hidden under furniture is still floor: the footprints of movable
     objects standing on it are added so that they can be moved elsewhere and
-    other objects can take their place.
+    other objects can take their place. Walls are taken off again after the
+    floor's gaps are filled (see :func:`~pivot.lifting.floor.remove_standing`).
 
     Args:
         points: (N, 3) leveled scene points.
@@ -319,7 +357,10 @@ def _floor_map(points: FloatArray, objects: list[SceneObject], config: BuildConf
     floor_xy = points[np.abs(points[:, 2]) < config.floor_band, :2]
     hidden = [_fill_polygon(o.box.footprint(), config.floor_resolution / 2)
               for o in objects if o.movable and o.box.z_min < config.floor_band]
-    return FloorMap.from_points(np.vstack([floor_xy, *hidden]), config.floor_resolution)
+    floor = FloorMap.from_points(np.vstack([floor_xy, *hidden]), config.floor_resolution)
+    # Gap filling erases thin walls: take off what stands outside the objects.
+    return remove_standing(floor, points, [o.box for o in objects if not is_opening(o)],
+                           config.floor_band)
 
 
 def _fill_polygon(polygon: FloatArray, spacing: float) -> FloatArray:

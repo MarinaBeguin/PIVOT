@@ -23,7 +23,9 @@ from pivot.geometry.collision import (
 from pivot.geometry.solid import solid_distance, solid_penetration
 from pivot.geometry.floor import FloorMap
 from pivot.geometry.types import FloatArray
-from pivot.scene.graph import Scene, SceneObject, carried_boxes, carried_objects, is_opening
+from pivot.scene.graph import (
+    Scene, SceneObject, carried_boxes, carried_objects, is_opening, obstructs,
+)
 
 
 class ConflictKind(str, Enum):
@@ -234,7 +236,7 @@ def check_placement(
         carried = carried_objects(scene, object_id)
     ignored = {object_id, *carried}
     others = [o for o in scene.objects.values()
-              if o.object_id not in ignored and not is_opening(o)]
+              if o.object_id not in ignored and obstructs(o, obj)]
     conflicts += _object_conflicts(others, obj, box, clearance, collision_tolerance)
     child_boxes = carried_boxes(scene, object_id, box) if carried else {}
     for child_id in carried:

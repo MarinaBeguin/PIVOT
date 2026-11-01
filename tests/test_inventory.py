@@ -5,8 +5,14 @@ from typing import Any
 
 import numpy as np
 
+from pivot.geometry.box import OrientedBox
+from pivot.lifting.scene_builder import build_scene
 from pivot.meta.client import MetaConfig
-from pivot.perception.inventory import ask_api, contact_sheet, parse_inventory
+from pivot.perception.inventory import (
+    BUILT_IN_KINDS, INVENTORY_PROMPT, ask_api, contact_sheet, parse_inventory,
+)
+from pivot.perception.tracks import Track
+from synthetic import make_reconstruction, orbit_poses, render
 
 
 def test_parse_reads_the_json_array_and_normalizes_names() -> None:
@@ -16,6 +22,25 @@ def test_parse_reads_the_json_array_and_normalizes_names() -> None:
 
 def test_parse_drops_kinds_already_covered_by_a_generic_name() -> None:
     assert parse_inventory('["office chair", "chair", "desk lamp", "lamp"]') == ["chair", "lamp"]
+
+
+def test_fittings_are_asked_for_and_kept_beside_their_generic_name() -> None:
+    assert all(f'"{kind}"' in INVENTORY_PROMPT for kind in BUILT_IN_KINDS)
+    assert "hung on the walls" in INVENTORY_PROMPT
+    assert parse_inventory('["counter", "kitchen counter", "wardrobe", "fitted wardrobe"]') == [
+        "counter", "kitchen counter", "wardrobe", "fitted wardrobe"]
+
+
+def test_a_fitting_is_built_fixed_and_a_chair_movable() -> None:
+    chair = OrientedBox(np.array([0.4, -0.3, 0.45]), np.array([0.6, 0.5, 0.9]), 0.5)
+    counter = OrientedBox(np.array([-0.6, 0.5, 0.45]), np.array([1.6, 0.6, 0.9]), -0.2)
+    poses = orbit_poses()
+    depths, ids = render(poses, [chair, counter])
+    tracks = [Track(i, label, {f: ids[f] == i for f in range(len(ids)) if (ids[f] == i).any()})
+              for i, label in ((1, "chair"), (2, "kitchen counter"))]
+    scene = build_scene(make_reconstruction(poses, depths, np.eye(4)), tracks).scene
+    assert {o.label: o.movable for o in scene.objects.values()} == {
+        "chair": True, "kitchen counter": False}
 
 
 def test_parse_falls_back_to_lines_and_commas_and_caps_the_list() -> None:
