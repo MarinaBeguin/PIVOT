@@ -31,7 +31,7 @@ from pivot.agent.tools import Session, list_objects, plan_path, suggest_placemen
 from pivot.eval.tasks import CARRY_HEIGHT, NEXT_TO_GAP, Task, TaskKind, satisfies, solve
 from pivot.meta.client import MetaConfig, Usage, call_with_retry
 from pivot.geometry.box import OrientedBox
-from pivot.planning.motion import MotionPlan, straight_motion
+from pivot.planning.motion import MotionPlan, segment_free
 from pivot.planning.placement import ConflictKind, check_placement
 from pivot.scene.graph import Scene
 
@@ -140,7 +140,7 @@ def replay_failure(scene: Scene, motions: list[MotionPlan]) -> str:
     for index, motion in enumerate(motions):
         for segment, (a, b) in enumerate(zip(motion.waypoints, motion.waypoints[1:])):
             start = scene.moved(motion.object_id, a)
-            if straight_motion(start, motion.object_id, b) is None:
+            if not segment_free(start, motion.object_id, a, b):
                 conflicts = check_placement(start, motion.object_id, b).conflicts
                 where = "; ".join(c.describe() for c in conflicts) or "between its ends"
                 return f"motion {index} (#{motion.object_id}), segment {segment}: {where}"
@@ -194,6 +194,9 @@ def _collision_depth(scene: Scene, object_id: int, pose: tuple[float, float, flo
 def replay(scene: Scene, motions: list[MotionPlan]) -> Scene | None:
     """Replays executed motions, checking every segment exactly.
 
+    Segments are checked as the planner accepts them: an object may leave or
+    reach a pose where the reconstruction already shows it overlapping others.
+
     Args:
         scene: The initial scene.
         motions: The motions, in execution order.
@@ -203,7 +206,7 @@ def replay(scene: Scene, motions: list[MotionPlan]) -> Scene | None:
     """
     for motion in motions:
         for a, b in zip(motion.waypoints, motion.waypoints[1:]):
-            if straight_motion(scene.moved(motion.object_id, a), motion.object_id, b) is None:
+            if not segment_free(scene.moved(motion.object_id, a), motion.object_id, a, b):
                 return None
         scene = scene.moved(motion.object_id, motion.waypoints[-1])
     return scene
