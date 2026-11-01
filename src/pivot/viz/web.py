@@ -1,7 +1,9 @@
 """Standalone HTML viewer of a scene: point cloud, floor map and object boxes."""
 
 import base64
+import dataclasses
 import json
+from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -74,9 +76,27 @@ class RoomMenu(NamedTuple):
     rooms: list[tuple[str, str]]
 
 
+@dataclass(frozen=True)
+class Features:
+    """What the server behind a page offers; nothing for a page saved as a file.
+
+    Attributes:
+        interactive: The page is served by :mod:`pivot.server`, which plans
+            and executes moves.
+        chat: The server answers requests in words (agent).
+        voice: Requests can also be spoken (microphone).
+        render: The server draws realistic views of the room (Muse Image).
+    """
+
+    interactive: bool = False
+    chat: bool = False
+    voice: bool = False
+    render: bool = False
+
+
 def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,
-                  title: str = "PIVOT scene", interactive: bool = False,
-                  chat: bool = False, voice: bool = False, menu: RoomMenu | None = None) -> str:
+                  title: str = "PIVOT scene", features: Features = Features(),
+                  menu: RoomMenu | None = None) -> str:
     """Renders the self-contained viewer page of a scene.
 
     The page loads three.js from a CDN and embeds all scene data.
@@ -86,10 +106,7 @@ def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,
         points: (N, 3) point cloud.
         colors: (N, 3) RGB colors.
         title: Page title.
-        interactive: Whether the page is served by :mod:`pivot.server`, which
-            enables the controls that plan and execute moves.
-        chat: Whether the server also answers requests in words (agent).
-        voice: Whether requests can also be spoken (microphone).
+        features: What the server behind the page offers.
         menu: The rooms the server offers and this page's room, sent with
             every request; no menu if None.
 
@@ -98,9 +115,7 @@ def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,
     """
     template = resources.files("pivot.viz").joinpath("viewer.html").read_text(encoding="utf-8")
     payload = scene_payload(scene, points, colors, title)
-    payload["interactive"] = interactive
-    payload["chat"] = chat
-    payload["voice"] = voice
+    payload.update(dataclasses.asdict(features))
     payload["scenes"] = [{"id": i, "title": t} for i, t in menu.rooms] if menu else []
     payload["scene"] = menu.current if menu else ""
     # "</" must not appear inside the inline JSON script element.

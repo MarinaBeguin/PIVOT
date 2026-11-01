@@ -95,6 +95,11 @@ tools on this scene):
 - **Voice.** Speak instead of typing (Muse Voice Transcribe, or wav2vec 2.0 with open weights);
   answers can be read aloud, as on glasses without a screen.
 - **Undo** any move, including multi-step ones; the 3D viewer animates every executed path.
+- **Realistic view.** Before moving anything, see the result: one button sends the current 3D view
+  (the scanned points, without boxes) to Muse Image, which turns it into a photograph of the room
+  as planned, ready to download. It shows the mood, not the measurements: those stay PIVOT's.
+
+![Left: the 3D view of a scanned living room; right: the photograph Muse Image made of it](assets/realistic_view.jpg)
 
 <table>
 <tr>
@@ -115,6 +120,7 @@ tools on this scene):
 | **Muse Spark 1.3** | Agent with 13 geometric tools; lists the kinds of objects a video shows | Meta Model API | |
 | **Llama 3.1 8B Instruct** | The same agent, with tool calling | | Served by vLLM on the GPU |
 | **Llama 3.2 11B Vision Instruct** | Lists the kinds of objects a video shows | | Hugging Face transformers, on the GPU |
+| **Muse Image 1.0** | Turns the 3D view of a planned room into a realistic photograph | Meta Model API | |
 | **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
 | **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
 
@@ -234,6 +240,7 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 
 | Variable | Default | Meaning |
 |---|---|---|
+| `PIVOT_IMAGE_MODEL` | `muse-image-1.0` | Model of the realistic view |
 | `PIVOT_SAM_WORKERS` | 5 (API), 3 (GPU) | Prompts tracked at the same time |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
 | `PORT` | 8765 | Port of the viewer |
@@ -313,6 +320,11 @@ Known limitations, measured rather than hidden:
   Hidden parts are inferred, not observed.
 - "No path" means no path exists at the planning resolution (5 cm, 22.5°), not a proof of
   impossibility; making room can take up to about a minute and a half in hard cases.
+- The realistic view is an illustration. Muse Image keeps the furniture and its look, but it may
+  change the viewpoint (a view from above comes back at eye level) and add or drop details (one
+  chair more than the scan holds). Next: hold the viewpoint (a view taken from inside the room,
+  a depth or edge map sent along), check the picture against the scene (count the objects of
+  each kind, and draw again if they differ), and show the moved objects' new place next to it.
 
 Next:
 

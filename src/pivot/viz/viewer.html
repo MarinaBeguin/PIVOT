@@ -69,6 +69,11 @@
   #tourButton { position: fixed; right: 12px; bottom: 12px; z-index: 10; width: 34px; height: 34px;
     border-radius: 50%; padding: 0; font-weight: 700; font-size: 16px; background: var(--panel); }
   @media (max-width: 720px) { #tour .bubble { max-width: calc(100vw - 48px); } }
+  /* A realistic view of the planned room, over the page. */
+  #realView { position: fixed; inset: 0; z-index: 30; background: #000c; display: none;
+              align-items: center; justify-content: center; flex-direction: column; gap: 10px; padding: 16px; }
+  #realView img { max-width: 100%; max-height: calc(100% - 90px); border-radius: 8px; }
+  #realView .hint { max-width: 640px; text-align: center; }
 </style>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap">
 <script type="importmap">
@@ -108,6 +113,7 @@
   </div>
   <div class="row">
     <button id="plan" data-i18n="planButton" data-i18n-title="planTitle">Moving plan (PDF)</button>
+    <button id="renderButton" style="display:none" data-i18n="realView" data-i18n-title="realViewTitle">Realistic view</button>
   </div>
   <div id="result"></div>
   <div class="row"><button id="makeRoom" class="primary" style="display:none" data-i18n="makeRoom">Make room &amp; move</button></div>
@@ -123,6 +129,9 @@
   </div>
 </div>
 <div id="tour"></div>
+<div id="realView"><img id="realImage" alt=""><div class="hint" data-i18n="realViewNote"></div>
+  <div class="row"><a id="realDownload" download="pivot-view.png"><button data-i18n="download">Download</button></a>
+    <button id="realClose" class="primary" data-i18n="close">Close</button></div></div>
 <button id="tourButton" data-i18n-title="tourHelp">?</button>
 <script>__PIVOT_LANGUAGES__</script>
 <script id="scene-data" type="application/json">__PIVOT_SCENE_DATA__</script>
@@ -831,6 +840,43 @@ if (data.chat) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChat(); }
   });
 }
+
+// Realistic view: the 3D view, without boxes, labels nor floor tint (the
+// points of moved objects travel with them), is drawn as a photo by Muse Image.
+const renderButton = document.getElementById("renderButton");
+async function realisticView() {
+  if (busy) return;
+  busy = true;
+  renderButton.disabled = true;
+  const hidden = [boxGroup, volumeGroup, floorGroup, ghost, pathLine].filter(node => node.visible);
+  hidden.forEach(node => { node.visible = false; });
+  renderer.render(scene, camera);
+  const view = renderer.domElement.toDataURL("image/png");
+  hidden.forEach(node => { node.visible = true; });
+  result.textContent = t("drawing");
+  try {
+    const answer = await (await fetch(scoped("/api/render"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ image: view }) })).json();
+    if (answer.error) {
+      result.innerHTML = `<span class="no">${t("error")}</span>\n${escapeHtml(answer.error)}`;
+      return;
+    }
+    result.textContent = "";
+    document.getElementById("realImage").src = answer.image;
+    document.getElementById("realDownload").href = answer.image;
+    document.getElementById("realView").style.display = "flex";
+  } finally {
+    busy = false;
+    renderButton.disabled = false;
+    showLimits();
+  }
+}
+if (data.render) renderButton.style.display = "";
+renderButton.onclick = realisticView;
+document.getElementById("realClose").onclick = () => {
+  document.getElementById("realView").style.display = "none";
+};
 
 // Scripting hook, for tests and recorded demos: the same actions as the controls.
 window.pivot = {
