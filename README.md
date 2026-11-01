@@ -94,10 +94,19 @@ tools on this scene):
   need **two people**.
 - **Voice.** Speak instead of typing (Muse Voice Transcribe, or wav2vec 2.0 with open weights);
   answers can be read aloud, as on glasses without a screen.
-- **Undo** any move, including multi-step ones; the 3D viewer animates every executed path.
+- **Undo** any move, including multi-step ones; the 3D viewer animates every executed path, and
+  each object takes its own reconstructed points along, so nothing is left behind.
+- **Replace furniture.** Take an object out of the room ("remove the old sofa"), then bring a new
+  one in **from a photo**: taken with the phone or picked from the gallery, Muse Spark names it and
+  estimates its size (to correct if needed), SAM 3.1 cuts it out of the photo, and PIVOT puts it
+  at the nearest free spot, ready to be moved like any other object.
 - **Realistic view.** Before moving anything, see the result: one button sends the current 3D view
   (the scanned points, without boxes) to Muse Image, which turns it into a photograph of the room
-  as planned, ready to download. It shows the mood, not the measurements: those stay PIVOT's.
+  as planned, ready to download; objects brought in from a photo are drawn as they look in it. It
+  shows the mood, not the measurements: those stay PIVOT's.
+- **In your language.** The page follows the browser's language (English, French, German,
+  Spanish, Italian, Chinese), which a menu can change; objects, rooms, voice and the agent's
+  answers follow. A short tour in speech bubbles introduces the page on the first visit.
 
 ![Left: the 3D view of a scanned living room; right: the photograph Muse Image made of it](assets/realistic_view.jpg)
 
@@ -123,6 +132,7 @@ tools on this scene):
 | **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
 | **Muse Image 1.0** | Turns the 3D view of a planned room into a realistic photograph | Meta Model API | |
 | **Muse Spark 1.3** (vision) and **SAM 3.1** (image) | Name and size an object from a photo, and cut it out | Meta Model API | |
+| **Llama Prompt Guard 2** (86M) and **Llama Guard 3** (1B) | Optional screening of the public demo's requests, on the CPU, before any API call | | Hugging Face transformers, on the CPU |
 | **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
 
 ![SAM 3.1 tracking the floor lamps through the video, one track per view](assets/sam_tracking.jpg)
@@ -244,6 +254,8 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 | `PIVOT_IMAGE_MODEL` | `muse-image-1.0` | Model of the realistic view |
 | `PIVOT_SAM_WORKERS` | 5 (API), 3 (GPU) | Prompts tracked at the same time |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
+| `PIVOT_AGENT_MODEL` | `muse-spark-1.3` | Agent model, e.g. `muse-wonder-1.0` for the stronger preview model |
+| `PIVOT_GUARD` | unset | Screen requests in words: `prompt-guard`, `llama-guard` or both (gated weights: `HF_TOKEN`) |
 | `PORT` | 8765 | Port of the viewer |
 | `PIVOT_SCRATCH` | `~/pivot_scratch` | Large storage: environments, weights, caches, logs |
 | `PIVOT_SLURM_PARTITION` | Slurm's default | Partition of the GPU jobs (open-weight version) |
