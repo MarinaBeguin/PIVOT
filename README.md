@@ -310,6 +310,61 @@ python -m pivot.eval run --scene <scene.json> --tasks tasks.json --out results.j
 python -m pivot.eval summary --help
 ```
 
+## What it costs
+
+Every figure below is computed from what PIVOT measured (frames of the real videos, tokens of the
+36 evaluation requests, tracking times) and from public prices: the Meta Model API's list prices
+of October 30, 2026 and Modal's per-second rates. Muse Image has no published price yet; PIVOT
+budgets it at $0.10, an upper estimate. They are list prices: a deployment by Meta itself would
+pay its own compute cost instead.
+
+**Building a room, once.** SAM 3.1 is billed $0.0002 per frame and per kind of object tracked;
+this is most of the bill. The scene is then cached and never segmented again.
+
+| Room (frames of the video) | API, 20 kinds, full quality | API, `--quality fast` | Open weights, 8 kinds, rented 48 GB GPU |
+|---|---|---|---|
+| Office or bedroom (704 to 771) | $2.80 to $3.10, about 16 min | about $1, 6 min | 0.8 GPU-hour, about $1.50 to $2 |
+| Classroom (1,932) | $7.70, about 45 min | $2.60, 15 min | 2 GPU-hours, about $4 to $5 |
+| Whole apartment (2,686) | $10.70, about 1 h | $3.60, 20 min | 2.8 GPU-hours, about $5.50 to $7 |
+
+Listing the objects with Muse Spark adds about one cent. Building the 3D scene runs on the CPU,
+with no API cost. On a GPU you already own, the open-weight version costs nothing per room.
+
+**Using it.**
+
+| Action | Cost | Where it comes from |
+|---|---|---|
+| A question to PIVOT (Muse Spark) | $0.07 on average, $0.04 median, $0.33 at most | Measured: 7 model calls and 49,000 input tokens per request on average, because every tool result is read back |
+| The same with Muse Wonder | $0.24 on average | Same tokens at Muse Wonder's prices |
+| The same with Llama 3.1 8B | No API cost; $1.95 per hour the GPU is up | vLLM on a rented 48 GB GPU, whether it answers or waits |
+| A spoken request | $0.0005 for 10 seconds | Muse Voice Transcribe, $0.18 per hour of audio |
+| Bringing in furniture from a photo | about $0.01 to $0.02 (estimated), budgeted $0.05 | One Muse Spark call on the image, one SAM 3.1 image segmentation ($0.0025) per noun tried, up to four |
+| A realistic view | budgeted $0.10 | Muse Image, price not yet published |
+| Screening a request (Llama Guard) | No API cost | On the server's CPU |
+
+For comparison, Muse alone answers for $0.02 a question, and is wrong in 15 of 36 cases: PIVOT
+spends about 3 times more tokens to be right.
+
+**Scenarios.**
+
+| Scenario | Total |
+|---|---|
+| One room, 20 questions (API) | about $4.20, or $2.30 at fast quality |
+| One room, 20 questions, 3 pieces of furniture from photos, each with a realistic view | about $4.70 |
+| Whole apartment, 40 questions, 5 photos and 5 realistic views | about $14, or $7 at fast quality |
+| One room with open weights, a rented GPU for 1 h of questions | about $3.50; nothing on your own GPU (no photos or realistic views: they need the API) |
+
+**Hosting.** The public demo runs on one Modal CPU with 2 GB, about $0.06 per hour while awake;
+it sleeps after 15 minutes without visitors and costs nothing while asleep. With Llama Guard on,
+the container needs more memory (about 6 GB, estimated), about $0.10 per hour.
+
+**What would bring it down at scale.** Most of a question's cost is the same context read again
+at each tool call: billed as cached input ($0.15 instead of $1.25 per million tokens), the
+average question would cost at most $0.02 instead of $0.07 (PIVOT's ledger counts cached tokens
+at the full price, to stay on the safe side). Tracking a third of the frames divides the
+building cost by 3, with the risk of missing objects seen only briefly. A room is segmented once,
+however many questions follow.
+
 ## Engineering
 
 - **266 tests** (geometry, lifting on synthetic rooms rendered exactly, planning, agent with a
@@ -338,7 +393,7 @@ src/pivot/
 
 ## Limitations and roadmap
 
-Known limitations, measured rather than hidden:
+Known limitations:
 
 - Objects slide and rotate about the vertical axis; they are never tilted, so a sofa that would
   pass a door on its side is reported as too wide. The person carrying an object is not modeled,
@@ -385,7 +440,7 @@ could take on the new part; the verifier stays the same.
 | **Outdoors, with Meta glasses** | "Can I get through here with the stroller?", "Is this path wide enough for my wheelchair?": the same passage checks on a street, a station, a park, from what the wearer sees | VGGT or MapAnything (metric 3D from plain video), SAM 3.1 (curbs, poles, benches), DINOv3 (features that hold outdoors); Project Aria glasses and their datasets to develop and test |
 | **Robots** | A delivery or home robot asks PIVOT before it moves: the plan in words is checked against the real geometry, and the robot gets a verified path | Habitat 3 and PARTNR (simulation and benchmark of rearrangement in homes), V-JEPA 2 (world model to plan the robot's actions), Locate 3D (finds the object a sentence refers to in a 3D scan) |
 | **People carrying** | The people holding the sofa modeled, not only the sofa: room for their bodies in a stairwell or a doorway | SAM 3D Body (the 3D shape and pose of a person from an image) |
-| **Loading the moving van** | "Does everything fit in a 12 m³ van, and in which order?": the same collision checks, applied to packing | No new model: the same geometry engine and agent, plus a search for the packing order |
+| **Loading a van** | "Does everything fit in a 12 m³ van, and in which order?": the same collision checks, applied to packing | No new model: the same geometry engine and agent, plus a search for the packing order |
 | **Mixed reality on Quest** | The plan shown in the room itself, each move animated in place, the room taken from the headset instead of a phone scan | The room mesh and anchors Quest already computes; Muse or Llama for the agent |
 | **Every language, spoken** | Speech in languages wav2vec 2.0 does not cover, with open weights | Omnilingual ASR (more than 1,600 languages, open weights) |
 
