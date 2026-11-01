@@ -13,6 +13,7 @@ geometry by :mod:`pivot.planning.motion`.
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
@@ -133,10 +134,10 @@ class ConfigurationSpace:
         if scene.floor is None:
             raise ValueError("Motion planning needs a floor map.")
         floor = scene.floor
-        free = _free_configurations(scene, object_id, floor, yaw_bins, clearance,
-                                    floor_margin, tolerance)
-        roomy = free & _free_configurations(scene, object_id, floor, yaw_bins,
-                                            clearance + comfort, floor_margin, tolerance)
+        free = _cached_free_configurations(scene, object_id, yaw_bins, clearance,
+                                           floor_margin, tolerance)
+        roomy = free & _cached_free_configurations(scene, object_id, yaw_bins,
+                                                   clearance + comfort, floor_margin, tolerance)
         return cls(floor, scene[object_id].box.yaw, yaw_bins, free, roomy)
 
     def yaw(self, yaw_bin: int) -> float:
@@ -228,6 +229,44 @@ class ConfigurationSpace:
         """
         k, row, col = state
         return template.moved(self.position(row, col), self.yaw(k))
+
+
+# Recent results of _free_configurations: finding a spot, then planning the
+# motion to it, both need the same configurations of the same scene.
+_RECENT: OrderedDict[tuple[int, int, int, float, float, float], tuple[Scene, BoolArray]] = \
+    OrderedDict()
+_RECENT_SIZE = 8
+
+
+def _cached_free_configurations(scene: Scene, object_id: int, yaw_bins: int, clearance: float,
+                                floor_margin: float, tolerance: float) -> BoolArray:
+    """Computes :func:`_free_configurations`, reusing a recent result for the same scene.
+
+    Scenes are immutable, so a scene object always has the same configurations.
+
+    Args:
+        scene: The scene; must have a floor map.
+        object_id: The moving object.
+        yaw_bins: Number of yaw bins over half a turn.
+        clearance: Required distance to other objects and walls, in meters.
+        floor_margin: The footprint shrunk by this distance must lie on floor.
+        tolerance: Interpenetration tolerated with other objects, in meters.
+
+    Returns:
+        The (yaw_bins, rows, cols) mask of free configurations; not to be modified.
+    """
+    key = (id(scene), object_id, yaw_bins, clearance, floor_margin, tolerance)
+    recent = _RECENT.get(key)
+    if recent is not None and recent[0] is scene:
+        _RECENT.move_to_end(key)
+        return recent[1]
+    assert scene.floor is not None
+    free = _free_configurations(scene, object_id, scene.floor, yaw_bins, clearance,
+                                floor_margin, tolerance)
+    _RECENT[key] = (scene, free)
+    while len(_RECENT) > _RECENT_SIZE:
+        _RECENT.popitem(last=False)
+    return free
 
 
 def _free_configurations(scene: Scene, object_id: int, floor: FloorMap, yaw_bins: int,

@@ -6,13 +6,12 @@ import numpy as np
 import pytest
 
 from conftest import box
-from pivot.scene.examples import rectangle_floor, sofa_scene
+from pivot.scene.examples import apartment_scene, rectangle_floor, sofa_scene
 from pivot.geometry.floor import FloorMap
 from pivot.planning.cspace import ConfigurationSpace, footprint_kernel
-from pivot.planning.motion import (
-    MotionOptions, MotionStatus, _aliasing, plan_motion, straight_motion,
-)
+from pivot.planning.motion import MotionOptions, MotionStatus, plan_motion, straight_motion
 from pivot.planning.placement import Conflict, ConflictKind, PlacementReport, check_placement
+from pivot.planning.validation import Validator, aliasing
 from pivot.scene.graph import Scene, SceneObject
 
 SOFA = (2.0, 0.9, 0.75)
@@ -167,13 +166,13 @@ def test_straight_motion_slides_only_when_nothing_is_in_the_way() -> None:
     assert straight_motion(scene, 1, scene[1].box.moved(np.array([4.4, 1.5]))) is None
 
 
-def test_only_a_shallow_collision_can_be_voxel_aliasing() -> None:
+def test_only_a_shallow_collision_can_be_voxelaliasing() -> None:
     def report(*conflicts: Conflict) -> PlacementReport:
         return PlacementReport(1, box((0, 0, 0), (1, 1, 1)), list(conflicts))
 
-    assert _aliasing(report(Conflict(ConflictKind.COLLISION, 0.04, 2)))
-    assert not _aliasing(report(Conflict(ConflictKind.COLLISION, 0.12, 2)))
-    assert not _aliasing(report(Conflict(ConflictKind.WALL_CLEARANCE, 0.01)))
+    assert aliasing(report(Conflict(ConflictKind.COLLISION, 0.04, 2)))
+    assert not aliasing(report(Conflict(ConflictKind.COLLISION, 0.12, 2)))
+    assert not aliasing(report(Conflict(ConflictKind.WALL_CLEARANCE, 0.01)))
 
 
 def _dining_scene() -> Scene:
@@ -197,3 +196,24 @@ def test_a_chair_pushed_under_a_table_slides_out() -> None:
     assert not check_placement(scene, 2, scene[2].box).feasible  # The boxes overlap.
     plan = plan_motion(scene, 2, scene[2].box.moved(np.array([4.0, 0.8])))
     assert plan.status is MotionStatus.SUCCESS
+
+
+def test_poses_skipped_by_the_cheap_bound_are_free() -> None:
+    # A pose with a positive bound, and every pose within it, passes the exact test.
+    scene = apartment_scene()
+    rng = np.random.default_rng(1)
+    validator = Validator.create(scene, 2, 0.05, 0.025)
+    start = scene[2].box
+    skipped = 0
+    for _ in range(300):
+        pose = start.moved(rng.uniform([0.2, 0.2], [7.8, 3.8]), rng.uniform(-math.pi, math.pi))
+        free = validator.free_distance(pose)
+        if free <= 0.0:
+            continue
+        skipped += 1
+        assert check_placement(scene, 2, pose, 0.05).feasible
+        shift = rng.normal(size=2)
+        near = pose.moved(pose.center[:2] + 0.5 * free * shift / np.linalg.norm(shift),
+                          pose.yaw + 0.4 * free / (0.5 * math.hypot(*pose.size[:2])))
+        assert check_placement(scene, 2, near, 0.05).feasible
+    assert skipped > 20

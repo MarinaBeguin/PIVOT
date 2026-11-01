@@ -14,6 +14,7 @@ from pivot.geometry.collision import (
     interval_gap,
     polygon_distance,
     polygon_penetration,
+    rectangle_gaps,
 )
 
 
@@ -87,3 +88,16 @@ def test_box_distance_lower_bound_never_exceeds_distance() -> None:
         a = OrientedBox(rng.uniform(-2, 2, 3), rng.uniform(0.1, 1.5, 3), rng.uniform(-3, 3))
         b = OrientedBox(rng.uniform(-2, 2, 3), rng.uniform(0.1, 1.5, 3), rng.uniform(-3, 3))
         assert box_distance_lower_bound(a, b) <= box_distance(a, b) + 1e-9
+
+
+def test_rectangle_gaps_match_the_distance_of_each_pair() -> None:
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        mover = OrientedBox(np.r_[rng.uniform(-1, 1, 2), 0.5], np.r_[rng.uniform(0.1, 2, 2), 1.0],
+                            rng.uniform(-3, 3)).footprint()
+        others = [OrientedBox(np.r_[rng.uniform(-2, 2, 2), 0.5],
+                              np.r_[rng.uniform(0.1, 2, 2), 1.0], rng.uniform(-3, 3)).footprint()
+                  for _ in range(4)]
+        np.testing.assert_allclose(rectangle_gaps(mover, np.array(others)),
+                                   [polygon_distance(mover, o) for o in others], atol=1e-9)
+    assert rectangle_gaps(mover, np.zeros((0, 4, 2))).shape == (0,)
