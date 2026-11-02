@@ -10,8 +10,29 @@
           --warn: #f5a524; --bad: #e5484d; }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
                font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
-  .panel { position: absolute; top: 12px; max-height: calc(100% - 24px); overflow: auto;
+  .panel { position: absolute; top: 12px; max-height: calc(100% - 24px); overflow: auto; z-index: 5;
            background: var(--panel); border-radius: 8px; padding: 12px 14px; backdrop-filter: blur(6px); }
+  body.no-labels .tag:not(.room) { display: none; }
+  /* Phones: the room fills the screen; the panels are drawers opened from a bar at the bottom. */
+  #mobileNav { display: none; position: fixed; left: 0; right: 0; bottom: 0; z-index: 7; gap: 6px;
+               padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); background: #1b2027f2;
+               border-top: 1px solid #fff2; }
+  #mobileNav button { flex: 1; padding: 9px 4px; font-size: 14px; }
+  #mobileNav button.active { background: var(--accent); color: #0b1a12; border-color: var(--accent); }
+  @media (max-width: 720px) {
+    #mobileNav { display: flex; }
+    #panel, #controls { position: fixed; top: auto; left: 0; right: 0; bottom: calc(56px + env(safe-area-inset-bottom));
+             width: auto !important; max-height: 52vh; border-radius: 14px 14px 0 0;
+             box-sizing: border-box; display: none !important; }
+    body.sheet-panel #panel, body.sheet-move #controls, body.sheet-chat #controls { display: block !important; }
+    body.sheet-move #chat { display: none !important; }
+    body.sheet-chat #moveSection { display: none; }
+    body.sheet-chat #chat { margin-top: 0; border-top: none; padding-top: 0; }
+    #chatLog { max-height: 24vh; }
+    .tag { font-size: 10px; padding: 0 4px; }
+    /* The long explanation is in the tour; the drawer keeps the controls. */
+    #moveSection > .hint { display: none; }
+  }
   #panel { left: 12px; width: 260px; }
   #controls { right: 12px; width: 290px; display: none; }
   .panel h1 { font-size: 15px; margin: 0 0 4px; }
@@ -79,6 +100,8 @@
   /* Bottom left: the right-hand panel can reach the bottom of the window and hide it. */
   #tourButton { position: fixed; left: 12px; bottom: 12px; z-index: 10; width: 34px; height: 34px;
     border-radius: 50%; padding: 0; font-weight: 700; font-size: 16px; background: var(--panel); }
+  /* On phones the bottom bar takes the bottom: top right, over the room. */
+  @media (max-width: 720px) { #tourButton { left: auto; right: 12px; top: 12px; bottom: auto; } }
   @media (max-width: 720px) { #tour .bubble { max-width: calc(100vw - 48px); } }
 </style>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap">
@@ -98,11 +121,13 @@
   <label><input type="checkbox" id="showBoxes" checked> <span data-i18n="objectBoxes">Object boxes</span></label>
   <label><input type="checkbox" id="showVolumes" checked> <span data-i18n="objectVolumes">Object volumes</span></label>
   <label><input type="checkbox" id="showFloor" checked> <span data-i18n="walkableFloor">Walkable floor</span></label>
+  <label><input type="checkbox" id="showLabels" checked> <span data-i18n="labels">Labels</span></label>
   <label><span data-i18n="cutAbove">Cut above</span> <span id="cutValue">2.0</span> m
     <input type="range" id="cut" min="0.3" max="4" step="0.1" value="2.0" style="width:100%"></label>
   <select id="languageMenu" data-i18n-title="language"></select>
 </div>
 <div id="controls" class="panel">
+  <div id="moveSection">
   <h2 data-i18n="moveTitle">Move an object</h2>
   <div class="hint" data-i18n="moveHint"></div>
   <div class="row"><span class="key" data-i18n="object">Object</span><span id="selected"></span>
@@ -126,6 +151,7 @@
   <input type="file" id="photoInput" accept="image/*" style="display:none">
   <div id="result"></div>
   <div class="row"><button id="makeRoom" class="primary" style="display:none" data-i18n="makeRoom">Make room &amp; move</button></div>
+  </div>
   <div id="chat">
     <h2 data-i18n="askTitle">Ask PIVOT</h2>
     <div class="hint" data-i18n="askHint"></div>
@@ -137,6 +163,11 @@
       <label><input type="checkbox" id="chatAloud"> <span data-i18n="readAloud">Read answers aloud</span></label></div>
   </div>
 </div>
+<nav id="mobileNav">
+  <button data-sheet="panel" data-i18n="navView">View</button>
+  <button data-sheet="move" data-i18n="navMove" style="display:none">Move</button>
+  <button data-sheet="chat" data-i18n="navAsk" style="display:none">Ask</button>
+</nav>
 <div id="tour"></div>
 <button id="tourButton" data-i18n-title="tourHelp">?</button>
 <script>__PIVOT_LANGUAGES__</script>
@@ -412,6 +443,33 @@ for (const [id, group] of [["showPoints", cloud], ["showBoxes", boxGroup],
   };
 }
 
+// Labels can crowd a small screen: off by default on phones.
+const phone = window.matchMedia("(max-width: 720px)");
+const labelBox = document.getElementById("showLabels");
+labelBox.checked = !phone.matches;
+document.body.classList.toggle("no-labels", !labelBox.checked);
+labelBox.onchange = () => document.body.classList.toggle("no-labels", !labelBox.checked);
+
+// Phones: one drawer at a time, opened (and closed again) from the bottom bar.
+let sheet = null;
+function openSheet(name) {
+  sheet = name === sheet ? null : name;
+  for (const kind of ["panel", "move", "chat"]) document.body.classList.toggle(`sheet-${kind}`, sheet === kind);
+  document.querySelectorAll("#mobileNav button").forEach(button =>
+    button.classList.toggle("active", button.dataset.sheet === sheet));
+}
+document.querySelectorAll("#mobileNav button").forEach(button => {
+  button.onclick = () => openSheet(button.dataset.sheet);
+});
+if (data.interactive) document.querySelector('#mobileNav [data-sheet="move"]').style.display = "";
+if (data.chat) document.querySelector('#mobileNav [data-sheet="chat"]').style.display = "";
+// While a motion plays, the drawer steps aside so that it can be watched.
+async function watchMotions(play) {
+  const open = phone.matches ? sheet : null;
+  if (open) openSheet(open);
+  try { await play(); } finally { if (open && sheet === null) openSheet(open); }
+}
+
 document.getElementById("cut").oninput = e => {
   cutPlane.constant = parseFloat(e.target.value);
   document.getElementById("cutValue").textContent = parseFloat(e.target.value).toFixed(1);
@@ -612,7 +670,8 @@ async function run(name) {
     }
     if (plan.waypoints) drawPath(plan.waypoints);
     if (name === "move_object" && answer.moved) {
-      await animate(selectedId, answer.carried_along || [], plan.waypoints, plan.rolled_up);
+      await watchMotions(() => animate(selectedId, answer.carried_along || [], plan.waypoints,
+                                       plan.rolled_up));
       applyObjects(answer.objects);
       clearSelection();
     } else if (plan.status !== "success") {
@@ -654,10 +713,12 @@ makeRoomButton.onclick = async () => {
       return;
     }
     result.innerHTML = `<span class="ok">${t("moved")}</span>\n${escapeHtml(answer.message)}`;
-    for (const step of answer.steps) {
-      drawPath(step.waypoints);
-      await animate(step.object_id, step.carried_along || [], step.waypoints, step.rolled_up);
-    }
+    await watchMotions(async () => {
+      for (const step of answer.steps) {
+        drawPath(step.waypoints);
+        await animate(step.object_id, step.carried_along || [], step.waypoints, step.rolled_up);
+      }
+    });
     applyObjects(answer.objects);
     clearSelection();
   } finally {
@@ -832,10 +893,12 @@ async function sendChat() {
     speak(answer.answer);
     if (answer.steps.length) chatLine("tools", t("checkedCount", { n: answer.steps.length }));
     clearSelection();
-    for (const motion of answer.motions) {
-      drawPath(motion.waypoints);
-      await animate(motion.object_id, motion.carried_along, motion.waypoints, motion.rolled_up);
-    }
+    await watchMotions(async () => {
+      for (const motion of answer.motions) {
+        drawPath(motion.waypoints);
+        await animate(motion.object_id, motion.carried_along, motion.waypoints, motion.rolled_up);
+      }
+    });
     applyObjects(answer.objects);
   } finally {
     clearInterval(watch);
@@ -1074,20 +1137,27 @@ const tour = document.getElementById("tour");
 const TOUR_KEY = "pivot.tourSeen";
 function tourSteps() {
   const shown = id => document.getElementById(id).offsetParent !== null;
-  const steps = [{ text: "tour1" }, { text: "tour2", target: "panel", side: "left" }];
+  const steps = [{ text: "tour1" }, { text: "tour2", target: "panel", side: "left", sheet: "panel" }];
   if (data.interactive) {
-    steps.push({ text: "tour3", target: "controls", side: "right" },
-               { text: "tourEdit", target: "editButtons", side: "right" });
-    if (shown("photoButton")) steps.push({ text: "tourPhoto", target: "photoButton", side: "right" });
-    steps.push({ text: "tourPlan", target: "plan", side: "right" });
+    steps.push({ text: "tour3", target: "controls", side: "right", sheet: "move" },
+               { text: "tourEdit", target: "editButtons", side: "right", sheet: "move" });
+    if (document.getElementById("photoButton").style.display !== "none")
+      steps.push({ text: "tourPhoto", target: "photoButton", side: "right", sheet: "move" });
+    steps.push({ text: "tourPlan", target: "plan", side: "right", sheet: "move" });
   }
-  if (data.chat && shown("chat")) steps.push({ text: "tour4", target: "chat", side: "right" });
+  if (data.chat && (phone.matches || shown("chat")))
+    steps.push({ text: "tour4", target: "chat", side: "right", sheet: "chat" });
   return steps;
 }
 function showTour(index = 0) {
   const steps = tourSteps();
   document.querySelectorAll(".tour-focus, .tour-raise")
     .forEach(node => node.classList.remove("tour-focus", "tour-raise"));
+  // On a phone, each step opens the drawer it talks about.
+  if (phone.matches) {
+    const wanted = steps[index]?.sheet ?? null;
+    if (sheet !== wanted) openSheet(wanted ?? sheet);
+  }
   if (index >= steps.length) {
     tour.style.display = "none";
     try { localStorage.setItem(TOUR_KEY, "1"); } catch { /* Shown again next time. */ }
@@ -1125,6 +1195,12 @@ function showTour(index = 0) {
   const target = document.getElementById(step.target);
   target.classList.add("tour-focus");
   target.closest(".panel").classList.add("tour-raise");
+  if (phone.matches) {
+    // The drawer fills the bottom of the screen: the bubble goes above it.
+    bubble.style.left = "16px";
+    bubble.style.top = "16px";
+    return;
+  }
   const box = target.getBoundingClientRect();
   const top = Math.min(Math.max(16, box.top + 8), window.innerHeight - bubble.offsetHeight - 16);
   bubble.style.top = `${top}px`;
