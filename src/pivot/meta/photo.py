@@ -1,10 +1,11 @@
 """Objects brought in from a photo: what they are, how big, and their picture.
 
 "Will this armchair fit?": the visitor photographs it (in a shop, online, at a
-friend's) or picks a photo. Muse Spark names it and estimates its size from
-what it looks like; SAM 3.1 cuts it out of the photo, so the page shows it.
-The size is an estimate, which
-the visitor can correct.
+friend's) or picks a photo. Muse Spark names the objects it shows and
+estimates their sizes from what they look like; when there are several (a
+sofa, a coffee table and a lamp in a shop's picture), the visitor picks one.
+SAM 3.1 cuts that one out of the photo, so the page shows it. The size is an
+estimate, which the visitor checks and can correct.
 """
 
 from __future__ import annotations
@@ -27,13 +28,17 @@ from pivot.meta.client import MetaConfig, call_with_retry
 from pivot.perception.detections import Detection
 
 DESCRIBE_PROMPT = (
-    "This photo shows a piece of furniture or another object someone may bring into their "
-    "home. Name it with one short, common English noun, as one would to a mover (\"armchair\", "
-    "\"bookshelf\", \"floor lamp\"), and estimate its real size in meters: width (the longer "
-    "side seen from above), depth and height. Use what the photo shows to judge the scale, "
-    "or the usual size of such an object. Describe its look in a few words (color, material). "
-    'Answer with a JSON object only: {"label": ..., "width_m": ..., "depth_m": ..., '
-    '"height_m": ..., "look": ...}; if the photo shows no such object, {"label": null}.')
+    "This photo shows furniture or other objects someone may bring into their home. List the "
+    "pieces of furniture and large objects it shows, the most prominent first, at most six. "
+    "Name each one with one short, common English noun, as one would to a mover "
+    "(\"armchair\", \"bookshelf\", \"floor lamp\"), and estimate its real size in meters: "
+    "width (the longer side seen from above), depth and height. Use what the photo shows to "
+    "judge the scale, or the usual size of such an object. Describe its look in a few words "
+    '(color, material). Answer with a JSON object only: {"objects": [{"label": ..., '
+    '"width_m": ..., "depth_m": ..., "height_m": ..., "look": ...}, ...]}; if the photo shows '
+    'no such object, {"objects": []}.')
+# Most objects offered from one photo.
+MAX_OBJECTS = 6
 # Estimates outside these bounds are clamped, in meters.
 _SMALLEST, _LARGEST = 0.1, 4.0
 # Nouns SAM 3.1 is asked for after the label, when the label finds nothing: SAM
@@ -42,6 +47,21 @@ _SMALLEST, _LARGEST = 0.1, 4.0
 _FALLBACK_NOUNS = ("furniture", "object")
 # Notches in the top of a mask at most this share of its width wide are filled.
 _WIDEST_NOTCH = 0.25
+
+
+@dataclass(frozen=True)
+class Described:
+    """An object the vision model sees in a photo, before it is cut out.
+
+    Attributes:
+        label: What it is.
+        size: Estimated width, depth and height, in meters (width >= depth).
+        look: Its color and material, in a few words.
+    """
+
+    label: str
+    size: tuple[float, float, float]
+    look: str
 
 
 @dataclass(frozen=True)
@@ -62,8 +82,48 @@ class PhotoObject:
     picture: bytes
 
 
+def _described(data: Any) -> Described | None:
+    """Reads one object of the model's answer.
+
+    Args:
+        data: Its JSON object.
+
+    Returns:
+        The object, its sizes kept sensible; None if it is not one.
+    """
+    try:
+        label = " ".join(str(data.get("label") or "").lower().split())
+        width, depth, height = (float(data[k]) for k in ("width_m", "depth_m", "height_m"))
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+    if not label:
+        return None
+    width, depth = max(width, depth), min(width, depth)
+    width, depth, height = (min(max(v, _SMALLEST), _LARGEST) for v in (width, depth, height))
+    return Described(label, (width, depth, height), str(data.get("look") or ""))
+
+
+def parse_objects(text: str) -> list[Described]:
+    """Reads the model's list of the objects in a photo.
+
+    Args:
+        text: The model's answer: ``{"objects": [...]}``, or one object alone.
+
+    Returns:
+        The objects, the most prominent first, at most :data:`MAX_OBJECTS`.
+    """
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    try:
+        data: Any = json.loads(match.group(0)) if match else {}
+    except json.JSONDecodeError:
+        return []
+    items = data.get("objects", [data]) if isinstance(data, dict) else []
+    found = [d for d in map(_described, items if isinstance(items, list) else []) if d]
+    return found[:MAX_OBJECTS]
+
+
 def parse_description(text: str) -> tuple[str, tuple[float, float, float], str] | None:
-    """Reads the model's description of the photo.
+    """Reads the model's description of the photo's main object.
 
     Args:
         text: The model's answer.
@@ -71,18 +131,8 @@ def parse_description(text: str) -> tuple[str, tuple[float, float, float], str] 
     Returns:
         Label, size (width >= depth) and look; None if no object was named.
     """
-    match = re.search(r"\{.*\}", text, re.DOTALL)
-    try:
-        data: dict[str, Any] = json.loads(match.group(0)) if match else {}
-        label = " ".join(str(data.get("label") or "").lower().split())
-        width, depth, height = (float(data[k]) for k in ("width_m", "depth_m", "height_m"))
-    except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-        return None
-    if not label:
-        return None
-    width, depth = max(width, depth), min(width, depth)
-    width, depth, height = (min(max(v, _SMALLEST), _LARGEST) for v in (width, depth, height))
-    return label, (width, depth, height), str(data.get("look") or "")
+    found = parse_objects(text)
+    return (found[0].label, found[0].size, found[0].look) if found else None
 
 
 def describe_photo(config: MetaConfig, photo: bytes, client: Any = None) -> str:
@@ -165,9 +215,23 @@ def fill_top_notches(mask: BoolArray) -> BoolArray:
     return filled
 
 
+def describe_objects(config: MetaConfig, photo: bytes, client: Any = None) -> list[Described]:
+    """Names the objects of a photo and estimates their sizes.
+
+    Args:
+        config: API configuration.
+        photo: JPEG or PNG.
+        client: SDK client of the vision model; created from ``config`` if None.
+
+    Returns:
+        The objects, the most prominent first; none if the photo shows none.
+    """
+    return parse_objects(describe_photo(config, photo, client))
+
+
 def object_from_photo(config: MetaConfig, photo: bytes, segment: Any = None,
                       client: Any = None) -> PhotoObject | None:
-    """Names an object in a photo, estimates its size and cuts it out.
+    """Names the main object of a photo, estimates its size and cuts it out.
 
     Args:
         config: API configuration.
@@ -179,10 +243,23 @@ def object_from_photo(config: MetaConfig, photo: bytes, segment: Any = None,
     Returns:
         The object, or None if the photo shows none.
     """
-    described = parse_description(describe_photo(config, photo, client))
-    if described is None:
-        return None
-    label, size, look = described
+    found = describe_objects(config, photo, client)
+    return cut_object(photo, found[0], segment) if found else None
+
+
+def cut_object(photo: bytes, described: Described, segment: Any = None) -> PhotoObject:
+    """Cuts an object named in a photo out of it.
+
+    Args:
+        photo: JPEG or PNG.
+        described: The object.
+        segment: Function ``(image path, noun) -> detections`` (SAM 3.1); the
+            photo is not cut out if None.
+
+    Returns:
+        The object, with its picture (the whole photo if it could not be cut out).
+    """
+    label, size, look = described.label, described.size, described.look
     detections: list[Detection] = []
     if segment is not None:
         with tempfile.TemporaryDirectory() as folder:

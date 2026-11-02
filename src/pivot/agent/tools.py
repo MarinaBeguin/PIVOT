@@ -26,6 +26,7 @@ from pivot.geometry.collision import (
     box_distance, footprint_overlap, polygon_distance, polygon_penetration,
 )
 from pivot.planning.access import WALKING_WIDTH, check_access
+from pivot.planning.arrival import arrive, boxed, doors_passed, hang, with_new_object
 from pivot.planning.handling import can_be_carried, people_needed
 from pivot.planning.lift import carry_height, plan_carried_motion, resting_box
 from pivot.planning.motion import MotionOptions, MotionPlan, MotionStatus, plan_motion
@@ -36,7 +37,8 @@ from pivot.planning.rearrange import plan_rearrangement
 from pivot.planning.snap import nearest_feasible_pose
 from pivot.planning.way import plan_way
 from pivot.scene.graph import (
-    Scene, SceneObject, carried_objects, is_flat, is_opening, support_parents,
+    WALL_MOUNTED_LABELS, Scene, SceneObject, carried_objects, is_flat, is_opening, is_wall_mounted,
+    support_parents,
 )
 from pivot.scene.rooms import Passage, RoomMap, find_rooms
 
@@ -501,9 +503,34 @@ def plan_path(session: Session, **arguments: Any) -> JsonDict:
         The motion plan: status, path, effort and tightest clearance.
     """
     request = MoveRequest(**arguments)
+    if is_wall_mounted(session.scene[request.object_id]):
+        return _rehung(session, request)[1].to_dict()
     goal, notes = _goal(session, request)
     plan = _plan(session, request, goal)
     return {**plan.to_dict(), **notes, **_route_notes(session.scene, plan)}
+
+
+def _rehung(session: Session, request: MoveRequest) -> tuple[OrientedBox, MotionPlan]:
+    """Takes a wall object off its wall and hangs it on the wall nearest to a point.
+
+    It is carried by hand, over the furniture: no path is planned, only the
+    new spot is checked.
+
+    Args:
+        session: The session.
+        request: The move; its point picks the wall.
+
+    Returns:
+        The new box (the current one if it cannot hang there), and the plan.
+    """
+    obj = session.scene[request.object_id]
+    arrival = hang(session.scene, obj.object_id, request.x, request.y)
+    if not arrival.placed or arrival.box is None:
+        return obj.box, MotionPlan(MotionStatus.INVALID_GOAL, obj.object_id,
+                                   message=arrival.reason)
+    return arrival.box, MotionPlan(
+        MotionStatus.SUCCESS, obj.object_id, [obj.box, arrival.box],
+        message="Taken off the wall, carried over the furniture and hung again.")
 
 
 def move_object(session: Session, **arguments: Any) -> JsonDict:
@@ -517,8 +544,12 @@ def move_object(session: Session, **arguments: Any) -> JsonDict:
         Whether the move happened, the motion plan, and what moved along.
     """
     request = MoveRequest(**arguments)
-    goal, notes = _goal(session, request)
-    plan = _plan(session, request, goal)
+    notes: JsonDict = {}
+    if is_wall_mounted(session.scene[request.object_id]):
+        goal, plan = _rehung(session, request)
+    else:
+        goal, notes = _goal(session, request)
+        plan = _plan(session, request, goal)
     result: JsonDict = {"moved": plan.status is MotionStatus.SUCCESS, "plan": plan.to_dict(),
                         **notes, **_route_notes(session.scene, plan)}
     if plan.status is MotionStatus.SUCCESS:
@@ -792,46 +823,109 @@ _ADD_SEARCH_M = 15.0
 _RESIZE_SHIFT_M = 1.5
 
 
-def add_object(session: Session, label: str, width_m: float, depth_m: float, height_m: float,
-               x: float | None = None, y: float | None = None,
-               yaw_deg: float | None = None) -> JsonDict:
-    """Brings a new object into the room, at the free spot nearest to a point.
+@dataclass(frozen=True)
+class NewObject:
+    """Arguments of ``add_object``.
 
-    Args:
-        session: The session.
+    Attributes:
         label: What it is, e.g. ``"armchair"``.
         width_m: Its width (long side of its footprint), in meters.
         depth_m: Its depth, in meters.
         height_m: Its height, in meters.
-        x: Where it should go; the middle of the floor if None.
-        y: Where it should go; the middle of the floor if None.
-        yaw_deg: Its orientation; free if None.
+        x: Where it goes; a free spot near the middle of the floor if None.
+        y: Where it goes; a free spot near the middle of the floor if None.
+        yaw_deg: Its orientation; 0 at a spot, free otherwise.
+        make_room: Whether objects standing at the spot are moved aside.
+    """
+
+    label: str
+    width_m: float
+    depth_m: float
+    height_m: float
+    x: float | None = None
+    y: float | None = None
+    yaw_deg: float | None = None
+    make_room: bool = False
+
+    @property
+    def size(self) -> tuple[float, float, float]:
+        """Width, depth and height, in meters."""
+        return (self.width_m, self.depth_m, self.height_m)
+
+
+def add_object(session: Session, **arguments: Any) -> JsonDict:
+    """Brings a new object into the room: exactly at a spot, or at a free one.
+
+    At a given spot (see :mod:`pivot.planning.arrival`), it arrives without a
+    path, as flat-packed furniture assembled in place; movable objects
+    standing there are moved aside if ``make_room``. Without a spot, it goes
+    to the free spot nearest to the middle of the floor.
+
+    Args:
+        session: The session.
+        **arguments: Fields of :class:`NewObject`.
 
     Returns:
-        The object and where it went; or why it fits nowhere.
+        The object, where it went and the doors it would pass assembled; or
+        what stands in the way and why.
     """
+    new = NewObject(**arguments)
     scene = session.scene
-    size = np.array([width_m, depth_m, height_m], dtype=float)
-    if not np.all((size >= 0.05) & (size <= 6.0)):
+    if not all(0.05 <= v <= 6.0 for v in new.size):
         return {"added": False, "reason": "Sizes must be between 5 cm and 6 m."}
-    if x is None or y is None:
-        x, y = scene.floor.middle() if scene.floor is not None else (0.0, 0.0)
-    object_id = max(scene.objects, default=0) + 1
-    box = OrientedBox(np.array([x, y, 0.5 * height_m]), size,
-                      math.radians(yaw_deg) if yaw_deg is not None else 0.0)
-    trial = Scene.from_objects([*scene.objects.values(), SceneObject(object_id, label, box)],
-                               scene.floor, scene.metadata, scene.ceiling)
-    pose = (box if check_placement(trial, object_id, box).feasible else
-            nearest_feasible_pose(trial, object_id, box, _ADD_SEARCH_M,
-                                  allow_rotation=yaw_deg is None))
+    if new.x is not None and new.y is not None:
+        trial, object_id, box = with_new_object(scene, new.label, new.size, new.x, new.y,
+                                                new.yaw_deg or 0.0)
+        arrival = arrive(trial, object_id, box, new.make_room)
+        if not arrival.placed:
+            return {"added": False, "reason": arrival.reason, "in_the_way": [
+                {"id": i, "label": scene[i].label, "movable": scene[i].movable}
+                for i in arrival.in_the_way]}
+        return _added(session, trial.with_box(object_id, arrival.box or box), object_id,
+                      arrival.steps, new)
+    if new.label.lower() in WALL_MOUNTED_LABELS:
+        return {"added": False, "reason": f"A {new.label} hangs on a wall: give a spot (x, y) "
+                                          "on the floor near the wall it goes on."}
+    x, y = scene.floor.middle() if scene.floor is not None else (0.0, 0.0)
+    trial, object_id, box = with_new_object(scene, new.label, new.size, x, y, new.yaw_deg or 0.0)
+    # Never under a table or a desk: checked against the others' whole boxes.
+    filled = boxed(trial, object_id)
+    pose = (box if check_placement(filled, object_id, box).feasible else
+            nearest_feasible_pose(filled, object_id, box, _ADD_SEARCH_M,
+                                  allow_rotation=new.yaw_deg is None))
     if pose is None:
-        return {"added": False, "reason": f"No free spot fits a {label} of "
-                f"{_size_text(size)}: take something out first, or try another room."}
-    session.record(trial.with_box(object_id, pose), [])
-    return {"added": True, "object_id": object_id, "label": label,
+        return {"added": False, "reason": f"No free spot fits a {new.label} of "
+                f"{_size_text(np.array(new.size))}: take something out first, or try another "
+                "room."}
+    return _added(session, trial.with_box(object_id, pose), object_id, [], new)
+
+
+def _added(session: Session, scene: Scene, object_id: int, aside: list[MotionPlan],
+           new: NewObject) -> JsonDict:
+    """Records a new object's arrival, after the objects moved aside for it.
+
+    Args:
+        session: The session.
+        scene: The scene with the new object in place, the others not yet moved.
+        object_id: The new object.
+        aside: Verified motions of the objects moved aside.
+        new: What was asked.
+
+    Returns:
+        The ``add_object`` answer.
+    """
+    pose, moved_aside = scene[object_id].box, []
+    for step in aside:
+        moved_aside.append({**step.to_dict(),
+                            "carried_along": carried_objects(scene, step.object_id)})
+        scene = scene.moved(step.object_id, step.waypoints[-1])
+    session.record(scene, aside)
+    asked = (new.x, new.y) if new.x is not None and new.y is not None else pose.center[:2]
+    return {"added": True, "object_id": object_id, "label": new.label,
             "x": _round(pose.center[0]), "y": _round(pose.center[1]),
-            "yaw_deg": _round(math.degrees(pose.yaw), 1), "size_m": [_round(v) for v in size],
-            "shift_m": _round(float(np.hypot(pose.center[0] - x, pose.center[1] - y)))}
+            "yaw_deg": _round(math.degrees(pose.yaw), 1), "size_m": [_round(v) for v in new.size],
+            "shift_m": _round(float(np.hypot(*(pose.center[:2] - np.asarray(asked))))),
+            "moved_aside": moved_aside, "doors": doors_passed(scene, new.size)}
 
 
 def resize_object(session: Session, object_id: int, width_m: float, depth_m: float,
@@ -1017,13 +1111,15 @@ TOOLS = [
                         ["object_id"]), make_way),
     Tool("undo", "Revert the last move or removal.", _object_schema({}, []), undo),
     Tool("add_object", "Bring a new object into the room (one the user wants to buy or to bring "
-         "from elsewhere), with its size, at the free spot nearest to a point (the middle of "
-         "the floor by default). Only when the user asks; undo takes it out again.",
+         "from elsewhere), with its size. With x and y it goes exactly there, without a path "
+         "(new furniture is often assembled in place); objects standing there are named, or "
+         "moved aside with make_room. Without them, a free spot near the middle. The doors "
+         "it would pass assembled are listed. Only when the user asks; undo takes it out.",
          _object_schema({"label": {"type": "string", "description": "What it is, e.g. sofa."},
                          "width_m": {"type": "number"}, "depth_m": {"type": "number"},
                          "height_m": {"type": "number"},
                          "x": {"type": "number"}, "y": {"type": "number"},
-                         "yaw_deg": {"type": "number"}},
+                         "yaw_deg": {"type": "number"}, "make_room": {"type": "boolean"}},
                         ["label", "width_m", "depth_m", "height_m"]), add_object),
     Tool("resize_object", "Correct the size of an object that was added (its size was "
          "estimated); objects measured in the scan keep theirs.",

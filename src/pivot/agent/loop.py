@@ -63,7 +63,11 @@ Rules:
   asked to take something out (to get rid of it, or to replace it: the old sofa goes before
   the new one comes in). To try a new object (one to buy, or from another room of the
   user's), add_object with its size; a size estimated from a photo can be corrected with
-  resize_object. Then move it like any other object.
+  resize_object. When the user says where it goes, give that spot (x, y): new furniture is
+  often delivered flat-packed and assembled in place, so no path from the door is needed.
+  If objects stand there, name them and offer to move them aside (make_room); say from
+  "doors" whether it would also pass the doors assembled. Then move it like any other object
+  (with a verified path); furniture measured in the scan is never placed without a path.
 - For a request with many moves (rearranging the room), proceed object by object and keep
   going until it is done. Then check with check_access that the room can still be walked
   through (or crossed in a wheelchair, width_m 0.9, if the user cares about it), and say

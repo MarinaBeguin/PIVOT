@@ -142,21 +142,27 @@ def _nearest(scene: Scene, object_id: int, box: OrientedBox,
 def instructions(initial: Scene, motions: list[MotionPlan]) -> list[Step]:
     """Turns executed motions into moving instructions.
 
+    Objects brought into the room are not in the scene the motions start
+    from: their moves are left out, as they are brought straight to where
+    they end up (said apart, see :func:`pivot.viz.plan.instructions_page`).
+
     Args:
         initial: The scene before the first motion.
         motions: The motions, in order of execution.
 
     Returns:
-        One step per motion.
+        One step per motion of an object of the room.
     """
-    steps = []
+    steps: list[Step] = []
     scene = initial
     rooms = find_rooms(initial)
     if rooms is not None and len(rooms.rooms) < 2:
         rooms = None
-    for number, motion in enumerate(motions, start=1):
+    for motion in motions:
+        if motion.object_id not in scene.objects:
+            continue
         after = scene.moved(motion.object_id, motion.waypoints[-1])
-        steps.append(_step(number, scene, after, motion, rooms))
+        steps.append(_step(len(steps) + 1, scene, after, motion, rooms))
         scene = after
     return steps
 

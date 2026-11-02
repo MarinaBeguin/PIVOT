@@ -99,8 +99,15 @@ tools on this scene):
   each object takes its own reconstructed points along, so nothing is left behind.
 - **Replace furniture.** Take an object out of the room ("remove the old sofa"), then bring a new
   one in **from a photo**: taken with the phone or picked from the gallery, Muse Spark names it and
-  estimates its size (to correct if needed), SAM 3.1 cuts it out of the photo, and PIVOT puts it
-  at the nearest free spot, ready to be moved like any other object.
+  estimates its size, which a dialog asks you to check (when the photo shows several objects, you
+  pick one first), and SAM 3.1 cuts it out of the photo. You then put it where you want it, turned
+  as you like: its outline follows the cursor, green where it fits, red where something stands;
+  it never lands hidden under a table, though you can push it there afterwards. A painting or a
+  mirror hangs on the wall nearest to where you click, at eye level, clear of the furniture and
+  of the doors and windows; moved later, it is taken off and hung on another wall. New furniture is often delivered flat-packed and assembled in place, so no path from the
+  door is needed; if the spot is taken, PIVOT moves what stands there aside, each with a verified
+  motion, and says which doors it would also pass assembled. From then on it moves like any other
+  object, with a verified path.
 - **In your language.** The page follows the browser's language (English, French, German,
   Spanish, Italian, Chinese), which a menu can change; objects, rooms, voice and the agent's
   answers follow. A short tour in speech bubbles introduces the page on the first visit.
@@ -413,8 +420,10 @@ Known limitations:
 - "No path" means no path exists at the planning resolution (5 cm, 22.5°), not a proof of
   impossibility; making room can still take tens of seconds in hard cases.
 - An object brought in from a photo has the size Muse Spark estimates from that photo alone: it
-  is approximate, which is why the form asks to correct it. It is then put at the nearest free
-  spot, and its first move must pass the doors assembled. Something standing on it in the photo
+  is approximate, which is why the dialog asks to check it. Its volume is a box, not its shape;
+  the cut-out can miss parts hidden in the photo (a throw over a sofa), and transparent objects
+  (a glass table) are hard to cut out and to size: both are to improve. Whether it passes a door assembled is
+  told from the doors' widths, not from a planned path. Something standing on it in the photo
   (a vase on a sideboard) is cut away by SAM 3.1, and the notch it leaves is filled by a geometric
   rule, which can leave a trace of it.
 - Languages: the page, the objects and the agent's answers follow the six languages, but the
@@ -426,9 +435,6 @@ Known limitations:
 Next:
 
 - **Any phone video**, without depth sensor: poses and depth from Meta's [VGGT](https://github.com/facebookresearch/vggt) or [MapAnything](https://github.com/facebookresearch/map-anything).
-- **Choose where a new piece of furniture goes.** An object brought in from a photo is often
-  delivered flat-packed: click its spot on the plan, it is assembled there (no path from the door
-  needed), and PIVOT makes room if the spot is taken; afterwards it moves like any other object.
 
 ## Possible extensions, and the Meta models for them
 
