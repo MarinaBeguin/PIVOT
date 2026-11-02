@@ -18,6 +18,10 @@ source "$(dirname "$0")/pipeline_common.sh"
 export PIVOT_BACKEND=open
 
 DETECTIONS=$(detections_dir sam_api)
+# Results computed on every frame, before keyframes, count too.
+if ! prompts_done_in "$DETECTIONS" && prompts_done_in "$(KEYFRAMES=0 detections_dir sam_api)"; then
+  DETECTIONS=$(KEYFRAMES=0 detections_dir sam_api)
+fi
 if prompts_done_in "$DETECTIONS"; then
   echo "== [1/4] Reusing the SAM 3.1 API results of this video (no key needed)"
   choose_prompts false

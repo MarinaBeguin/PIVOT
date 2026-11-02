@@ -6,8 +6,10 @@
 #       <out_dir> [prompt ...]
 #
 # Without prompts, Muse Spark lists the objects the video shows (up to
-# PIVOT_MAX_OBJECTS_API, 20). Segments the video (PIVOT_SAM_WORKERS requests in
-# parallel, 5), builds the scene, then serves the viewer with the agent. Steps
+# PIVOT_MAX_OBJECTS_API, 20). Segments every kind of object at once
+# (PIVOT_SAM_WORKERS requests in parallel, 32; PIVOT_KEYFRAMES=1 skips the frames
+# where the camera barely moved), builds the scene, then serves the viewer with
+# the agent. Steps
 # already done are skipped: object list and detections are cached per video,
 # the scene per out_dir.
 set -euo pipefail

@@ -33,6 +33,8 @@ CAPTURE="$1"; VIDEO="$2"; OUT="$3"; shift 3
 PROMPTS=("$@")
 # Read by the GPU jobs, which run a copy of their script.
 export PIVOT_SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# This checkout's code, not another copy installed in the environment.
+export PYTHONPATH="$PIVOT_SRC/src${PYTHONPATH:+:$PYTHONPATH}"
 # Settings of this machine (PIVOT_SCRATCH, SLURM_CONF, PIVOT_SLURM_PARTITION...), if any;
 # never committed.
 [ ! -f "$PIVOT_SRC/scripts/site.env" ] || source "$PIVOT_SRC/scripts/site.env"
@@ -72,11 +74,22 @@ video_id() {
   echo "$(basename "${VIDEO%.*}")_$(stat -L -c '%s %Y' "$VIDEO" | md5sum | cut -c1-8)"
 }
 
+# PIVOT_KEYFRAMES=1: through the API, only the frames where the camera moved
+# enough are tracked (see pivot.perception.keyframes). Off by default: on the
+# apartment it halves the frames, but changed 14 of 35 objects in a simulation.
+KEYFRAMES="${PIVOT_KEYFRAMES:-0}"
+# PIVOT_CHUNK_FRAMES=N: through the API, the video is tracked in pieces of N
+# frames, joined afterwards. SAM 3.1 tracks at most 16 objects of a kind in one
+# request: a classroom with 40 chairs needs pieces. 0 (default) tracks it whole.
+CHUNK_FRAMES="${PIVOT_CHUNK_FRAMES:-0}"
+
 detections_dir() {
   # Detections depend on the video, the frames tracked and the SAM backend only,
   # so they are cached per video: any run on the same video reuses them.
   local suffix=""
   [ "$STEP" -eq 1 ] || suffix="_every$STEP"
+  [ "$1" != sam_api ] || [ "$KEYFRAMES" != 1 ] || suffix="${suffix}_keyframes"
+  [ "$1" != sam_api ] || [ "$CHUNK_FRAMES" -eq 0 ] || suffix="${suffix}_pieces$CHUNK_FRAMES"
   echo "$CACHE/$1/$(video_id)$suffix"
 }
 
@@ -172,7 +185,8 @@ worker_prompts() {
 announce() {
   # Says how many objects are left to track and how long it should take, for
   # each quality. Measured on 704 frames: 0.46 s per frame and prompt on an
-  # A6000 plus 40 s of loading, 0.34 s through the API.
+  # A6000 plus 40 s of loading, 0.34 s through the API (frames counted before
+  # keyframes are picked: an upper bound).
   local backend="$1" workers="$2" video="$3" missing frames
   missing=$(missing_prompts | wc -l)
   if [ "$missing" -eq 0 ]; then
@@ -188,8 +202,8 @@ announce() {
   awk -v n="$missing" -v w="$workers" -v f="$((frames * STEP))" -v q="$QUALITY" \
       -v api="$([ "$backend" = api ] && echo 1 || echo 0)" 'BEGIN {
     rate = api ? 0.34 : 0.46; load = api ? 0 : 40
-    rounds = int((n + w - 1) / w)
     split("full medium fast", names); split("1 2 3", steps)
+    rounds = int((n + w - 1) / w)
     for (i = 1; i <= 3; i++) minutes[names[i]] = (load + rounds * f / steps[i] * rate) / 60
     printf "   %d kinds of objects to track, %d at a time: about %.0f min", n, w, minutes[q]
     printf "%s\n", api ? "" : " once the GPUs are free"
@@ -233,22 +247,27 @@ finish_progress() {
 }
 
 segment_api() {
-  # SAM 3.1 through the Meta API, several prompts at a time.
-  local workers="${PIVOT_SAM_WORKERS:-5}" video worker
+  # SAM 3.1 through the Meta API: one process, every prompt and every piece of
+  # the video at once (PIVOT_SAM_WORKERS requests), the video uploaded once.
+  local workers="${PIVOT_SAM_WORKERS:-32}" video frames=()
   video=$(sam_video)
+  if [ "$KEYFRAMES" = 1 ] && [ -f "$CAPTURE/iphone/pose_intrinsic_imu.json" ]; then
+    [ -f "$DETECTIONS/keyframes.json" ] || (cd "$PIVOT_SRC" && "$PYTHON" \
+      -m pivot.perception.keyframes --scene "$CAPTURE" --stride $((VIDEO_STRIDE * STEP)) \
+      --out "$DETECTIONS/keyframes.json" | sed 's/^/   /')
+    frames=(--frames "$DETECTIONS/keyframes.json")
+  fi
   announce api "$workers" "$video"
-  for ((worker = 0; worker < workers; worker++)); do
-    worker_prompts "$worker" "$workers"
-    [ "${#WORKER_PROMPTS[@]}" -eq 0 ] || (cd "$PIVOT_SRC" && PIVOT_BACKEND=api exec "$PYTHON" \
-      -m pivot.meta.sam --video "$video" --out "$DETECTIONS" --prompts "${WORKER_PROMPTS[@]}") \
-      >"$DETECTIONS/worker_$worker.log" 2>&1 &
-  done
-  # The API returns a prompt's tracks at once: the bar moves prompt by prompt.
+  local missing=()
+  mapfile -t missing < <(missing_prompts)
+  [ "${#missing[@]}" -eq 0 ] || (cd "$PIVOT_SRC" && PIVOT_BACKEND=api exec "$PYTHON" \
+    -m pivot.meta.sam --video "$video" --out "$DETECTIONS" --prompts "${missing[@]}" \
+    "${frames[@]}" --workers "$workers" --chunk-frames "$CHUNK_FRAMES") >"$DETECTIONS/sam.log" 2>&1 &
   while [ -n "$(jobs -rp)" ]; do
     show_progress "tracking"
     sleep 5
   done
-  finish_progress "$DETECTIONS/worker_*.log"
+  finish_progress "$DETECTIONS/sam.log"
 }
 
 segment_local() {
