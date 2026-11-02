@@ -12,11 +12,11 @@ from PIL import Image
 
 from pivot.agent.tools import Session, call_tool
 from pivot.meta.client import MetaConfig
-from pivot.meta.photo import (PhotoObject, cut_out, fill_top_notches, nouns_to_try,
-                              object_from_photo, parse_description)
+from pivot.meta.photo import (Described, PhotoObject, cut_out, fill_top_notches, nouns_to_try,
+                              object_from_photo, parse_description, parse_objects)
 from pivot.perception.detections import Detection
 from pivot.scene.examples import office_scene
-from pivot.server.app import Room, create_app
+from pivot.server.app import Photographer, Room, create_app
 
 
 def jpeg(width: int = 40, height: int = 30) -> bytes:
@@ -109,7 +109,9 @@ def test_the_server_brings_in_the_object_of_a_photo() -> None:
     points, colors = np.zeros((1, 3)), np.zeros((1, 3), dtype=np.uint8)
     room = Room("office", "Office", office_scene(), points, colors)
     seen = PhotoObject("armchair", (0.8, 0.8, 0.9), "red velvet", b"\x89PNGcutout")
-    client = TestClient(create_app([room], photographer=lambda photo: seen))
+    armchair = Described("armchair", (0.8, 0.8, 0.9), "red velvet")
+    client = TestClient(create_app([room], photographer=Photographer(
+        lambda photo: [armchair], lambda photo, chosen: seen)))
     assert '"photos": true' in client.get("/").text
     photo = "data:image/jpeg;base64," + base64.b64encode(jpeg()).decode()
     answer = client.post("/api/photo", json={"image": photo}).json()
@@ -129,6 +131,29 @@ def test_the_server_brings_in_the_object_of_a_photo() -> None:
     assert placed["added"] and (placed["x"], placed["y"]) == (3.5, 1.0)
     assert placed["object_id"] in {o["id"] for o in placed["objects"]}
     assert "Then bring in: the armchair" in client.get("/instructions").text
-    nothing = TestClient(create_app([room], photographer=lambda photo: None))
+    nothing = TestClient(create_app([room], photographer=Photographer(
+        lambda photo: [], lambda photo, chosen: seen)))
     assert nothing.post("/api/photo", json={"image": photo}).json() == {
         "recognized": False, "reason": "no_object"}
+
+
+def test_the_visitor_picks_one_of_the_objects_a_photo_shows() -> None:
+    text = ('{"objects": [{"label": "sofa", "width_m": 2.4, "depth_m": 1.6, "height_m": 0.8}, '
+            '{"label": "coffee table", "width_m": 1.0, "depth_m": 0.6, "height_m": 0.4}]}')
+    assert [d.label for d in parse_objects(text)] == ["sofa", "coffee table"]
+    points, colors = np.zeros((1, 3)), np.zeros((1, 3), dtype=np.uint8)
+    room = Room("office", "Office", office_scene(), points, colors)
+    cuts: list[str] = []
+
+    def cut(_photo: bytes, chosen: Described) -> PhotoObject:
+        cuts.append(chosen.label)
+        return PhotoObject(chosen.label, chosen.size, chosen.look, b"\x89PNGcutout")
+
+    client = TestClient(create_app([room], photographer=Photographer(
+        lambda photo: parse_objects(text), cut)))
+    photo = "data:image/jpeg;base64," + base64.b64encode(jpeg()).decode()
+    listed = client.post("/api/photo", json={"image": photo}).json()
+    # Several objects: they are listed, nothing is cut out yet.
+    assert [c["label"] for c in listed["choices"]] == ["sofa", "coffee table"] and not cuts
+    picked = client.post("/api/photo", json={"image": photo, "choice": listed["choices"][1]})
+    assert picked.json()["label"] == "coffee table" and cuts == ["coffee table"]

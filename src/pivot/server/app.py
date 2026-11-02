@@ -19,10 +19,12 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import dataclasses
 import gzip
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
 import tempfile
@@ -40,11 +42,12 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from pivot.agent.loop import Agent
 from pivot.agent.tools import TOOLS_BY_NAME, Session, call_tool
+from pivot.geometry.box import OrientedBox
 from pivot.geometry.types import FloatArray
 from pivot.lifting.completion import close_windows, complete_rugs
 from pivot.planning.arrival import arrive, with_new_object
 from pivot.meta.client import MetaConfig, Usage
-from pivot.meta.photo import PhotoObject, object_from_photo
+from pivot.meta.photo import Described, PhotoObject, cut_object, describe_objects
 from pivot.meta.sam import SamClient
 from pivot.planning.instructions import instructions
 from pivot.planning.motion import MotionPlan
@@ -65,8 +68,20 @@ _MUTATING = {"move_object", "make_room_and_move", "make_way", "undo", "remove_ob
 MAX_AUDIO_BYTES = 2_000_000
 # A photo sent by a visitor, at most this big.
 MAX_IMAGE_BYTES = 12_000_000
-# Names the object in a photo, sizes it and cuts it out; None if there is none.
-Photographer = Callable[[bytes], PhotoObject | None]
+
+
+@dataclass(frozen=True)
+class Photographer:
+    """Brings objects in from photos.
+
+    Attributes:
+        describe: Names and sizes the objects of a photo, the most prominent first.
+        cut: Cuts one of them out of the photo.
+    """
+
+    describe: Callable[[bytes], list[Described]]
+    cut: Callable[[bytes, Described], PhotoObject]
+
 
 # Marks the owner's browser, see Meter.owner_token.
 OWNER_COOKIE = "pivot_owner"
@@ -163,36 +178,79 @@ def _decode_data_url(url: str) -> bytes | None:
         return None
 
 
-def _photo_reply(photographer: Photographer, body: dict[str, Any],
-                 meter: Meter | None, key: str) -> JSONResponse:
-    """Recognizes the object of a photo, and charges it; the visitor then places it.
-
-    The object is not added here: the visitor chooses its spot, where it is
-    added (``add_object`` at that spot, see :mod:`pivot.planning.arrival`).
+def _ghost_box(box: OrientedBox) -> dict[str, Any]:
+    """Describes a box for the page to draw an object's ghost there.
 
     Args:
-        photographer: Names, sizes and cuts out the object of a photo.
-        body: The photo as a data address.
+        box: The box.
+
+    Returns:
+        Its center, yaw in degrees and size.
+    """
+    return {"x": round(float(box.center[0]), 3), "y": round(float(box.center[1]), 3),
+            "z": round(float(box.center[2]), 3), "yaw_deg": round(math.degrees(box.yaw), 1),
+            "size_m": [round(float(v), 3) for v in box.size]}
+
+
+def _chosen(body: dict[str, Any]) -> Described | None:
+    """Reads the object the visitor picked among those of a photo, if any.
+
+    Args:
+        body: The request body; ``choice`` is ``{"label", "size_m", "look"}``.
+
+    Returns:
+        The object, or None if none was picked or it cannot be read.
+    """
+    choice = body.get("choice")
+    if not isinstance(choice, dict):
+        return None
+    try:
+        width, depth, height = (min(max(float(v), 0.05), 6.0) for v in choice["size_m"])
+        return Described(str(choice["label"])[:60], (width, depth, height),
+                         str(choice.get("look", ""))[:120])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _photo_reply(photographer: Photographer, body: dict[str, Any],
+                 meter: Meter | None, key: str) -> JSONResponse:
+    """Recognizes the objects of a photo, and charges it; the visitor then places one.
+
+    When the photo shows several objects, they are listed for the visitor to
+    pick one, which a second request (with ``choice``) cuts out. The object
+    is not added here: the visitor chooses its spot, where it is added
+    (``add_object`` at that spot, see :mod:`pivot.planning.arrival`).
+
+    Args:
+        photographer: Names, sizes and cuts out the objects of a photo.
+        body: The photo as a data address, and the object picked, if any.
         meter: Prices the request, if the deployment has a budget.
         key: The visitor's key in the ledger.
 
     Returns:
-        What the object is, its estimated size, its look and its picture; or
-        why none was recognized.
+        What the object is, its estimated size, its look and its picture; the
+        objects to pick from; or why none was recognized.
     """
     if meter is not None and (reason := meter.ledger.refusal(key)):
         return JSONResponse({"error": reason}, status_code=429)
     picture = _decode_data_url(str(body.get("image", "")))
     if picture is None or len(picture) > MAX_IMAGE_BYTES:
         return JSONResponse({"error": "The photo could not be read."}, status_code=400)
+    chosen = _chosen(body)
     try:
-        seen = photographer(picture)
+        if chosen is None:
+            found = photographer.describe(picture)
+            if meter is not None:
+                meter.ledger.record(key, meter.photo_price)
+            if len(found) > 1:
+                return JSONResponse({"recognized": True, "choices": [
+                    {"label": d.label, "size_m": [round(v, 2) for v in d.size], "look": d.look}
+                    for d in found]})
+            chosen = found[0] if found else None
+        seen = photographer.cut(picture, chosen) if chosen is not None else None
     except Exception as error:  # pylint: disable=broad-exception-caught
         # A failed model call must reach the page, not break the server.
         return JSONResponse({"error": f"Could not look at the photo: {error}"})
-    finally:
-        if meter is not None:
-            meter.ledger.record(key, meter.photo_price)
     if seen is None:
         return JSONResponse({"recognized": False, "reason": "no_object"})
     cutout = "data:image/png;base64," + base64.b64encode(seen.picture).decode()
@@ -253,7 +311,7 @@ def create_app(rooms: list[Room],
         agent_factory: Creates the agent of a session; None disables requests in words.
         transcriber: Turns spoken requests into text; None disables the microphone.
         meter: Prices requests and enforces a budget; None for a private server.
-        photographer: Names an object in a photo, sizes it and cuts it out;
+        photographer: Names the objects of a photo, sizes them and cuts one out;
             None disables objects from photos.
         guard: Screens requests in words before the agent sees them (Llama
             Prompt Guard, Llama Guard); None screens nothing.
@@ -333,7 +391,7 @@ def create_app(rooms: list[Room],
                         headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
 
     @app.get("/instructions", response_class=HTMLResponse)
-    def moving_plan(request: Request) -> str:
+    def moving_plan(request: Request) -> HTMLResponse:
         """Serves the moving instructions of the visitor's moves so far.
 
         With ``?pdf=1`` the page opens the browser's dialog to save it as a PDF.
@@ -349,10 +407,12 @@ def create_app(rooms: list[Room],
         removed = [(o.label, o.object_id) for o in initial.objects.values()
                    if o.object_id not in session.scene.objects]
         added = [o for o in session.scene.objects.values() if o.object_id not in initial.objects]
-        return instructions_page(session.scene, instructions(initial, session.motions),
+        page = instructions_page(session.scene, instructions(initial, session.motions),
                                  request.state.room.title,
                                  save_pdf=request.query_params.get("pdf") == "1",
                                  removed=removed, added=added)
+        # Always the visitor's latest moves, never a copy kept by the browser.
+        return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 
     @app.get("/api/objects")
     def objects(request: Request) -> list[dict[str, Any]]:
@@ -478,7 +538,8 @@ def create_app(rooms: list[Room],
             request: The request.
 
         Returns:
-            ``{"free": ..., "in_the_way": [ids]}``; nothing is added.
+            ``{"free": ..., "in_the_way": [ids]}``, and ``box`` where a wall
+            object would hang; nothing is added.
         """
         size = tuple(float(v) for v in body["size_m"])
         trial, object_id, box = with_new_object(
@@ -486,7 +547,9 @@ def create_app(rooms: list[Room],
             (size[0], size[1], size[2]), float(body["x"]), float(body["y"]),
             float(body.get("yaw_deg", 0.0)))
         arrival = arrive(trial, object_id, box)
-        return JSONResponse({"free": arrival.placed, "in_the_way": arrival.in_the_way})
+        # Hung on a wall, the ghost is drawn where it would hang.
+        hung = {} if arrival.box is None else {"box": _ghost_box(arrival.box)}
+        return JSONResponse({"free": arrival.placed, "in_the_way": arrival.in_the_way, **hung})
 
     @app.get("/api/limits")
     def limits(request: Request) -> dict[str, Any]:
@@ -573,6 +636,9 @@ def load_room(spec: str, max_points: int | None = None) -> Room:
     # (a no-op for the others).
     scene, points, colors = complete_rugs(close_windows(Scene.load(scene_dir / "scene.json")),
                                           cloud["points"], cloud["colors"])
+    if scene.floor is not None:
+        # Where the walls stand: paintings hang on them.
+        scene = dataclasses.replace(scene, floor=scene.floor.with_walls(points))
     points, colors = _subsample(points, colors, max_points)
     room_id = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
     return Room(room_id, title, scene, points, colors)
@@ -634,18 +700,19 @@ def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: in
 
 
 def _photographer(config: MetaConfig) -> Photographer:
-    """Builds the function that brings objects in from photos, with the Meta API.
+    """Builds what brings objects in from photos, with the Meta API.
 
     Args:
         config: API configuration.
 
     Returns:
-        Muse Spark names and sizes the object; SAM 3.1 cuts it out (its
+        Muse Spark names and sizes the objects; SAM 3.1 cuts one out (its
         answers cached under ``PIVOT_CACHE``, or a temporary folder).
     """
     cache = Path(os.environ.get("PIVOT_CACHE", tempfile.gettempdir())) / "sam_photos"
     sam = SamClient(config, cache)
-    return partial(object_from_photo, config, segment=sam.segment_image)
+    return Photographer(partial(describe_objects, config),
+                        partial(cut_object, segment=sam.segment_image))
 
 
 def main(argv: list[str] | None = None) -> None:

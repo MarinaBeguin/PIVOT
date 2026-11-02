@@ -141,13 +141,15 @@ def _rooms_svg(final: Scene, frame: _Frame) -> list[str]:
     return labels
 
 
-def _objects_svg(final: Scene, frame: _Frame, moved: set[int]) -> list[str]:
-    """Draws the objects where they end up, moved ones highlighted, numbered.
+def _objects_svg(final: Scene, frame: _Frame, moved: set[int],
+                 added: frozenset[int] = frozenset()) -> list[str]:
+    """Draws the objects where they end up, moved and new ones highlighted, numbered.
 
     Args:
         final: The scene after every step.
         frame: Coordinate mapping.
         moved: Ids of the moved objects.
+        added: Ids of the objects brought into the room.
 
     Returns:
         SVG elements.
@@ -159,7 +161,8 @@ def _objects_svg(final: Scene, frame: _Frame, moved: set[int]) -> list[str]:
             color = "#8a5a2b" if obj.label.lower() == "door" else "#3d7fc1"
             shapes.append(f'<polygon points="{corners}" fill="{color}"/>')
             continue
-        fill = "#f2b84b" if obj.object_id in moved else "#aab4b0"
+        fill = "#5bbf8a" if obj.object_id in added else \
+            "#f2b84b" if obj.object_id in moved else "#aab4b0"
         shapes.append(f'<polygon points="{corners}" fill="{fill}" fill-opacity="0.85" '
                       'stroke="#4b5652" stroke-width="0.8"/>')
         x, y = frame.point(obj.box.center[:2])
@@ -193,13 +196,15 @@ def _steps_svg(steps: list[Step], frame: _Frame) -> list[str]:
     return parts
 
 
-def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None) -> str:
+def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None,
+             added: frozenset[int] = frozenset()) -> str:
     """Draws the room from above after the moves.
 
     Args:
         final: The scene after every step.
         steps: The steps, to draw their starts, ends and arrows.
         access: Reachable floor to shade, if known.
+        added: Ids of the objects brought into the room, drawn apart.
 
     Returns:
         An ``<svg>`` element.
@@ -215,7 +220,7 @@ def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None) -> st
         if access is not None:
             parts.append(_cell_runs(final, access.reachable, frame, "#2f9e6b", 0.25))
     parts += _rooms_svg(final, frame)
-    parts += _objects_svg(final, frame, {s.object_id for s in steps})
+    parts += _objects_svg(final, frame, {s.object_id for s in steps}, added)
     parts += _steps_svg(steps, frame)
     parts.append("</svg>")
     return "".join(parts)
@@ -283,11 +288,16 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
         A standalone HTML page.
     """
     items = "".join(f"<li>{html.escape(step.text())}</li>" for step in steps)
+    added, removed = added or [], removed or []
+    new_ids = frozenset(o.object_id for o in added)
     access_text, accessible = _access_text(final, {step.object_id for step in steps})
     two = sum(step.people > 1 for step in steps)
     summary = (f"{len(steps)} move{'s' * (len(steps) != 1)}"
-               + (f", {two} of them with two people" if two else "") + ".")
+               + (f", {two} of them with two people" if two else "")
+               + (f", {len(added)} brought in" if added else "")
+               + (f", {len(removed)} taken out" if removed else "") + ".")
     body = (f"<ol>{items}</ol>" if steps else
+            "" if added or removed else
             "<p>No move yet: ask PIVOT to rearrange the room, then open this page again.</p>")
     if removed:
         names = ", ".join(f"the {label} (#{object_id})" for label, object_id in removed)
@@ -302,9 +312,9 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
             f"<title>Moving plan - {html.escape(title)}</title><style>{_STYLE}</style></head>"
             f"<body{SAVE_PDF_ON_LOAD if save_pdf else ''}>"
             f"<h1>Moving plan</h1><div class='muted'>{html.escape(title)} · {summary} "
-            f"Dashed: where an object starts; orange: where it ends; green: floor a "
-            f"wheelchair can reach.</div>"
+            f"Dashed: where an object starts; orange: where it ends; green: a new "
+            f"object; shaded green: floor a wheelchair can reach.</div>"
             f"<button onclick='print()'>Save as PDF or print</button>"
-            f"{plan_svg(final, steps, check_access(final, WHEELCHAIR_WIDTH))}"
+            f"{plan_svg(final, steps, check_access(final, WHEELCHAIR_WIDTH), new_ids)}"
             f"<p class='access{'' if accessible else ' no'}'>{html.escape(access_text)}</p>"
             f"{body}</body></html>")

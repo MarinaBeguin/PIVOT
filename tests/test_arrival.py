@@ -1,12 +1,14 @@
 """Tests of new furniture arriving exactly where the user puts it."""
 
 import json
+import math
 from typing import Any
 
 import numpy as np
 
 from pivot.agent.tools import Session, call_tool
 from pivot.geometry.shape import VoxelShape
+from pivot.planning.instructions import instructions
 from pivot.scene.examples import box, office_scene, rectangle_floor, two_rooms_floor
 from pivot.scene.graph import Scene, SceneObject
 
@@ -94,3 +96,32 @@ def test_a_new_object_never_goes_under_a_table_but_may_stand_on_a_rug() -> None:
     # Once in the room, it can be pushed under the table like any small object.
     pushed = call(session, "move_object", object_id=on_rug["object_id"], x=2.0, y=1.5)
     assert pushed["moved"]
+
+
+def test_a_painting_hangs_on_the_nearest_wall_and_moves_to_another() -> None:
+    window = SceneObject(1, "window", box((3.0, 3.0, 1.5), (1.0, 0.1, 1.2)), movable=False)
+    session = Session(Scene.from_objects([window], rectangle_floor(4.0, 3.0)))
+    painting = {"label": "painting", "width_m": 1.0, "depth_m": 0.05, "height_m": 0.7}
+    far = call(session, "add_object", **painting, x=2.0, y=1.5)
+    assert not far["added"] and "wall" in far["reason"]
+    on_window = call(session, "add_object", **painting, x=3.0, y=2.6)
+    assert not on_window["added"] and "window" in on_window["reason"]
+    hung = call(session, "add_object", **painting, x=1.0, y=2.6)
+    assert hung["added"]
+    box_on_wall = session.scene[hung["object_id"]].box
+    # Flat against the wall y = 3, at eye level.
+    assert abs(box_on_wall.center[1] - 3.0) < 0.1 and abs(box_on_wall.center[2] - 1.5) < 1e-6
+    assert box_on_wall.size[1] <= 0.1
+    moved = call(session, "move_object", object_id=hung["object_id"], x=3.7, y=1.0)
+    assert moved["moved"]
+    new_box = session.scene[hung["object_id"]].box
+    assert abs(new_box.center[0] - 4.0) < 0.1 and abs(abs(math.sin(new_box.yaw)) - 1.0) < 0.1
+
+
+def test_the_moves_of_a_new_object_stay_out_of_the_moving_plan() -> None:
+    session = Session(Scene.from_objects([], rectangle_floor(4.0, 3.0)))
+    stool = call(session, "add_object", label="stool", width_m=0.4, depth_m=0.4, height_m=0.5,
+                 x=1.0, y=1.0)
+    assert call(session, "move_object", object_id=stool["object_id"], x=3.0, y=2.0)["moved"]
+    # It is brought straight to its last spot: no step replays its moves.
+    assert not instructions(session.history[0], session.motions)

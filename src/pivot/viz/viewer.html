@@ -92,6 +92,8 @@
   #sizeDialog img { display: block; max-width: 100%; max-height: 30vh; margin: 0 auto 10px;
                     border-radius: 6px; background: #fff1; }
   #sizeDialog .grid { margin-top: 12px; }
+  #sizeDialog .choices { display: grid; gap: 6px; margin: 12px 0; }
+  #sizeDialog .choices button { text-align: left; }
   #tour .bubble { position: absolute; max-width: 300px; padding: 14px 16px 12px;
     background: #fffdf3; color: #1d2421; border: 2.5px solid #1d2421; border-radius: 22px;
     box-shadow: 4px 5px 0 #1d2421; font: 15px/1.45 "Comic Neue", "Comic Sans MS", system-ui, sans-serif; }
@@ -591,16 +593,28 @@ function floorPoint(e) {
   return raycaster.ray.intersectPlane(floorPlane, new THREE.Vector3());
 }
 renderer.domElement.addEventListener("pointermove", e => {
-  if (placing && e.pointerType === "mouse") { const p = floorPoint(e); if (p) movePlacing(p); }
+  // The ghost follows the mouse until a click tries a spot; it then stays there (to make
+  // room there, the mouse crosses the view to the panel), until another click.
+  if (placing && !placing.pinned && e.pointerType === "mouse") {
+    const p = floorPoint(e);
+    if (p) movePlacing(p);
+  }
 });
+// A right click drops the object being placed (Escape too); a right drag still pans.
+renderer.domElement.addEventListener("contextmenu", e => { if (placing) e.preventDefault(); });
 renderer.domElement.addEventListener("pointerup", e => {
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  if (placing && e.button === 2) {
+    stopPlacing();
+    return;
+  }
   if (placing) {
     // With a mouse, the ghost already follows: a click puts it. On a touch
     // screen, a tap shows it there, and a button confirms.
     const point = floorPoint(e);
     if (!point) return;
     movePlacing(point);
+    placing.pinned = e.pointerType === "mouse";
     if (e.pointerType === "mouse") placeHere(); else placeHereButton.style.display = "";
     return;
   }
@@ -1138,9 +1152,21 @@ async function addFromPhoto(file) {
   photoButton.disabled = true;
   result.textContent = t("analyzing");
   try {
-    const answer = await (await fetch(scoped("/api/photo"), {
+    const image = await shrunkPhoto(file);
+    const ask = async body => (await fetch(scoped("/api/photo"), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: await shrunkPhoto(file) }) })).json();
+      body: JSON.stringify({ image, ...body }) })).json();
+    let answer = await ask({});
+    // Several objects in the photo: the visitor picks one, then only that one is cut out.
+    if (answer.choices) {
+      const choice = await chooseObject(answer.choices);
+      if (!choice) {
+        result.textContent = "";
+        return;
+      }
+      result.textContent = t("analyzing");
+      answer = await ask({ choice });
+    }
     if (answer.error || !answer.recognized) {
       const why = answer.reason === "no_object" ? t("noObjectInPhoto")
         : escapeHtml(answer.error ?? answer.reason);
@@ -1172,18 +1198,19 @@ placeHereButton.style.display = "none";
 placeHereButton.onclick = () => placeHere();
 // The ghost is grey until the server has checked the spot (the same check as
 // placing, on the real shapes): green if free, red if something stands there.
-function drawPlacing(free = null) {
+function drawPlacing(free = null, hung = null) {
   placeGhost.clear();
   if (!placing || !placing.at) return;
-  const [sx, sy, sz] = placing.size;
+  // A wall object (a painting) is drawn where the server would hang it.
+  const [sx, sy, sz] = hung ? hung.size_m : placing.size;
   const color = free === null ? 0xb0b8c0 : free ? 0x4cc38a : 0xe5484d;
   const box = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), new THREE.MeshBasicMaterial(
     { color, transparent: true, opacity: 0.35, depthTest: false }));
   box.add(new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry),
     new THREE.LineBasicMaterial({ color, depthTest: false })));
   box.renderOrder = 11;
-  box.position.set(placing.at.x, placing.at.y, sz / 2);
-  box.rotation.z = placing.yaw;
+  box.position.set(hung ? hung.x : placing.at.x, hung ? hung.y : placing.at.y, hung ? hung.z : sz / 2);
+  box.rotation.z = hung ? THREE.MathUtils.degToRad(hung.yaw_deg) : placing.yaw;
   placeGhost.add(box);
 }
 let spotTimer = null;
@@ -1196,7 +1223,7 @@ function checkSpot() {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ label: placing.label, size_m: placing.size, x: asked.x, y: asked.y,
                              yaw_deg: THREE.MathUtils.radToDeg(placing.yaw) }) })).json();
-    if (placing?.at === asked) drawPlacing(answer.free);
+    if (placing?.at === asked) drawPlacing(answer.free, answer.box);
   }, 150);
 }
 function movePlacing(point) {
@@ -1210,6 +1237,34 @@ function stopPlacing() {
   placeHereButton.style.display = "none";
   result.textContent = "";
 }
+// Asks the visitor which object of the photo to bring in, when it shows several.
+function chooseObject(choices) {
+  return new Promise(resolve => {
+    const card = sizeDialog.querySelector(".card");
+    card.innerHTML = "";
+    const title = document.createElement("h2");
+    title.textContent = t("pickTitle");
+    const ask = document.createElement("div");
+    ask.className = "hint";
+    ask.textContent = t("pickAsk");
+    const list = document.createElement("div");
+    list.className = "choices";
+    const close = value => { sizeDialog.style.display = "none"; resolve(value); };
+    for (const choice of choices) {
+      const button = document.createElement("button");
+      button.textContent = `${nameOf(choice.label)} (${choice.size_m.map(v => Math.round(100 * v))
+        .join(" × ")} cm)`;
+      button.onclick = () => close(choice);
+      list.append(button);
+    }
+    const cancel = document.createElement("button");
+    cancel.textContent = t("placeCancel");
+    cancel.onclick = () => close(null);
+    card.append(title, ask, list, cancel);
+    sizeDialog.style.display = "flex";
+  });
+}
+
 // Asks the visitor to check the size estimated from the photo, before placing the object.
 const sizeDialog = document.getElementById("sizeDialog");
 function confirmSize(answer) {
@@ -1254,17 +1309,39 @@ function startPlacing(answer) {
   line.textContent = t("placeHint", { name, size: answer.size_m.map(v => Math.round(100 * v))
     .join(" × ") + " cm" });
   const form = sizeInputs(placing.size, size => { placing.size = size; drawPlacing(); checkSpot(); });
+  // Its orientation, in degrees: an object may fit one way and not the other.
+  const turning = document.createElement("div");
+  turning.className = "row";
+  const yawLabel = document.createElement("span");
+  yawLabel.className = "key";
+  yawLabel.textContent = t("rotation");
+  const yawInput = document.createElement("input");
+  Object.assign(yawInput, { type: "number", step: 15, value: 0 });
+  const degrees = document.createElement("span");
+  degrees.className = "hint";
+  degrees.textContent = t("degrees");
+  const turnTo = value => {
+    placing.yaw = THREE.MathUtils.degToRad(value);
+    yawInput.value = String(((Math.round(value) % 360) + 360) % 360);
+    drawPlacing();
+    checkSpot();
+  };
+  yawInput.oninput = () => turnTo(parseFloat(yawInput.value) || 0);
+  turning.append(yawLabel, yawInput, degrees);
   const row = document.createElement("div");
   row.className = "grid three";
   const turn = document.createElement("button");
   turn.textContent = t("placeTurn");
-  turn.onclick = () => { placing.yaw += Math.PI / 2; drawPlacing(); checkSpot(); };
+  turn.onclick = () => turnTo(THREE.MathUtils.radToDeg(placing.yaw) + 90);
   const cancel = document.createElement("button");
   cancel.textContent = t("placeCancel");
   cancel.onclick = stopPlacing;
   placeHereButton.textContent = t("placeHere");
   row.append(turn, cancel, placeHereButton);
-  result.append(line, form, row);
+  const how = document.createElement("div");
+  how.className = "hint";
+  how.textContent = t(phone.matches ? "placeHowTouch" : "placeHowMouse");
+  result.append(line, form, turning, row, how);
 }
 async function placeHere(makeRoom = false) {
   if (!placing?.at || busy) return;
@@ -1281,6 +1358,7 @@ async function placeHere(makeRoom = false) {
       why.innerHTML = `<span class="no">${t("notPossible")}</span>\n${escapeHtml(answer.reason)}`;
       result.querySelectorAll(".placeFail").forEach(node => node.remove());
       why.className = "placeFail";
+      why.append(document.createElement("br"), document.createTextNode(t("placeElsewhere")));
       if (blocked.length && blocked.every(o => o.movable)) {
         const room = document.createElement("button");
         room.className = "primary";
@@ -1367,7 +1445,9 @@ window.pivot = {
   place: answer => startPlacing({ picture: "", look: "", ...answer }),
   // The size dialog shown after a photo; resolves to the size kept, or null.
   confirmSize: answer => confirmSize({ picture: "", ...answer }),
-  placeAt: (x, y) => movePlacing(new THREE.Vector3(x, y, 0)),
+  chooseObject,
+  // Like a click on the floor: the ghost goes there and stays.
+  placeAt: (x, y) => { movePlacing(new THREE.Vector3(x, y, 0)); placing.pinned = true; },
   placeHere,
   view: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); controls.target.set(tx, ty, tz); },
 };

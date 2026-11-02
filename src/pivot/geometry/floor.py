@@ -31,11 +31,42 @@ class FloorMap:
         origin: (2,) world xy of the grid's lower-left corner, in meters.
         resolution: Cell side length, in meters.
         floor: (rows, cols) mask, True where the floor is walkable.
+        walls: (rows, cols) mask, True where walls stand, seen at wall height
+            (see :meth:`with_walls`); None if unknown. The floor seen through
+            the gap under a wall or past its base runs further than the wall.
     """
 
     origin: FloatArray
     resolution: float
     floor: BoolArray
+    walls: BoolArray | None = None
+
+    def with_walls(self, points: FloatArray, low: float = 1.0, high: float = 2.0,
+                   share: float = 0.7) -> FloorMap:
+        """Marks the cells where walls stand: many points between two heights.
+
+        A wall is seen face on, so its cells gather far more points than the
+        noise in front of it: a cell is a wall if it holds at least ``share``
+        of what the densest cells hold (their 95th percentile), at least 20.
+
+        Args:
+            points: (N, 3) points of the room, z up from the floor.
+            low: Bottom of the height band, above most furniture, in meters.
+            high: Top of the band, under most hanging lamps, in meters.
+            share: Share of the densest cells' count a wall cell needs.
+
+        Returns:
+            The same floor map, with its walls.
+        """
+        band = points[(points[:, 2] > low) & (points[:, 2] < high), :2]
+        cells = np.floor((band - self.origin) / self.resolution).astype(int)
+        inside = (cells >= 0).all(axis=1) & (cells[:, 0] < self.shape[1]) \
+            & (cells[:, 1] < self.shape[0])
+        counts = np.zeros(self.shape, dtype=np.int64)
+        np.add.at(counts, (cells[inside, 1], cells[inside, 0]), 1)
+        seen = counts[counts > 0]
+        least = max(20.0, share * float(np.percentile(seen, 95))) if seen.size else np.inf
+        return FloorMap(self.origin, self.resolution, self.floor, counts >= least)
 
     @classmethod
     def from_points(cls, points_xy: FloatArray, resolution: float = 0.05,

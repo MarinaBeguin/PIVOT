@@ -26,7 +26,7 @@ from pivot.geometry.collision import (
     box_distance, footprint_overlap, polygon_distance, polygon_penetration,
 )
 from pivot.planning.access import WALKING_WIDTH, check_access
-from pivot.planning.arrival import arrive, boxed, doors_passed, with_new_object
+from pivot.planning.arrival import arrive, boxed, doors_passed, hang, with_new_object
 from pivot.planning.handling import can_be_carried, people_needed
 from pivot.planning.lift import carry_height, plan_carried_motion, resting_box
 from pivot.planning.motion import MotionOptions, MotionPlan, MotionStatus, plan_motion
@@ -37,7 +37,8 @@ from pivot.planning.rearrange import plan_rearrangement
 from pivot.planning.snap import nearest_feasible_pose
 from pivot.planning.way import plan_way
 from pivot.scene.graph import (
-    Scene, SceneObject, carried_objects, is_flat, is_opening, support_parents,
+    WALL_MOUNTED_LABELS, Scene, SceneObject, carried_objects, is_flat, is_opening, is_wall_mounted,
+    support_parents,
 )
 from pivot.scene.rooms import Passage, RoomMap, find_rooms
 
@@ -502,9 +503,34 @@ def plan_path(session: Session, **arguments: Any) -> JsonDict:
         The motion plan: status, path, effort and tightest clearance.
     """
     request = MoveRequest(**arguments)
+    if is_wall_mounted(session.scene[request.object_id]):
+        return _rehung(session, request)[1].to_dict()
     goal, notes = _goal(session, request)
     plan = _plan(session, request, goal)
     return {**plan.to_dict(), **notes, **_route_notes(session.scene, plan)}
+
+
+def _rehung(session: Session, request: MoveRequest) -> tuple[OrientedBox, MotionPlan]:
+    """Takes a wall object off its wall and hangs it on the wall nearest to a point.
+
+    It is carried by hand, over the furniture: no path is planned, only the
+    new spot is checked.
+
+    Args:
+        session: The session.
+        request: The move; its point picks the wall.
+
+    Returns:
+        The new box (the current one if it cannot hang there), and the plan.
+    """
+    obj = session.scene[request.object_id]
+    arrival = hang(session.scene, obj.object_id, request.x, request.y)
+    if not arrival.placed or arrival.box is None:
+        return obj.box, MotionPlan(MotionStatus.INVALID_GOAL, obj.object_id,
+                                   message=arrival.reason)
+    return arrival.box, MotionPlan(
+        MotionStatus.SUCCESS, obj.object_id, [obj.box, arrival.box],
+        message="Taken off the wall, carried over the furniture and hung again.")
 
 
 def move_object(session: Session, **arguments: Any) -> JsonDict:
@@ -518,8 +544,12 @@ def move_object(session: Session, **arguments: Any) -> JsonDict:
         Whether the move happened, the motion plan, and what moved along.
     """
     request = MoveRequest(**arguments)
-    goal, notes = _goal(session, request)
-    plan = _plan(session, request, goal)
+    notes: JsonDict = {}
+    if is_wall_mounted(session.scene[request.object_id]):
+        goal, plan = _rehung(session, request)
+    else:
+        goal, notes = _goal(session, request)
+        plan = _plan(session, request, goal)
     result: JsonDict = {"moved": plan.status is MotionStatus.SUCCESS, "plan": plan.to_dict(),
                         **notes, **_route_notes(session.scene, plan)}
     if plan.status is MotionStatus.SUCCESS:
@@ -851,7 +881,11 @@ def add_object(session: Session, **arguments: Any) -> JsonDict:
             return {"added": False, "reason": arrival.reason, "in_the_way": [
                 {"id": i, "label": scene[i].label, "movable": scene[i].movable}
                 for i in arrival.in_the_way]}
-        return _added(session, trial.with_box(object_id, box), object_id, arrival.steps, new)
+        return _added(session, trial.with_box(object_id, arrival.box or box), object_id,
+                      arrival.steps, new)
+    if new.label.lower() in WALL_MOUNTED_LABELS:
+        return {"added": False, "reason": f"A {new.label} hangs on a wall: give a spot (x, y) "
+                                          "on the floor near the wall it goes on."}
     x, y = scene.floor.middle() if scene.floor is not None else (0.0, 0.0)
     trial, object_id, box = with_new_object(scene, new.label, new.size, x, y, new.yaw_deg or 0.0)
     # Never under a table or a desk: checked against the others' whole boxes.
