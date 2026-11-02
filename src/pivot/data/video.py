@@ -5,10 +5,14 @@
 """
 
 import argparse
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+import numpy as np
+import numpy.typing as npt
 
 
 def ffmpeg_executable() -> str:
@@ -94,6 +98,105 @@ def subsample_video(video: Path, step: int, output: Path) -> Path:
         raise RuntimeError(f"ffmpeg failed: {completed.stderr.strip()}")
     partial.replace(output)
     return output
+
+
+def frame_runs(indices: list[int]) -> list[tuple[int, int]]:
+    """Groups sorted frame indices into runs of consecutive frames.
+
+    Args:
+        indices: Increasing frame indices.
+
+    Returns:
+        ``(first, last)`` of each run, both included.
+    """
+    runs: list[tuple[int, int]] = []
+    for index in indices:
+        if runs and index == runs[-1][1] + 1:
+            runs[-1] = (runs[-1][0], index)
+        else:
+            runs.append((index, index))
+    return runs
+
+
+def select_frames(video: Path, indices: list[int], output: Path) -> Path:
+    """Keeps the given frames of a video, in order, at the same size.
+
+    Frame ``i`` of the output is frame ``indices[i]`` of the input, so the
+    frames of detections on the output map back through ``indices``.
+
+    Args:
+        video: Input video.
+        indices: Increasing frame indices to keep.
+        output: Destination ``.mp4`` file.
+
+    Returns:
+        The output path.
+
+    Raises:
+        RuntimeError: If ffmpeg fails.
+    """
+    output.parent.mkdir(parents=True, exist_ok=True)
+    partial = output.with_suffix(".part.mp4")
+    keep = "+".join(f"between(n\\,{first}\\,{last})" for first, last in frame_runs(indices))
+    with tempfile.TemporaryDirectory() as tmp:
+        # The filter can be long (one term per run of frames): read from a file.
+        script = Path(tmp) / "filter.txt"
+        script.write_text(f"select={keep},setpts=N/FRAME_RATE/TB", encoding="utf-8")
+        command = [ffmpeg_executable(), "-y", "-loglevel", "error", "-i", str(video),
+                   "-filter_script:v", str(script), "-an", "-c:v", "libx264",
+                   "-pix_fmt", "yuv420p", "-crf", "20", str(partial)]
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {completed.stderr.strip()}")
+    partial.replace(output)
+    return output
+
+
+def read_frames(video: Path, first: int, last: int, width: int, height: int
+                ) -> npt.NDArray[np.uint8]:
+    """Decodes a range of frames of a video.
+
+    Args:
+        video: Video file.
+        first: First frame index.
+        last: Last frame index, included.
+        width: Frame width, in pixels.
+        height: Frame height, in pixels.
+
+    Returns:
+        (last - first + 1, height, width, 3) RGB frames.
+
+    Raises:
+        RuntimeError: If ffmpeg fails.
+    """
+    command = [ffmpeg_executable(), "-v", "error", "-i", str(video),
+               "-vf", f"select=between(n\\,{first}\\,{last}),setpts=N/FRAME_RATE/TB",
+               "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+    completed = subprocess.run(command, capture_output=True, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(f"ffmpeg failed: {completed.stderr.decode().strip()}")
+    return np.frombuffer(completed.stdout, dtype=np.uint8).reshape(-1, height, width, 3)
+
+
+def video_size(video: Path) -> tuple[int, int]:
+    """Reads the frame size of a video.
+
+    Args:
+        video: Video file.
+
+    Returns:
+        ``(width, height)`` in pixels.
+
+    Raises:
+        RuntimeError: If ffmpeg cannot read it.
+    """
+    # ffmpeg describes its input on stderr: "Stream #0:0: Video: h264 ..., 960x720, ...".
+    probe = subprocess.run([ffmpeg_executable(), "-i", str(video)], capture_output=True,
+                           text=True, check=False)
+    match = re.search(r"Video:.*?(\d{2,5})x(\d{2,5})", probe.stderr)
+    if match is None:
+        raise RuntimeError(f"Cannot read the size of {video}: {probe.stderr.strip()}")
+    return int(match.group(1)), int(match.group(2))
 
 
 def count_frames(video: Path) -> int:

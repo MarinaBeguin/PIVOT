@@ -127,6 +127,7 @@ tools on this scene):
 | **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
 | **Muse Spark 1.3** (vision) and **SAM 3.1** (image) | Name and size an object from a photo, and cut it out | Meta Model API | |
 | **Llama Prompt Guard 2** (86M) and **Llama Guard 3** (1B) | Optional screening of the public demo's requests, on the CPU, before any API call | | Hugging Face transformers, on the CPU |
+| **CoTracker3** | Optional: follows an object's pixels across the cut between two pieces of video tracked in parallel, to join its tracks | | PyTorch, on the GPU or the CPU |
 | **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
 
 ![SAM 3.1 tracking the floor lamps through the video, one track per view](assets/sam_tracking.jpg)
@@ -148,7 +149,12 @@ flowchart LR
 
 1. **Perception.** A vision model looks at frames spread over the video and names the kinds of
    objects that matter (up to 20 through the API, 8 with open weights); SAM 3.1 tracks each one
-   through the video. Results are cached per video, so a scene is segmented once.
+   through the video. Through the API, the video is uploaded once and every kind of object is
+   tracked at the same time. Two faster options exist, off by default because they change the
+   scene: skipping the frames where the camera barely moved (small objects change), and cutting a
+   long video into overlapping pieces tracked in parallel, their tracks joined on the shared
+   frames and across the cut by Meta's CoTracker3 following the object's pixels (an object out of
+   view at a cut still splits in two). Results are cached per video, so a scene is segmented once.
 2. **From 2D to 3D.** Each mask is back-projected with depth; a point is kept only if several
    views agree (voxel voting). Tracks are merged or split with explicit rules (never merge two
    tracks SAM separated in the same frame; a part whose mask lies inside another object's mask is
@@ -200,7 +206,7 @@ while understanding language. The evaluation can be reproduced from the command 
 |---|---|---|
 | Needs | A Meta Model API key | An NVIDIA GPU (SAM 3.1 peaked at 45 GB on an A6000), no key |
 | Object list | Muse Spark (up to 20 kinds) | Llama 3.2 Vision (up to 8 kinds) |
-| Segmentation | SAM 3.1 through the API, 5 prompts in parallel | SAM 3.1 self-hosted, 3 GPU jobs in parallel |
+| Segmentation | SAM 3.1 through the API, every kind of object at once | SAM 3.1 self-hosted, 3 GPU jobs in parallel |
 | Agent | Muse Spark | Llama 3.1 8B (vLLM) |
 | Voice | Muse Voice Transcribe | wav2vec 2.0 (English) |
 
@@ -250,7 +256,10 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PIVOT_SAM_WORKERS` | 5 (API), 3 (GPU) | Prompts tracked at the same time |
+| `PIVOT_SAM_WORKERS` | 32 (API), 3 (GPU) | Requests (API) or GPU jobs at the same time |
+| `PIVOT_KEYFRAMES` | 0 | 1: through the API, track only the frames where the camera moved by 8 cm or turned by 5° (half the frames of the apartment, but small objects change: off by default) |
+| `PIVOT_CHUNK_FRAMES` | 0 | N: through the API, track the video in pieces of N frames, joined afterwards. SAM 3.1 follows at most 16 objects of one kind per request: crowded rooms (a classroom's chairs) need pieces, e.g. 200 |
+| `PIVOT_PARSE_WORKERS` | cores, up to 16 | processes decoding SAM 3.1's responses (Meta's parser decodes about three masks a second, in pure Python: this, not the API, sets the time of a run) |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
 | `PIVOT_AGENT_MODEL` | `muse-spark-1.3` | Agent model, e.g. `muse-wonder-1.0` for the stronger preview model |
 | `PIVOT_GUARD` | unset | Screen requests in words: `prompt-guard`, `llama-guard` or both (`pip install -e ".[guard]"`; gated weights: `HF_TOKEN`) |
@@ -312,13 +321,17 @@ of November 1, 2026 and [Modal's per-second rates](https://modal.com/pricing). T
 pay its own compute cost instead.
 
 **Building a room, once.** SAM 3.1 is billed $0.0002 per frame and per kind of object tracked;
-this is most of the bill. The scene is then cached and never segmented again.
+this is most of the bill. Through the API, every kind of object is tracked at once. The scene is
+then cached and never segmented again. Tracking times through the API are estimated from the
+measured rate (0.34 s per frame), not yet measured with every kind of object at once. With
+`PIVOT_KEYFRAMES=1`, the apartment would cost half (1,367 of its 2,686 frames are kept).
 
-| Room (frames of the video) | API, 20 kinds, full quality | API, `--quality fast` | Open weights, 8 kinds, rented 48 GB GPU |
+| Room (frames of the video) | API, 20 kinds | API, `--quality fast` | Open weights, 8 kinds, rented 48 GB GPU |
 |---|---|---|---|
-| Office or bedroom (704 to 771) | $2.80 to $3.10, about 16 min | about $1, 6 min | 0.8 GPU-hour, about $1.50 to $2 |
-| Classroom (1,932) | $7.70, about 45 min | $2.60, 15 min | 2 GPU-hours, about $4 to $5 |
-| Whole apartment (2,686) | $10.70, about 1 h | $3.60, 20 min | 2.8 GPU-hours, about $5.50 to $7 |
+| Office (704) | $2.80, about 4 min | about $0.90, 1.5 min | 0.8 GPU-hour, about $1.50 to $2 |
+| Bedroom (771) | $3.10, about 4.5 min | $1, 1.5 min | 0.8 GPU-hour, about $1.60 to $2 |
+| Classroom (1,932) | $7.70, about 11 min | $2.60, 4 min | 2 GPU-hours, about $4 to $5 |
+| Whole apartment (2,686) | $10.70, about 15 min | $3.60, 5 min | 2.8 GPU-hours, about $5.50 to $7 |
 
 Listing the objects with Muse Spark adds about one cent. Building the 3D scene runs on the CPU,
 with no API cost. On a GPU you already own, the open-weight version costs nothing per room.
@@ -440,7 +453,7 @@ computation, and static questions such as "does this van fit in this garage?".
 ## Acknowledgements
 
 - **Meta**, for the models PIVOT is built on (SAM 3.1, Muse Spark, Muse Voice Transcribe,
-  Llama, Llama Prompt Guard and Llama Guard, wav2vec 2.0), the access to the Meta
+  Llama, Llama Prompt Guard and Llama Guard, CoTracker3, wav2vec 2.0), the access to the Meta
   Model API, and the Global AI Hackathon.
 - **Modal**, which hosts the live demo.
 - **Cyber Valley**, for its support.
