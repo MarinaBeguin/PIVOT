@@ -31,9 +31,9 @@ OPENING_LABELS = frozenset({"door", "window"})
 # curtain through its window, lands behind the wall, so their points spread
 # far from where they hang.
 WALL_MOUNTED_LABELS = frozenset({"mirror", "curtain", "painting", "picture", "poster",
-                                 "whiteboard", "blinds"})
-# Of those, the ones fixed to their window, which the agent does not move.
-FIXED_WALL_LABELS = frozenset({"curtain", "blinds"})
+                                 "whiteboard", "blinds", "board", "blackboard", "chalkboard"})
+# Of those, the ones fixed to their window or wall, which the agent does not move.
+FIXED_WALL_LABELS = frozenset({"curtain", "blinds", "board", "blackboard", "chalkboard"})
 
 # Floor coverings: flat, they slide under furniture and are walked over.
 FLAT_LABELS = frozenset({"rug", "carpet", "mat", "doormat"})

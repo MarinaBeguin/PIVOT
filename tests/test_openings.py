@@ -137,6 +137,45 @@ def test_kitchen_cabinet_doors_are_not_a_door() -> None:
     assert not clean_openings(doors, {1: upper, 2: lower}, WALLS)
 
 
+def test_doors_too_tall_too_wide_or_on_a_window_are_dropped() -> None:
+    rng = np.random.default_rng(7)
+    # A door in the wall y = 3, a window beside it, and a "door" over that window.
+    door = rng.uniform([0.1, 2.95, 0.0], [1.0, 3.05, 2.0], (400, 3))
+    window = rng.uniform([1.8, 2.95, 0.9], [2.6, 3.05, 2.2], (400, 3))
+    on_window = rng.uniform([2.2, 2.95, 0.0], [3.1, 3.05, 2.0], (300, 3))
+    # A floor-to-ceiling "door" on the wall x = 4: a window.
+    tall = rng.uniform([3.95, 1.0, 0.0], [4.05, 1.9, 3.0], (300, 3))
+    objects = [SceneObject(1, "door", box((0.55, 3.0, 1.0), (0.9, 0.1, 2.0)), movable=False),
+               SceneObject(2, "window", box((2.2, 3.0, 1.55), (0.8, 0.1, 1.3)), movable=False),
+               SceneObject(3, "door", box((2.65, 3.0, 1.0), (0.9, 0.1, 2.0)), movable=False),
+               SceneObject(4, "door", box((4.0, 1.45, 1.5), (0.1, 0.9, 3.0)), movable=False)]
+    cleaned = clean_openings(objects, {1: door, 2: window, 3: on_window, 4: tall}, WALLS)
+    assert [o.object_id for o in cleaned] == [1, 2]
+
+
+def test_pieces_wider_than_a_door_together_stay_apart() -> None:
+    rng = np.random.default_rng(8)
+    # Two doors side by side in the wall y = 3: joined, they would be 2 m wide.
+    left = rng.uniform([0.2, 2.95, 0.0], [1.2, 3.05, 2.0], (400, 3))
+    right = rng.uniform([1.25, 2.95, 0.0], [2.25, 3.05, 2.0], (300, 3))
+    doors = [SceneObject(1, "door", box((0.7, 3.0, 1.0), (1.0, 0.1, 2.0)), movable=False),
+             SceneObject(2, "door", box((1.75, 3.0, 1.0), (1.0, 0.1, 2.0)), movable=False)]
+    cleaned = clean_openings(doors, {1: left, 2: right}, WALLS)
+    assert [o.object_id for o in cleaned] == [1]
+    assert cleaned[0].box.size[0] == pytest.approx(1.0, abs=0.06)
+
+
+def test_a_board_hangs_on_its_wall_and_stays() -> None:
+    rng = np.random.default_rng(9)
+    # A blackboard on the wall x = 4, its box reaching 2 m into the room.
+    surface = rng.uniform([3.95, 0.5, 0.8], [4.05, 2.5, 2.0], (500, 3))
+    board = SceneObject(8, "board", box((3.0, 1.5, 1.4), (2.0, 2.0, 1.2)))
+    cleaned = clean_openings([board], {8: surface}, WALLS)
+    assert len(cleaned) == 1 and not cleaned[0].movable
+    assert cleaned[0].box.center[0] == pytest.approx(4.0, abs=0.05)
+    assert cleaned[0].box.size[1] == pytest.approx(0.05)
+
+
 def test_furniture_never_goes_through_a_window() -> None:
     # Floor seen through the glass of a window across the whole room, at y = 3.
     chair = SceneObject(1, "chair", box((2.0, 1.0, 0.45), (0.5, 0.5, 0.9)))
