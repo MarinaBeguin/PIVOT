@@ -104,6 +104,8 @@ tools on this scene):
 - **In your language.** The page follows the browser's language (English, French, German,
   Spanish, Italian, Chinese), which a menu can change; objects, rooms, voice and the agent's
   answers follow. A short tour in speech bubbles introduces the page on the first visit.
+- **On a phone too.** The room fills the screen; the display options, the moves and the
+  questions open as drawers from a bar at the bottom, and step aside while a move plays.
 
 <table>
 <tr>
