@@ -68,6 +68,13 @@ _STRETCH_GAP_BINS = 3
 # A door is at least this tall, once its pieces are joined (shorter ones are
 # the doors of a cabinet), in meters.
 MIN_DOOR_HEIGHT = 1.5
+# A door, double ones included, is at most this wide and this tall; taller ones
+# reaching the ceiling are windows, wider ones several openings joined, in meters.
+MAX_DOOR_WIDTH = 1.8
+MAX_DOOR_HEIGHT = 2.6
+# A "door" overlapping a window on its wall by more than this is the window
+# seen again (glass doors and windows look alike), in meters.
+_DOOR_ON_WINDOW = 0.15
 # The floor in front of an object on a wall is looked at between these
 # distances from it; at least this share of it must be floor on one side
 # (what a mirror shows behind its wall has no floor in front of it).
@@ -411,17 +418,51 @@ def _pieces_of_one(a: OrientedBox, b: OrientedBox) -> bool:
 
 
 def _walkable_door(box: OrientedBox, walls: Walls) -> bool:
-    """Tests whether a door is one people walk through, not a cabinet's.
+    """Tests whether a door is one people walk through, not a cabinet's nor a window.
 
     Args:
         box: The door's snapped box.
         walls: The room's walls.
 
     Returns:
-        True if it is tall enough and has floor right at its foot.
+        True if it is as tall and wide as a door and has floor right at its foot.
     """
-    return bool(box.size[2] >= MIN_DOOR_HEIGHT
+    return bool(MIN_DOOR_HEIGHT <= box.size[2] <= MAX_DOOR_HEIGHT
+                and box.size[0] <= MAX_DOOR_WIDTH
                 and walls.faces_floor(box, *_DOOR_STEP, _MIN_DOOR_STEP_FLOOR))
+
+
+def _along_overlap(a: OrientedBox, b: OrientedBox) -> float:
+    """Measures how far two snapped boxes on one wall overlap along it.
+
+    Args:
+        a: First snapped box.
+        b: Second snapped box.
+
+    Returns:
+        The overlap, in meters; 0 if they are not on the same wall.
+    """
+    if abs(math.remainder(a.yaw - b.yaw, math.pi)) > 1e-3:
+        return 0.0
+    offset = rotation_2d(-a.yaw) @ (b.center[:2] - a.center[:2])
+    if abs(offset[1]) > a.size[1]:
+        return 0.0
+    return max(0.0, float(min(0.5 * a.size[0], offset[0] + 0.5 * b.size[0])
+                          - max(-0.5 * a.size[0], offset[0] - 0.5 * b.size[0])))
+
+
+def _on_a_window(door: SceneObject, objects: list[SceneObject]) -> bool:
+    """Tests whether a door overlaps a window of its wall: the window seen again.
+
+    Args:
+        door: A snapped door.
+        objects: The snapped openings.
+
+    Returns:
+        True if a window covers part of it.
+    """
+    return any(o.label.lower() == "window" and _along_overlap(door.box, o.box) > _DOOR_ON_WINDOW
+               for o in objects)
 
 
 def _same_object(a: SceneObject, b: SceneObject, min_overlap: float) -> bool:
@@ -446,11 +487,13 @@ def clean_openings(objects: list[SceneObject], points: dict[int, FloatArray], wa
     """Snaps every opening and wall-mounted object to its wall, merges duplicates and pieces.
 
     Of two openings found at the same place, the one with more points is
-    kept, with the union of both extents; so are pieces of one object. Then
-    doors too short to be doors or with no floor at their foot (cabinet
-    doors), and objects with no floor in front of them (seen in a mirror or
-    through a window), are dropped. Curtains and
-    blinds are fixed; a mirror or a painting can still be moved.
+    kept, with the union of both extents (for a door, as long as it stays as
+    wide as a door); so are pieces of one object. Then doors too short to be
+    doors or with no floor at their foot (cabinet doors), too tall or too
+    wide, or overlapping a window (the window seen again), and objects with
+    no floor in front of them (seen in a mirror or through a window), are
+    dropped. Curtains, blinds and boards are fixed; a mirror or a painting
+    can still be moved.
 
     Args:
         objects: All objects; the others are kept as they are.
@@ -477,10 +520,14 @@ def clean_openings(objects: list[SceneObject], points: dict[int, FloatArray], wa
         match = next((k for k in kept if _same_object(k, item, min_overlap)), None)
         if match is None:
             kept.append(item)
-        else:
-            kept[kept.index(match)] = replace(match, box=_union_along(match.box, item.box))
+            continue
+        union = _union_along(match.box, item.box)
+        # Pieces too wide together for one door are two openings: the surer one stays.
+        if match.label.lower() != "door" or union.size[0] <= MAX_DOOR_WIDTH:
+            kept[kept.index(match)] = replace(match, box=union)
     kept = [o for o in kept if (not is_opening(o) or o.box.size[0] >= min_width)
-            and (o.label.lower() != "door" or _walkable_door(o.box, walls))
+            and (o.label.lower() != "door"
+                 or (_walkable_door(o.box, walls) and not _on_a_window(o, kept)))
             and walls.faces_floor(o.box)]
     return others + sorted(kept, key=lambda o: o.object_id)
 
