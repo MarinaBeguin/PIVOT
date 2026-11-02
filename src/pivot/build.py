@@ -13,6 +13,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import math
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ from pathlib import Path
 import numpy as np
 
 from pivot.data.scannetpp import load_scannetpp_iphone
+from pivot.lifting.completion import close_windows, complete_rugs
 from pivot.lifting.scene_builder import BuildConfig, BuiltScene, build_scene
 from pivot.perception.detections import tracks_from_detections
 from pivot.perception.sam3_local import load_detections, prompt_filename
@@ -105,8 +107,11 @@ def build(recon: Reconstruction, detection_dir: Path, out_dir: Path,
     tracks = load_tracks(detection_dir, video_width, recon.image_size, prompts)
     built = build_scene(recon, tracks, BuildConfig())
     out_dir.mkdir(parents=True, exist_ok=True)
-    built.scene.save(out_dir / "scene.json")
     points, colors = colored_points(built.recon)
+    # Rugs go on under the furniture that hides them, with points there; windows are walls.
+    scene, points, colors = complete_rugs(close_windows(built.scene), points, colors)
+    built = dataclasses.replace(built, scene=scene)
+    built.scene.save(out_dir / "scene.json")
     # The server reloads the cloud with the scene, without the capture.
     np.savez_compressed(out_dir / "cloud.npz", points=points.astype(np.float32), colors=colors)
     export_viewer(built.scene, points, colors, out_dir / "viewer.html",

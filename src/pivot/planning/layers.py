@@ -21,7 +21,7 @@ from scipy import ndimage, signal
 
 from pivot.geometry.box import OrientedBox, rotation_2d
 from pivot.geometry.floor import FloorMap
-from pivot.geometry.types import BoolArray, FloatArray
+from pivot.geometry.types import BoolArray, FloatArray, IntArray
 from pivot.scene.graph import Scene, SceneObject, obstructs
 
 
@@ -194,13 +194,36 @@ def _shape_obstacle(obj: SceneObject, floor: FloorMap, slab: int, height: float,
     # A cell belongs to every slab its vertical extent touches.
     inside = (centers[:, 2] + half > max(slab * height, band[0])) \
         & (centers[:, 2] - half < min((slab + 1) * height, band[1]))
-    grid = np.zeros(floor.shape, dtype=bool)
     cells = np.floor((centers[inside, :2] - floor.origin) / floor.resolution).astype(np.int64)
     valid = ((cells >= 0) & (cells < np.array(floor.shape[::-1]))).all(axis=1)
-    grid[cells[valid, 1], cells[valid, 0]] = True
+    return _dilated(floor, cells[valid, 1], cells[valid, 0], radius)
+
+
+def _dilated(floor: FloorMap, rows: IntArray, cols: IntArray, radius: float) -> BoolArray:
+    """Marks the grid cells within a distance of some cells.
+
+    Only the window around the cells is dilated, not the whole floor.
+
+    Args:
+        floor: The grid.
+        rows: Row indices of the cells, within the grid.
+        cols: Column indices of the cells.
+        radius: Distance between cell centers, in meters.
+
+    Returns:
+        A (rows, cols) mask.
+    """
+    result: BoolArray = np.zeros(floor.shape, dtype=bool)
+    if rows.size == 0:
+        return result
     steps = int(math.ceil(radius / floor.resolution))
     disk = np.hypot(*np.mgrid[-steps:steps + 1, -steps:steps + 1]) * floor.resolution <= radius
-    result: BoolArray = ndimage.binary_dilation(grid, structure=disk) if grid.any() else grid
+    top, left = max(int(rows.min()) - steps, 0), max(int(cols.min()) - steps, 0)
+    bottom = min(int(rows.max()) + steps + 1, floor.shape[0])
+    right = min(int(cols.max()) + steps + 1, floor.shape[1])
+    window = np.zeros((bottom - top, right - left), dtype=bool)
+    window[rows - top, cols - left] = True
+    result[top:bottom, left:right] = ndimage.binary_dilation(window, structure=disk)
     return result
 
 

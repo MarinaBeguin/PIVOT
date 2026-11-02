@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,10 @@ Rules:
   conversation says so. Quote the numbers (gaps, clearances, effort) from the tool results.
 - A free destination (check_placement, propose_placements) is not enough: use plan_motion
   or move_object to verify the object can actually get there.
+- To make a move the user asked for, call move_object directly: it searches and verifies
+  the path itself and moves nothing if there is none. Calling plan_motion first plans the
+  same path twice. Use plan_motion only to test without moving, and do not repeat a check
+  whose result you already have: these searches take seconds each.
 - If a request is infeasible, say why with the measured numbers, then look for the closest
   feasible alternative (another spot, another orientation, moving another object first).
   Propose it, but do not move anything to an alternative the user has not agreed to.
@@ -51,8 +56,9 @@ Rules:
   heights, and offer to push it against the table instead.
 - A warning "stands in front of the door" means the passage is blocked; beside the door,
   against the same wall, raises no warning. A warning does not make a pose infeasible: if
-  the user asked for that exact spot, do it and mention the warning; avoid it only when the
-  user asked to keep doors or windows clear.
+  the user asked for that exact spot, do it and mention the warning. When several poses do
+  what the user asked (along a wall, behind a desk), take one that keeps doors and windows
+  clear; if none does, say so before anything else in your answer.
 - Only call move_object when the user asked to move something, and remove_object when they
   asked to take something out (to get rid of it, or to replace it: the old sofa goes before
   the new one comes in). To try a new object (one to buy, or from another room of the
@@ -61,7 +67,13 @@ Rules:
 - For a request with many moves (rearranging the room), proceed object by object and keep
   going until it is done. Then check with check_access that the room can still be walked
   through (or crossed in a wheelchair, width_m 0.9, if the user cares about it), and say
-  so; if a move blocks a passage, say which and propose a fix.
+  so; if a move blocks a passage, say which and propose a fix. Never say the doors are
+  clear unless doors_clear is true: name each piece of furniture in front of a door, and
+  whether your moves put it there (there_before_any_move false) or it already stood there.
+- To make room for someone at a place (a wheelchair at a table, access to a bed), call
+  make_way once with that object: it chooses the spot and the passage that move the fewest
+  objects and moves them. Do not move objects one by one for it. Say which door the way
+  starts from, its width, and what was moved; if it fails, say why with its message.
 - When an object needs two people to move (people_needed in list_objects), say so.
 - When the home has several rooms (rooms in list_objects), call places by their room names.
   To move something into another room, use plan_to_room or move_to_room: they find a free
@@ -157,7 +169,8 @@ class Agent:
         self.usage.add(response)
         return response.choices[0].message
 
-    def ask(self, request: str, language: str | None = None) -> AgentRun:
+    def ask(self, request: str, language: str | None = None,
+            on_step: Callable[[str, dict[str, Any]], None] | None = None) -> AgentRun:
         """Handles one user request, keeping the conversation history.
 
         Args:
@@ -165,6 +178,8 @@ class Agent:
             language: Code of the language of the user's page (see
                 :data:`LANGUAGE_NAMES`); the answer is in it unless the user
                 writes in another one.
+            on_step: Told each tool call (name, arguments) before it runs, so
+                that a long request can show what it is doing.
 
         Returns:
             The answer and the tool calls that support it.
@@ -188,12 +203,14 @@ class Agent:
                 run.answer = message.content or ""
                 return run
             for call in calls:
-                result = call_tool(self.session, call.function.name, call.function.arguments)
-                self.messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
                 try:
                     arguments = json.loads(call.function.arguments or "{}")
                 except json.JSONDecodeError:
                     arguments = {"raw": call.function.arguments}
+                if on_step is not None:
+                    on_step(call.function.name, arguments)
+                result = call_tool(self.session, call.function.name, call.function.arguments)
+                self.messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
                 run.steps.append(Step(call.function.name, arguments, json.loads(result)))
         run.finished = False
         run.answer = self._wrap_up()

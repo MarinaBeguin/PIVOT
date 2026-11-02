@@ -6,6 +6,8 @@ moves through ``move_object``, which first plans and validates the motion.
 All answers are JSON with numeric fields in meters and degrees, so the model
 can reason about magnitudes rather than paraphrase verdicts.
 """
+# One function per tool, next to the tool's description: kept in one module.
+# pylint: disable=too-many-lines
 
 from __future__ import annotations
 
@@ -28,11 +30,13 @@ from pivot.planning.handling import can_be_carried, people_needed
 from pivot.planning.lift import carry_height, plan_carried_motion, resting_box
 from pivot.planning.motion import MotionOptions, MotionPlan, MotionStatus, plan_motion
 from pivot.planning.relocate import route, spots_in_room
+from pivot.planning.roll import ROLL_DIAMETER, plan_rolled_motion
 from pivot.planning.placement import check_placement, opening_warnings, propose_placements
 from pivot.planning.rearrange import plan_rearrangement
 from pivot.planning.snap import nearest_feasible_pose
+from pivot.planning.way import plan_way
 from pivot.scene.graph import (
-    Scene, SceneObject, carried_objects, is_opening, support_parents,
+    Scene, SceneObject, carried_objects, is_flat, is_opening, support_parents,
 )
 from pivot.scene.rooms import Passage, RoomMap, find_rooms
 
@@ -405,6 +409,25 @@ def _auto_plan(session: Session, request: MoveRequest, goal: OrientedBox) -> Mot
 
 
 def _plan(session: Session, request: MoveRequest, goal: OrientedBox) -> MotionPlan:
+    """Plans a move, rolling a rug up when it does not pass flat.
+
+    Args:
+        session: The session.
+        request: The move.
+        goal: Its goal pose, resting on its support.
+
+    Returns:
+        The plan.
+    """
+    plan = _rigid_plan(session, request, goal)
+    if plan.status is MotionStatus.NO_PATH and is_flat(session.scene[request.object_id]):
+        rolled = plan_rolled_motion(session.scene, request.object_id, goal, request.options)
+        if rolled.status is MotionStatus.SUCCESS:
+            return rolled
+    return plan
+
+
+def _rigid_plan(session: Session, request: MoveRequest, goal: OrientedBox) -> MotionPlan:
     """Plans a move along the floor, or a carried move when the height changes.
 
     A carry that fails (a chair under a desk cannot be lifted where it
@@ -547,6 +570,9 @@ def _too_wide(rooms: RoomMap, obj: SceneObject, room_id: int, clearance_m: float
     """
     narrow = _narrowest_way(rooms, rooms.object_rooms.get(obj.object_id, 0), room_id)
     smallest = float(min(obj.box.size[:2]))
+    if is_flat(obj):
+        # A rug is rolled up to pass.
+        smallest = min(smallest, ROLL_DIAMETER)
     if narrow is None or smallest + clearance_m <= narrow.width - _DOORWAY_TOLERANCE:
         return None
     door = f" (door #{narrow.door_id})" if narrow.door_id is not None else ""
@@ -689,6 +715,35 @@ def make_room_and_move(session: Session, **arguments: Any) -> JsonDict:
     return result
 
 
+def make_way(session: Session, object_id: int, width_m: float = 0.9, spot_width_m: float = 0.8,
+             spot_depth_m: float = 1.0) -> JsonDict:
+    """Clears a passage from a door to a free spot at an object, moving as few objects as possible.
+
+    Args:
+        session: The session.
+        object_id: The object to reach (a table).
+        width_m: Width of the passage, in meters (0.9 for a wheelchair).
+        spot_width_m: Width of the spot at the object, along its side.
+        spot_depth_m: Depth of the spot, away from the object.
+
+    Returns:
+        Whether the way is clear, the spot, the door, and each object moved
+        aside with what moved along. One ``undo`` reverts all of them.
+    """
+    scene = session.scene
+    way = plan_way(scene, object_id, width_m, (spot_depth_m, spot_width_m))
+    result: JsonDict = {**way.to_dict(scene, width_m), "moved": bool(way.success and way.steps)}
+    if way.success and way.steps:
+        steps = []
+        for step in way.steps:
+            steps.append({**step.to_dict(),
+                          "carried_along": carried_objects(scene, step.object_id)})
+            scene = scene.moved(step.object_id, step.waypoints[-1])
+        result["steps"] = steps
+        session.record(scene, way.steps)
+    return result
+
+
 def check_passages(session: Session, width_m: float = WALKING_WIDTH) -> JsonDict:
     """Checks that a person of a given width can still get around the room.
 
@@ -697,13 +752,15 @@ def check_passages(session: Session, width_m: float = WALKING_WIDTH) -> JsonDict
         width_m: Width needed to pass, in meters: 0.6 walking, 0.9 a wheelchair.
 
     Returns:
-        The share of the free floor reachable from the doors, the doors with
-        no room in front, and the objects nobody can get within reach of.
+        The share of the free floor reachable from the doors, the doors with no
+        room or with furniture in front (there before any move or not), and the
+        objects nobody can get within reach of.
     """
     report = check_access(session.scene, width_m)
-    if report is None:
+    before = check_access(session.history[0] if session.history else session.scene, width_m)
+    if report is None or before is None:
         return {"error": "The floor of this scene is unknown: passages cannot be checked."}
-    return report.to_dict()
+    return report.to_dict(before)
 
 
 def remove_object(session: Session, object_id: int) -> JsonDict:
@@ -950,6 +1007,14 @@ TOOLS = [
          "reachable floor, blocked doors, objects nobody can reach. width_m: 0.6 walking "
          "(default), 0.9 a wheelchair.",
          _object_schema({"width_m": {"type": "number"}}, []), check_passages),
+    Tool("make_way", "Make room for a person or a wheelchair at an object (a pupil in a "
+         "wheelchair at a table, a walker by a bed): finds the spot at the object and the "
+         "passage from a door that move the fewest objects, pushes them aside (a table with "
+         "its chairs, as one), and checks the way is clear. One call does it all; one undo "
+         "reverts it. width_m: 0.9 for a wheelchair.",
+         _object_schema({"object_id": _ID, "width_m": {"type": "number"},
+                         "spot_width_m": {"type": "number"}, "spot_depth_m": {"type": "number"}},
+                        ["object_id"]), make_way),
     Tool("undo", "Revert the last move or removal.", _object_schema({}, []), undo),
     Tool("add_object", "Bring a new object into the room (one the user wants to buy or to bring "
          "from elsewhere), with its size, at the free spot nearest to a point (the middle of "

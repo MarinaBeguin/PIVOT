@@ -28,8 +28,6 @@ from pivot.meta.client import Usage
 TOKEN_PRICES = {"muse-spark-1.3": (1.25, 4.25), "muse-wonder-1.0": (4.00, 20.00)}
 # Muse Voice Transcribe: $0.18 per hour of audio.
 TRANSCRIBE_PER_SECOND = 0.18 / 3600
-# Muse Image: $0.01 per generated image (dev.meta.ai pricing, Nov 1, 2026).
-IMAGE_PRICE = 0.01
 # An object from a photo: one Muse Spark call on an image and one SAM 3.1 image
 # segmentation; an upper estimate.
 PHOTO_PRICE = 0.05
@@ -80,6 +78,10 @@ class Budget:
             float(environ.get("PIVOT_BUDGET_USD", default.total_usd)),
             float(environ.get("PIVOT_VISITOR_DAILY_USD", default.visitor_daily_usd)),
             int(environ.get("PIVOT_VISITOR_DAILY_REQUESTS", default.visitor_daily_requests)))
+
+
+OWNER = "owner"
+"""Visitor key of the deployment's owner: no daily limit, only the total budget."""
 
 
 def _today() -> str:
@@ -142,6 +144,8 @@ class SpendLedger:
                 return ("The public demo has used its whole budget. You can run PIVOT yourself: "
                         "see the README.")
             dollars, requests = self._visitor_today(visitor)
+        if visitor == OWNER:
+            return None
         if requests >= self.budget.visitor_daily_requests:
             return (f"You have made {int(requests)} requests today, the most this public demo "
                     "allows per visitor. Come back tomorrow, or run PIVOT yourself.")
@@ -157,11 +161,14 @@ class SpendLedger:
             visitor: Visitor key.
 
         Returns:
-            Requests left today, and whether the deployment's budget is spent.
+            Requests left today, whether the deployment's budget is spent, and
+            whether the visitor is the owner (no daily limit).
         """
         with self._lock:
             dollars, requests = self._visitor_today(visitor)
             spent = self._total >= self.budget.total_usd
+        if visitor == OWNER:
+            return {"requests_left": 0 if spent else -1, "budget_spent": spent, "owner": True}
         left = 0 if spent or dollars >= self.budget.visitor_daily_usd else \
             max(0, self.budget.visitor_daily_requests - int(requests))
         return {"requests_left": left, "budget_spent": spent}
@@ -227,8 +234,9 @@ class Meter:
         proxy_hops: Trusted proxies in front of the server (see :func:`visitor_key`).
         chat_price: Cost of the tokens of a request in words.
         audio_per_second: Cost of a second of transcribed audio.
-        image_price: Cost of a realistic view.
         photo_price: Cost of an object brought in from a photo.
+        owner_key: Secret that lifts the daily limits of whoever knows it
+            (the deployment's owner, testing it); none if empty.
     """
 
     ledger: SpendLedger
@@ -236,8 +244,30 @@ class Meter:
     proxy_hops: int = 1
     chat_price: Callable[[Usage], float] = lambda usage: 0.0
     audio_per_second: float = 0.0
-    image_price: float = 0.0
     photo_price: float = 0.0
+    owner_key: str = ""
+
+    def owner_token(self) -> str:
+        """Returns the cookie value that marks the owner's browser, derived from the owner key.
+
+        Returns:
+            The token; empty without an owner key.
+        """
+        if not self.owner_key:
+            return ""
+        return hmac.new(self.salt.encode(), self.owner_key.encode(), hashlib.sha256).hexdigest()
+
+    def is_owner(self, token: str | None) -> bool:
+        """Tests whether a cookie value is the owner's token.
+
+        Args:
+            token: The cookie value, if any.
+
+        Returns:
+            True for the owner's browser.
+        """
+        expected = self.owner_token()
+        return bool(expected and token) and hmac.compare_digest(expected, str(token))
 
     def visitor(self, headers: Mapping[str, str], peer: str | None) -> str:
         """Identifies the visitor of a request.

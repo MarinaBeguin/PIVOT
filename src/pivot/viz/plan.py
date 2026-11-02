@@ -221,21 +221,39 @@ def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None) -> st
     return "".join(parts)
 
 
-def _access_text(final: Scene) -> tuple[str, bool]:
+def _doors_text(report: AccessReport, moved: set[int]) -> str:
+    """Names the moved furniture that ends up in front of a door.
+
+    Args:
+        report: Access after the moves.
+        moved: Ids of the moved objects.
+
+    Returns:
+        A sentence, or nothing if no moved object stands in front of a door.
+    """
+    parts = [f"the {report.labels[i]} (#{i}) in front of the {report.labels[door]} (#{door})"
+             for door, ids in report.obstructed_doors.items() for i in ids if i in moved]
+    return f" Note: {', '.join(parts)}." if parts else ""
+
+
+def _access_text(final: Scene, moved: set[int] | None = None) -> tuple[str, bool]:
     """Summarizes who can still get around the room after the moves.
 
     Args:
         final: The scene after the moves.
+        moved: Ids of the moved objects, whose place in front of a door is noted.
 
     Returns:
-        The sentence, and whether every object stays reachable.
+        The sentence, and whether every object stays reachable and no moved
+        object stands in front of a door.
     """
     wheelchair = check_access(final, WHEELCHAIR_WIDTH)
     if wheelchair is None:
         return "The floor is unknown: passages were not checked.", True
+    doors = _doors_text(wheelchair, moved or set())
     if wheelchair.to_dict()["accessible"]:
         return (f"A wheelchair ({100 * WHEELCHAIR_WIDTH:.0f} cm) can still reach every object "
-                "from the doors.", True)
+                "from the doors." + doors, not doors)
     walking = check_access(final, WALKING_WIDTH)
     problems = [f"the {wheelchair.labels[i]} (#{i})" for i in wheelchair.unreachable]
     problems += [f"the {wheelchair.labels[i]} (#{i}) is blocked" for i in wheelchair.blocked_doors]
@@ -243,7 +261,7 @@ def _access_text(final: Scene) -> tuple[str, bool]:
     return (f"A wheelchair ({100 * WHEELCHAIR_WIDTH:.0f} cm) cannot reach "
             f"{', '.join(problems)}. "
             + ("A person walking still can." if walk_ok else
-               "A person walking cannot either."), False)
+               "A person walking cannot either.") + doors, False)
 
 
 def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
@@ -265,7 +283,7 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
         A standalone HTML page.
     """
     items = "".join(f"<li>{html.escape(step.text())}</li>" for step in steps)
-    access_text, accessible = _access_text(final)
+    access_text, accessible = _access_text(final, {step.object_id for step in steps})
     two = sum(step.people > 1 for step in steps)
     summary = (f"{len(steps)} move{'s' * (len(steps) != 1)}"
                + (f", {two} of them with two people" if two else "") + ".")

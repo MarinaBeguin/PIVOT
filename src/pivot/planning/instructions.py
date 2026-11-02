@@ -26,7 +26,7 @@ _MIN_LIFT = 0.05
 
 
 @dataclass(frozen=True)
-class Step:
+class Step:  # pylint: disable=too-many-instance-attributes
     """One move of the instructions.
 
     Attributes:
@@ -41,6 +41,7 @@ class Step:
         landmark: The nearest other object at the end, if any: its label, its
             id and the gap to it, in meters.
         doorways: The doorways it goes through, when it changes room.
+        rolled: Whether it is a rug moved rolled up.
     """
 
     number: int
@@ -53,6 +54,7 @@ class Step:
     people: int
     landmark: tuple[str, int, float] | None
     doorways: tuple[Doorway, ...] = ()
+    rolled: bool = False
 
     @property
     def turn_deg(self) -> float:
@@ -67,6 +69,9 @@ class Step:
         """
         verb = "Carry" if self.carried else "Slide"
         parts = [f"{verb} the {self.label} (#{self.object_id}) {_length(self.distance)}"]
+        if self.rolled:
+            parts = [f"Roll up the {self.label} (#{self.object_id}) and move it "
+                     f"{_length(self.distance)}"]
         if self.doorways:
             first, last = self.doorways[0], self.doorways[-1]
             doors = ", ".join(_doorway(d) for d in self.doorways)
@@ -79,6 +84,8 @@ class Step:
             side = "counterclockwise" if self.turn_deg > 0 else "clockwise"
             parts.append(f"turning it {abs(self.turn_deg):.0f} degrees {side}")
         sentence = ", ".join([" ".join(parts[:2]), *parts[2:]]) + "."
+        if self.rolled:
+            sentence += " Unroll it there."
         if self.people > 1:
             sentence += " Two people needed."
         return sentence
@@ -169,7 +176,9 @@ def _step(number: int, before: Scene, after: Scene, motion: MotionPlan,
         The step.
     """
     obj = before[motion.object_id]
-    start, end = motion.waypoints[0], motion.waypoints[-1]
+    # A rug moved rolled up starts flat, where it lay.
+    start = obj.box if motion.rolled_up else motion.waypoints[0]
+    end = motion.waypoints[-1]
     moved_along = {i for i in before.objects if i != obj.object_id
                    and not np.allclose(after[i].box.center, before[i].box.center)}
     lowest = min(start.z_min, end.z_min)
@@ -177,4 +186,5 @@ def _step(number: int, before: Scene, after: Scene, motion: MotionPlan,
                 carried=any(w.z_min > lowest + _MIN_LIFT for w in motion.waypoints),
                 people=people_needed(obj),
                 landmark=_nearest(after, obj.object_id, end, moved_along),
-                doorways=tuple(route(rooms, motion)[1]) if rooms else ())
+                doorways=tuple(route(rooms, motion)[1]) if rooms else (),
+                rolled=motion.rolled_up)

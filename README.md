@@ -88,7 +88,8 @@ tools on this scene):
 - **Carry** light objects over furniture, or put them on a desk; gravity keeps every object on a
   surface; nothing may rise above the **ceiling**.
 - **Accessibility.** After a rearrangement, PIVOT checks that a person (60 cm) or a wheelchair
-  (90 cm) can still reach every object from the doors.
+  (90 cm) can still reach every object from the doors, and names any furniture left in front of
+  a door, even partly, saying whether a move put it there.
 - **Moving plan.** A printable page with a plan seen from above and numbered steps ("Slide the
   chair (#5) 1.2 m to 27 cm from the table (#72), turning it 90 degrees"), flagging the moves that
   need **two people**.
@@ -100,15 +101,9 @@ tools on this scene):
   one in **from a photo**: taken with the phone or picked from the gallery, Muse Spark names it and
   estimates its size (to correct if needed), SAM 3.1 cuts it out of the photo, and PIVOT puts it
   at the nearest free spot, ready to be moved like any other object.
-- **Realistic view.** Before moving anything, see the result: one button sends the current 3D view
-  (the scanned points, without boxes) to Muse Image, which turns it into a photograph of the room
-  as planned, ready to download; objects brought in from a photo are drawn as they look in it. It
-  shows the mood, not the measurements: those stay PIVOT's.
 - **In your language.** The page follows the browser's language (English, French, German,
   Spanish, Italian, Chinese), which a menu can change; objects, rooms, voice and the agent's
   answers follow. A short tour in speech bubbles introduces the page on the first visit.
-
-![Left: the 3D view of a scanned living room; right: the photograph Muse Image made of it](assets/realistic_view.jpg)
 
 <table>
 <tr>
@@ -130,7 +125,6 @@ tools on this scene):
 | **Llama 3.1 8B Instruct** | The same agent, with tool calling | | Served by vLLM on the GPU |
 | **Llama 3.2 11B Vision Instruct** | Lists the kinds of objects a video shows | | Hugging Face transformers, on the GPU |
 | **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
-| **Muse Image 1.0** | Turns the 3D view of a planned room into a realistic photograph | Meta Model API | |
 | **Muse Spark 1.3** (vision) and **SAM 3.1** (image) | Name and size an object from a photo, and cut it out | Meta Model API | |
 | **Llama Prompt Guard 2** (86M) and **Llama Guard 3** (1B) | Optional screening of the public demo's requests, on the CPU, before any API call | | Hugging Face transformers, on the CPU |
 | **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
@@ -159,8 +153,10 @@ flowchart LR
    views agree (voxel voting). Tracks are merged or split with explicit rules (never merge two
    tracks SAM separated in the same frame; a part whose mask lies inside another object's mask is
    attached to it). Objects become 4 cm voxel shapes carved by the free space seen through them,
-   thin legs kept from the masks; hidden parts are completed at the visible heights; doors and
-   windows are snapped into the walls.
+   thin legs kept from the masks; hidden parts are completed at the visible heights, and a rug
+   goes on as a rectangle under the furniture that hides it (taking the bed out shows the whole
+   rug, and a rug too wide for a doorway is moved rolled up); doors and windows are snapped into
+   the walls, and a window closes its wall (the floor seen through the glass is not a way out).
 3. **The verifier.** Placement checks (collisions, walls, clearance, ceiling, warnings in front of
    doors and windows), A* motion planning in (x, y, yaw) by height slabs with exact re-validation,
    blocking objects moved aside and put back, carried moves (lift, carry, lower), passage checks.
@@ -254,7 +250,6 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `PIVOT_IMAGE_MODEL` | `muse-image-1.0` | Model of the realistic view |
 | `PIVOT_SAM_WORKERS` | 5 (API), 3 (GPU) | Prompts tracked at the same time |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
 | `PIVOT_AGENT_MODEL` | `muse-spark-1.3` | Agent model, e.g. `muse-wonder-1.0` for the stronger preview model |
@@ -268,15 +263,14 @@ first, e.g. `PIVOT_SCRATCH=/data/me` and `SLURM_CONF=...`.
 
 ### The public demo
 
-The [live demo](https://marina-beguin--pivot-demo-web.modal.run) serves the office of the results above, on Modal. Click an object then a
+The [live demo](https://marina-beguin--pivot-demo-web.modal.run) serves the office of the results above, and other rooms in its room menu, on Modal. Click an object then a
 spot to move it, or ask PIVOT in words or by voice (button "Speak"; answers can be read aloud);
-"Remove" takes an object out, "Add from a photo" brings a new one in, "Realistic view" draws the
-room as planned, and "Moving plan" opens the printable steps. A menu sets the language, and a
+"Remove" takes an object out, "Add from a photo" brings a new one in, and "Moving plan" opens the printable steps. A menu sets the language, and a
 short tour introduces the page on the first visit. Each visitor works on their own copy of the
 room, kept across reloads.
 
 Requests cost real API calls, so the demo has a budget: per visitor and per day, 20 requests and
-$1 (a realistic view counts $0.01, a photo $0.05, a request what its tokens cost), and $25 in
+$1 (a photo counts $0.05, a request what its tokens cost), and $25 in
 all; the page shows how many requests are left. The first visit after a quiet period takes
 about 10 seconds, while the server starts.
 
@@ -338,7 +332,6 @@ with no API cost. On a GPU you already own, the open-weight version costs nothin
 | The same with Llama 3.1 8B | No API cost; $1.95 per hour the GPU is up | vLLM on a rented 48 GB GPU, whether it answers or waits |
 | A spoken request | $0.0005 for 10 seconds | Muse Voice Transcribe, $0.18 per hour of audio |
 | Bringing in furniture from a photo | about $0.01 to $0.02 (estimated), budgeted $0.05 | One Muse Spark call on the image, one SAM 3.1 image segmentation ($0.0025) per noun tried, up to four |
-| A realistic view | $0.01 | [Muse Image](https://dev.meta.ai/docs/guides/image-generation), $0.01 per generated image |
 | Screening a request (Llama Guard) | No API cost | On the server's CPU |
 
 For comparison, Muse alone answers for $0.02 a question, and is wrong in 15 of 36 cases: PIVOT
@@ -349,9 +342,9 @@ spends about 3 times more tokens to be right.
 | Scenario | Total |
 |---|---|
 | One room, 20 questions (API) | about $4.20, or $2.30 at fast quality |
-| One room, 20 questions, 3 pieces of furniture from photos, each with a realistic view | about $4.30 |
-| Whole apartment, 40 questions, 5 photos and 5 realistic views | about $13.70, or $6.50 at fast quality |
-| One room with open weights, a rented GPU for 1 h of questions | about $3.50; nothing on your own GPU (no photos or realistic views: they need the API) |
+| One room, 20 questions, 3 pieces of furniture from photos | about $4.30 |
+| Whole apartment, 40 questions, 5 photos | about $13.60, or $6.40 at fast quality |
+| One room with open weights, a rented GPU for 1 h of questions | about $3.50; nothing on your own GPU (no photos: they need the API) |
 
 **Hosting.** The public demo runs on one Modal CPU with 2 GB, about $0.06 per hour while awake;
 it sleeps after 15 minutes without visitors and costs nothing while asleep. With Llama Guard on,
@@ -380,7 +373,7 @@ src/pivot/
 ├── geometry/     boxes, voxel shapes, collisions, floor map
 ├── data/         ScanNet++ loader, video encoding
 ├── perception/   object inventory, SAM 3.1 (self-hosted), detections and tracks
-├── meta/         Meta Model API client, SAM 3.1 through the API, realistic view, objects from a photo
+├── meta/         Meta Model API client, SAM 3.1 through the API, objects from a photo
 ├── lifting/      masks to 3D: fusion, carved volumes, hidden parts, doors and windows
 ├── scene/        scene graph, supports, rooms and doorways, example scenes
 ├── planning/     placement, motion planning, make room, carry, passages, moving plan
@@ -400,6 +393,8 @@ Known limitations:
 - SAM 3.1 tracks the kinds of objects it is given: an object never named is not detected.
 - 4 cm voxels: thin tubes can be missed; space never seen (behind a monitor) stays occupied.
   Hidden parts are inferred, not observed.
+- The planner treats an object turned half a turn as taking the same room, which is exact for a
+  box and approximate for a scanned shape that is not symmetric (a chair with its backrest).
 - "No path" means no path exists at the planning resolution (5 cm, 22.5°), not a proof of
   impossibility; making room can still take tens of seconds in hard cases.
 - An object brought in from a photo has the size Muse Spark estimates from that photo alone: it
@@ -412,11 +407,6 @@ Known limitations:
   English only, and the evaluation was run in English.
 - Request screening (Llama Prompt Guard 2, Llama Guard 3) is tested with stand-in classifiers;
   it has not yet been run with the real weights on the public demo.
-- The realistic view is an illustration. Muse Image keeps the furniture and its look, but it may
-  change the viewpoint (a view from above comes back at eye level) and add or drop details (one
-  chair more than the scan holds). Next: hold the viewpoint (a view taken from inside the room,
-  a depth or edge map sent along), check the picture against the scene (count the objects of
-  each kind, and draw again if they differ), and show the moved objects' new place next to it.
 
 Next:
 
@@ -424,8 +414,6 @@ Next:
 - **Choose where a new piece of furniture goes.** An object brought in from a photo is often
   delivered flat-packed: click its spot on the plan, it is assembled there (no path from the door
   needed), and PIVOT makes room if the spot is taken; afterwards it moves like any other object.
-- **A cleaner cut-out**: Muse Image isolates the object of the photo, without what stands on or in
-  front of it, before SAM 3.1 cuts it out.
 
 ## Possible extensions, and the Meta models for them
 
@@ -435,6 +423,7 @@ could take on the new part; the verifier stays the same.
 
 | Extension | What it would add | Meta models that could help |
 |---|---|---|
+| **A realistic view of the plan** | Before moving anything, a photograph of the room as planned. A first version sent the 3D view to Muse Image; it was taken out of the demo because the pictures did not match the room (a view from above came back as another room, furniture was added or dropped). A faithful view needs more than the points: real frames of the scan as references, the list of objects, a fixed viewpoint, and a check of the picture against the scene (count the objects, draw again if they differ) | [Muse Image](https://dev.meta.ai/docs/guides/image-generation) ($0.01 per image), which can also isolate the object of a photo, without what stands on it, before SAM 3.1 cuts it out |
 | **Real-looking furniture** | Each object shown as a textured 3D model instead of points; a new piece of furniture tried in 3D from a single photo, with its real shape for the collision checks | [SAM 3D Objects](https://github.com/facebookresearch/sam-3d-objects) (open weights: one image to a 3D object); [Meta 3D AssetGen 2.0](https://developers.meta.com/horizon/blog/worlds/AssetGen2/) (text or image to a textured mesh) for furniture that exists only as a description |
 | **Outdoors, with Meta glasses** | "Can I get through here with the stroller?", "Is this path wide enough for my wheelchair?": the same passage checks on a street, a station, a park, from what the wearer sees | [VGGT](https://github.com/facebookresearch/vggt) or [MapAnything](https://github.com/facebookresearch/map-anything) (metric 3D from plain video), SAM 3.1 (curbs, poles, benches), [DINOv3](https://ai.meta.com/dinov3/) (features that hold outdoors); [Project Aria](https://www.projectaria.com/) glasses and their datasets to develop and test |
 | **Robots** | A delivery or home robot asks PIVOT before it moves: the plan in words is checked against the real geometry, and the robot gets a verified path | [Habitat 3](https://aihabitat.org/habitat3/) and [PARTNR](https://github.com/facebookresearch/partnr-planner) (simulation and benchmark of rearrangement in homes), [V-JEPA 2](https://ai.meta.com/vjepa/) (world model to plan the robot's actions), [Locate 3D](https://github.com/facebookresearch/locate-3d) (finds the object a sentence refers to in a 3D scan) |
@@ -450,8 +439,8 @@ computation, and static questions such as "does this van fit in this garage?".
 
 ## Acknowledgements
 
-- **Meta**, for the models PIVOT is built on (SAM 3.1, Muse Spark, Muse Image, Muse Voice
-  Transcribe, Llama, Llama Prompt Guard and Llama Guard, wav2vec 2.0), the access to the Meta
+- **Meta**, for the models PIVOT is built on (SAM 3.1, Muse Spark, Muse Voice Transcribe,
+  Llama, Llama Prompt Guard and Llama Guard, wav2vec 2.0), the access to the Meta
   Model API, and the Global AI Hackathon.
 - **Modal**, which hosts the live demo.
 - **Cyber Valley**, for its support.

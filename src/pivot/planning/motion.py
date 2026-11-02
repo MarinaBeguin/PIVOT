@@ -40,6 +40,10 @@ _NEIGHBORS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 
 _TIGHT_COST_FACTOR = 4.0
 
 
+WEDGED = "pose is wedged in: no room to move from it."
+"""End of the message of a plan whose start or goal cannot be left or reached at all."""
+
+
 class MotionStatus(str, Enum):
     """Outcome of a motion query."""
 
@@ -63,6 +67,8 @@ class MotionPlan:
         message: Human-readable explanation.
         min_clearance: Smallest distance to an obstacle along the path, in
             meters, if a path was found.
+        rolled_up: The object (a rug) travels rolled up: the waypoints but
+            the last are the roll's, the last is the rug flat at the goal.
     """
 
     status: MotionStatus
@@ -71,6 +77,7 @@ class MotionPlan:
     expansions: int = 0
     message: str = ""
     min_clearance: float | None = None
+    rolled_up: bool = False
 
     @property
     def length(self) -> float:
@@ -121,6 +128,8 @@ class MotionPlan:
                                round(math.degrees(b.yaw), 1), round(b.z_min, 3)]
                               for b in self.waypoints],
             })
+        if self.rolled_up:
+            result["rolled_up"] = True
         return result
 
 
@@ -725,7 +734,7 @@ def _link_ends(cspace: ConfigurationSpace, validator: Validator, start: Oriented
     goal_link = _connect_ends(cspace, validator, goal, to_lattice=False)
     if start_link is None or goal_link is None:
         side = "start" if start_link is None else "goal"
-        return f"The {side} pose is wedged in: no room to move from it."
+        return f"The {side} {WEDGED}"
     (start_state, start_via), (goal_state, goal_via) = start_link, goal_link
     # After an escape, the search runs from its last pose.
     return _Ends(([start, *start_via][-1], start_state), ([goal, *goal_via][-1], goal_state),

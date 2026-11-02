@@ -25,6 +25,15 @@
          color: #fff; white-space: nowrap; pointer-events: none; }
   .tag.room { font-size: 13px; font-weight: 600; background: #ffffffd0; color: #1d2421; }
   .row { display: flex; gap: 6px; margin: 6px 0; align-items: center; }
+  /* Buttons in equal columns, so that every row spans the panel and none sticks out. */
+  .grid { display: grid; gap: 6px; margin: 6px 0; }
+  .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .grid button { width: 100%; min-width: 0; overflow-wrap: anywhere; }
+  .sizeForm { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 6px;
+              align-items: center; margin: 6px 0; }
+  .sizeForm .key { grid-column: 1 / -1; color: var(--muted); }
+  .sizeForm input { width: 100%; box-sizing: border-box; }
   .row .key { color: var(--muted); width: 64px; flex: none; }
   input[type=number] { width: 80px; background: #0006; color: var(--text); border: 1px solid #fff3;
                        border-radius: 4px; padding: 3px 6px; }
@@ -36,9 +45,10 @@
   #result { margin-top: 10px; font-size: 13px; white-space: pre-wrap; }
   #result .ok { color: var(--accent); font-weight: 600; }
   #result .no { color: var(--bad); font-weight: 600; }
+  #chatLimits.no { color: var(--bad); font-weight: 600; }
   .hint { color: var(--muted); font-size: 12px; }
   #chat { display: none; margin-top: 14px; border-top: 1px solid #fff2; padding-top: 10px; }
-  #chatLog { max-height: 260px; overflow: auto; font-size: 13px; }
+  #chatLog { max-height: 260px; overflow: auto; font-size: 13px; margin-bottom: 12px; }
   #chatLog .user { margin: 8px 0 2px; color: var(--accent); }
   #chatLog .agent { white-space: pre-wrap; }
   #chatLog .tools { color: var(--muted); font-size: 11px; margin-top: 2px; }
@@ -66,14 +76,10 @@
   /* The panel holding the part shown rises above the shade; the part itself is outlined. */
   .tour-raise { z-index: 21; }
   .tour-focus { box-shadow: 0 0 0 3px var(--accent); border-radius: 8px; }
-  #tourButton { position: fixed; right: 12px; bottom: 12px; z-index: 10; width: 34px; height: 34px;
+  /* Bottom left: the right-hand panel can reach the bottom of the window and hide it. */
+  #tourButton { position: fixed; left: 12px; bottom: 12px; z-index: 10; width: 34px; height: 34px;
     border-radius: 50%; padding: 0; font-weight: 700; font-size: 16px; background: var(--panel); }
   @media (max-width: 720px) { #tour .bubble { max-width: calc(100vw - 48px); } }
-  /* A realistic view of the planned room, over the page. */
-  #realView { position: fixed; inset: 0; z-index: 30; background: #000c; display: none;
-              align-items: center; justify-content: center; flex-direction: column; gap: 10px; padding: 16px; }
-  #realView img { max-width: 100%; max-height: calc(100% - 90px); border-radius: 8px; }
-  #realView .hint { max-width: 640px; text-align: center; }
 </style>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap">
 <script type="importmap">
@@ -104,19 +110,20 @@
   <div class="row"><span class="key" data-i18n="target">Target</span><span id="target"></span></div>
   <div class="row"><span class="key" data-i18n="rotation">Rotation</span>
     <input type="number" id="yaw" step="15" data-i18n-placeholder="keep"><span class="hint" data-i18n="degrees">degrees</span></div>
-  <div class="row">
+  <div class="grid two">
     <button id="check" disabled data-i18n="check">Check</button>
     <button id="move" class="primary" disabled data-i18n="move">Move</button>
+  </div>
+  <div class="grid three" id="editButtons">
     <button id="remove" disabled data-i18n="remove">Remove</button>
     <button id="undo" data-i18n="undo">Undo</button>
     <button id="reset" data-i18n="reset">Reset</button>
   </div>
-  <div class="row">
+  <div class="grid two" id="extraButtons">
     <button id="plan" data-i18n="planButton" data-i18n-title="planTitle">Moving plan (PDF)</button>
-    <button id="renderButton" style="display:none" data-i18n="realView" data-i18n-title="realViewTitle">Realistic view</button>
+    <button id="photoButton" style="display:none" data-i18n="addPhoto" data-i18n-title="addPhotoTitle">Add from a photo</button>
   </div>
-  <div class="row"><button id="photoButton" style="display:none" data-i18n="addPhoto" data-i18n-title="addPhotoTitle">Add from a photo</button>
-    <input type="file" id="photoInput" accept="image/*" style="display:none"></div>
+  <input type="file" id="photoInput" accept="image/*" style="display:none">
   <div id="result"></div>
   <div class="row"><button id="makeRoom" class="primary" style="display:none" data-i18n="makeRoom">Make room &amp; move</button></div>
   <div id="chat">
@@ -131,9 +138,6 @@
   </div>
 </div>
 <div id="tour"></div>
-<div id="realView"><img id="realImage" alt=""><div class="hint" data-i18n="realViewNote"></div>
-  <div class="row"><a id="realDownload" download="pivot-view.png"><button data-i18n="download">Download</button></a>
-    <button id="realClose" class="primary" data-i18n="close">Close</button></div></div>
 <button id="tourButton" data-i18n-title="tourHelp">?</button>
 <script>__PIVOT_LANGUAGES__</script>
 <script id="scene-data" type="application/json">__PIVOT_SCENE_DATA__</script>
@@ -536,6 +540,7 @@ function describe(plan, moved) {
       t("pathLine", { length: plan.path_length_m, rotation: plan.total_rotation_deg }),
       t("effortLine", { effort: plan.effort_m, clearance: plan.min_clearance_m === null
         ? t("overOneMeter") : `${Math.round(100 * plan.min_clearance_m)} cm` })];
+    if (plan.rolled_up) lines.push(t("rolledUp"));
     return lines.join("\n");
   }
   const reason = t(`status_${plan.status}`);
@@ -559,12 +564,39 @@ function drawPath(waypoints) {
 
 const result = document.getElementById("result");
 let busy = false;
+// While the server computes, a counter shows that it is still working.
+let ticking = null;
+function startTimer(node, key) {
+  const start = performance.now();
+  const show = () => {
+    node.textContent = `${t(key)} ${Math.round((performance.now() - start) / 1000)} s`;
+  };
+  show();
+  clearInterval(ticking);
+  ticking = setInterval(show, 1000);
+}
+function stopTimer() {
+  clearInterval(ticking);
+  ticking = null;
+}
+// A click during a computation is not lost silently: the page says to wait.
+function stillBusy() {
+  if (!busy) return false;
+  if (!result.querySelector(".wait")) {
+    const wait = document.createElement("div");
+    wait.className = "hint wait";
+    wait.textContent = t("stillWorking");
+    result.appendChild(wait);
+  }
+  return true;
+}
 async function run(name) {
-  if (busy) return;
+  if (stillBusy()) return;
   busy = true;
-  result.textContent = t("planning");
+  startTimer(result, "planning");
   try {
     const answer = await callTool(name, moveArguments());
+    stopTimer();
     if (answer.error) {
       result.innerHTML = `<span class="no">${t("error")}</span>\n${escapeHtml(answer.error)}`;
       return;
@@ -580,13 +612,14 @@ async function run(name) {
     }
     if (plan.waypoints) drawPath(plan.waypoints);
     if (name === "move_object" && answer.moved) {
-      await animate(selectedId, answer.carried_along || [], plan.waypoints);
+      await animate(selectedId, answer.carried_along || [], plan.waypoints, plan.rolled_up);
       applyObjects(answer.objects);
       clearSelection();
     } else if (plan.status !== "success") {
       await suggestMakingRoom();
     }
   } finally {
+    stopTimer();
     busy = false;
   }
 }
@@ -595,9 +628,10 @@ async function run(name) {
 const makeRoomButton = document.getElementById("makeRoom");
 async function suggestMakingRoom() {
   const looking = document.createElement("div");
-  looking.textContent = t("lookingForRoom");
   result.appendChild(looking);
+  startTimer(looking, "lookingForRoom");
   const preview = await callTool("make_room", moveArguments());
+  stopTimer();
   looking.remove();
   if (preview.success && preview.blockers.length) {
     result.innerHTML += `\n\n<span class="ok">${escapeHtml(preview.message)}</span>`;
@@ -608,12 +642,13 @@ async function suggestMakingRoom() {
 }
 
 makeRoomButton.onclick = async () => {
-  if (busy) return;
+  if (stillBusy()) return;
   busy = true;
   makeRoomButton.style.display = "none";
-  result.textContent = t("planning");
+  startTimer(result, "planning");
   try {
     const answer = await callTool("make_room_and_move", moveArguments());
+    stopTimer();
     if (!answer.moved) {
       result.innerHTML = `<span class="no">${t("notPossible")}</span>\n${escapeHtml(answer.message)}`;
       return;
@@ -621,11 +656,12 @@ makeRoomButton.onclick = async () => {
     result.innerHTML = `<span class="ok">${t("moved")}</span>\n${escapeHtml(answer.message)}`;
     for (const step of answer.steps) {
       drawPath(step.waypoints);
-      await animate(step.object_id, step.carried_along || [], step.waypoints);
+      await animate(step.object_id, step.carried_along || [], step.waypoints, step.rolled_up);
     }
     applyObjects(answer.objects);
     clearSelection();
   } finally {
+    stopTimer();
     busy = false;
   }
 };
@@ -634,7 +670,7 @@ document.getElementById("check").onclick = () => run("plan_motion");
 document.getElementById("move").onclick = () => run("move_object");
 // Takes the selected object out of the room (to replace it with another one, say).
 async function removeSelected() {
-  if (busy || selectedId === null) return;
+  if (selectedId === null || stillBusy()) return;
   busy = true;
   try {
     const view = views.get(selectedId);
@@ -657,11 +693,13 @@ async function removeSelected() {
 }
 document.getElementById("remove").onclick = removeSelected;
 document.getElementById("undo").onclick = async () => {
+  if (stillBusy()) return;
   const answer = await callTool("undo", {});
   result.textContent = answer.undone ? t("undone") : answer.reason;
   if (answer.objects) applyObjects(answer.objects);
 };
 document.getElementById("reset").onclick = async () => {
+  if (stillBusy()) return;
   const objects = await (await fetch(scoped("/api/reset"), { method: "POST" })).json();
   applyObjects(objects);
   clearSelection();
@@ -688,9 +726,20 @@ function applyObjects(objects) {
   }
 }
 
+// Squeezes an object along its long side: a rug rolls up (factor < 1) or out (1).
+function setRoll(id, factor) {
+  const size = views.get(id).obj.box.size;
+  const long = size[0] >= size[1] ? 0 : 1;
+  const view = views.get(id);
+  for (const node of [view.edges, view.cubes, view.points]) {
+    if (node) node.scale.set(long === 0 ? factor : 1, long === 1 ? factor : 1, 1);
+  }
+}
+
 // Plays a verified motion: the object follows the waypoints (translations,
 // in-place turns, lifts and lowerings), and what it carries moves rigidly with it.
-function animate(id, carried, waypoints) {
+// A rug that travels rolled up rolls up first and unrolls at the end.
+function animate(id, carried, waypoints, rolledUp = false) {
   const [x0, y0, yaw0] = pose(id);
   const height = views.get(id).obj.box.size[2];
   const z0 = views.get(id).z;
@@ -705,15 +754,27 @@ function animate(id, carried, waypoints) {
   const steps = [];
   let previous = [waypoints[0][0], waypoints[0][1], yaw0, z0];
   for (const [x, y, yawDeg, bottom] of waypoints.slice(1)) {
-    let yaw = THREE.MathUtils.degToRad(yawDeg);
-    // Turn the short way, continuing from the current yaw.
-    yaw = previous[2] + Math.atan2(Math.sin(yaw - previous[2]), Math.cos(yaw - previous[2]));
+    // Turn as the planner checked it: a box is the same after a half turn, so
+    // the turn between two waypoints is at most 90 degrees either way. Turning
+    // "the short way" over a full circle could swing a long object through a
+    // wall the planned motion never touches.
+    const turn = THREE.MathUtils.degToRad(yawDeg) - previous[2];
+    const yaw = previous[2] + turn - Math.PI * Math.round(turn / Math.PI);
     const z = bottom + height / 2;
     const seconds = Math.max(Math.hypot(x - previous[0], y - previous[1]) / 0.6,
                              Math.abs(yaw - previous[2]) / (Math.PI / 2),
                              Math.abs(z - previous[3]) / 0.4, 0.05);
     steps.push({ from: previous, to: [x, y, yaw, z], seconds });
     previous = [x, y, yaw, z];
+  }
+  let roll = [1, 1];
+  if (rolledUp) {
+    const size = views.get(id).obj.box.size;
+    roll = [1, Math.min(1, 0.3 / Math.max(size[0], size[1]))];
+    steps.forEach(step => { step.roll = [roll[1], roll[1]]; });
+    steps.unshift({ from: steps[0].from, to: steps[0].from, seconds: 0.8, roll });
+    const end = steps[steps.length - 1].to;
+    steps.push({ from: end, to: end, seconds: 0.8, roll: [roll[1], 1] });
   }
   return new Promise(resolve => {
     let index = 0, start = performance.now();
@@ -722,6 +783,7 @@ function animate(id, carried, waypoints) {
       const t = Math.min((now - start) / (1000 * step.seconds), 1);
       const [x, y, yaw, z] = step.from.map((a, k) => a + t * (step.to[k] - a));
       setPose(id, x, y, yaw, z);
+      if (step.roll) setRoll(id, step.roll[0] + t * (step.roll[1] - step.roll[0]));
       for (const r of riders) {
         setPose(r.child, x + Math.cos(yaw) * r.u - Math.sin(yaw) * r.v,
                 y + Math.sin(yaw) * r.u + Math.cos(yaw) * r.v, yaw + r.dyaw, z + r.dz);
@@ -758,33 +820,57 @@ async function sendChat() {
   input.value = "";
   chatLine("user", message);
   const pending = chatLine("agent", t("thinking"));
+  // A request may take a minute: say what the agent is checking meanwhile.
+  const watch = setInterval(() => showProgress(pending), 1500);
   try {
     const answer = await (await fetch(scoped("/api/chat"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, language }) })).json();
+    clearInterval(watch);
     if (answer.error) { pending.textContent = answer.error; return; }
     pending.textContent = answer.answer;
     speak(answer.answer);
-    if (answer.steps.length)
-      chatLine("tools", t("checkedWith") + answer.steps.map(s => s.tool).join(", "));
+    if (answer.steps.length) chatLine("tools", t("checkedCount", { n: answer.steps.length }));
     clearSelection();
     for (const motion of answer.motions) {
       drawPath(motion.waypoints);
-      await animate(motion.object_id, motion.carried_along, motion.waypoints);
+      await animate(motion.object_id, motion.carried_along, motion.waypoints, motion.rolled_up);
     }
     applyObjects(answer.objects);
   } finally {
+    clearInterval(watch);
     busy = false;
     showLimits();
   }
+}
+
+// What the agent is doing, in words: the last tool call of the request so far.
+const PROGRESS = { list_objects: "progressLook", find_objects: "progressLook",
+  plan_motion: "progressPath", move_object: "progressPath", plan_to_room: "progressPath",
+  move_to_room: "progressPath", make_room: "progressRoom", make_room_and_move: "progressRoom",
+  check_placement: "progressSpot", propose_placements: "progressSpot", add_object: "progressSpot",
+  check_access: "progressAccess", measure_gap: "progressMeasure", make_way: "progressWay" };
+async function showProgress(line) {
+  let steps;
+  try { steps = (await (await fetch(scoped("/api/progress"))).json()).steps; } catch { return; }
+  if (!busy || !steps || !steps.length || !line.isConnected) return;
+  const last = steps[steps.length - 1];
+  const obj = views.get(last.object_id)?.obj;
+  const key = obj || !["progressPath", "progressRoom", "progressSpot", "progressWay"].includes(PROGRESS[last.tool])
+    ? PROGRESS[last.tool] || "progressOther" : "progressOther";
+  line.textContent = t(key, { name: obj ? nameOf(obj.label) : "", id: last.object_id }) +
+    " (" + t("stepsSoFar", { n: steps.length }) + ")";
 }
 
 // On the public demo, each visitor has a few requests a day: say how many are left.
 async function showLimits() {
   const limits = await (await fetch(scoped("/api/limits"))).json();
   if (!limits.public) return;
-  document.getElementById("chatLimits").textContent = limits.budget_spent ? t("budgetSpent")
+  const line = document.getElementById("chatLimits");
+  line.textContent = limits.budget_spent ? t("budgetSpent") : limits.owner ? t("ownerNoLimit")
     : limits.requests_left === 1 ? t("requestLeft") : t("requestsLeft", { n: limits.requests_left });
+  // Nothing left today: said in red.
+  line.classList.toggle("no", limits.requests_left === 0);
 }
 // Answers read aloud by the browser's own voice (no server, no cost): on
 // glasses, there is no screen to read them from.
@@ -876,43 +962,6 @@ if (data.chat) {
   });
 }
 
-// Realistic view: the 3D view, without boxes, labels nor floor tint (the
-// points of moved objects travel with them), is drawn as a photo by Muse Image.
-const renderButton = document.getElementById("renderButton");
-async function realisticView() {
-  if (busy) return;
-  busy = true;
-  renderButton.disabled = true;
-  const hidden = [boxGroup, volumeGroup, floorGroup, ghost, pathLine].filter(node => node.visible);
-  hidden.forEach(node => { node.visible = false; });
-  renderer.render(scene, camera);
-  const view = renderer.domElement.toDataURL("image/png");
-  hidden.forEach(node => { node.visible = true; });
-  result.textContent = t("drawing");
-  try {
-    const answer = await (await fetch(scoped("/api/render"), {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ image: view }) })).json();
-    if (answer.error) {
-      result.innerHTML = `<span class="no">${t("error")}</span>\n${escapeHtml(answer.error)}`;
-      return;
-    }
-    result.textContent = "";
-    document.getElementById("realImage").src = answer.image;
-    document.getElementById("realDownload").href = answer.image;
-    document.getElementById("realView").style.display = "flex";
-  } finally {
-    busy = false;
-    renderButton.disabled = false;
-    showLimits();
-  }
-}
-if (data.render) renderButton.style.display = "";
-renderButton.onclick = realisticView;
-document.getElementById("realClose").onclick = () => {
-  document.getElementById("realView").style.display = "none";
-};
-
 // Objects from a photo: taken with the camera or picked from the gallery, the
 // photo is shrunk, sent, and the object appears at the free spot nearest to the
 // target (or the middle of the floor), with its estimated size to correct.
@@ -935,7 +984,7 @@ function shrunkPhoto(file, longest = 1280) {
   });
 }
 async function addFromPhoto(file) {
-  if (busy || !file) return;
+  if (!file || stillBusy()) return;
   busy = true;
   photoButton.disabled = true;
   result.textContent = t("analyzing");
@@ -971,11 +1020,10 @@ function showSizeForm(id, label, size) {
   const line = document.createElement("div");
   line.textContent = t("added", { name: objectName({ label, id }), size: cm.join(" × ") + " cm" });
   const form = document.createElement("div");
-  form.className = "row";
+  form.className = "sizeForm";
   const inputs = cm.map(v => {
     const input = document.createElement("input");
     input.type = "number"; input.min = "5"; input.max = "600"; input.value = v;
-    input.style.width = "56px";
     return input;
   });
   const apply = document.createElement("button");
@@ -991,10 +1039,14 @@ function showSizeForm(id, label, size) {
     applyObjects(answer.objects);
     line.textContent = t("resized");
   };
-  form.append(document.createTextNode(t("sizeCm")), ...inputs, apply);
+  const key = document.createElement("span");
+  key.className = "key";
+  key.textContent = t("sizeCm");
+  form.append(key, ...inputs, apply);
   result.append(line, form);
 }
 if (data.photos) photoButton.style.display = "";
+else document.getElementById("plan").style.gridColumn = "1 / -1";
 photoButton.onclick = () => photoInput.click();
 photoInput.onchange = () => addFromPhoto(photoInput.files[0]);
 
@@ -1023,7 +1075,12 @@ const TOUR_KEY = "pivot.tourSeen";
 function tourSteps() {
   const shown = id => document.getElementById(id).offsetParent !== null;
   const steps = [{ text: "tour1" }, { text: "tour2", target: "panel", side: "left" }];
-  if (data.interactive) steps.push({ text: "tour3", target: "controls", side: "right" });
+  if (data.interactive) {
+    steps.push({ text: "tour3", target: "controls", side: "right" },
+               { text: "tourEdit", target: "editButtons", side: "right" });
+    if (shown("photoButton")) steps.push({ text: "tourPhoto", target: "photoButton", side: "right" });
+    steps.push({ text: "tourPlan", target: "plan", side: "right" });
+  }
   if (data.chat && shown("chat")) steps.push({ text: "tour4", target: "chat", side: "right" });
   return steps;
 }
@@ -1058,7 +1115,6 @@ function showTour(index = 0) {
   row.append(dots, ...(last ? [] : [skip]), next);
   bubble.append(words, row);
   tour.appendChild(bubble);
-  const width = Math.min(300, window.innerWidth - 48);
   if (!step.target) {
     // The 3D view: the bubble points down at the middle of the room.
     bubble.classList.add("down");
@@ -1072,12 +1128,16 @@ function showTour(index = 0) {
   const box = target.getBoundingClientRect();
   const top = Math.min(Math.max(16, box.top + 8), window.innerHeight - bubble.offsetHeight - 16);
   bubble.style.top = `${top}px`;
-  if (step.side === "left" && box.right + width + 40 < window.innerWidth) {
+  // The bubble stands beside the whole panel, not just the button it points at, and its
+  // real width (padding and border included) keeps its tail clear of the panel.
+  const side = target.closest(".panel").getBoundingClientRect();
+  const outer = bubble.offsetWidth;
+  if (step.side === "left" && side.right + outer + 40 < window.innerWidth) {
     bubble.classList.add("left");
-    bubble.style.left = `${box.right + 22}px`;
-  } else if (box.left - width - 40 > 0) {
+    bubble.style.left = `${side.right + 22}px`;
+  } else if (side.left - outer - 40 > 0) {
     bubble.classList.add("right");
-    bubble.style.left = `${box.left - width - 22 - 8}px`;
+    bubble.style.left = `${side.left - outer - 22}px`;
   } else {
     // A narrow screen: no room beside the panel, the bubble goes over it.
     bubble.style.left = "16px";

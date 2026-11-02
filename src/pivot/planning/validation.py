@@ -92,7 +92,8 @@ class Validator:
         """
         return (self.free_distance(box) > 0.0
                 or check_placement(self.scene, self.object_id, box, self.clearance,
-                                   self.floor_margin, carried=self.carried).feasible)
+                                   self.floor_margin, carried=self.carried,
+                                   warn=False).feasible)
 
     @cached_property
     def _obstacles(self) -> tuple[FloatArray, FloatArray, FloatArray] | None:
@@ -224,7 +225,7 @@ class Validator:
             The placement report.
         """
         return check_placement(self.scene, self.object_id, box, self.clearance,
-                               self.floor_margin, carried=self.carried)
+                               self.floor_margin, carried=self.carried, warn=False)
 
 
 # Obstacles whose circle is this close to the object's have their exact gap measured.
