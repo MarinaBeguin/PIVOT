@@ -5,9 +5,11 @@ import math
 import numpy as np
 import pytest
 
+from pivot.lifting.completion import close_windows
 from pivot.lifting.openings import Walls, clean_openings, snap_opening
-from pivot.scene.examples import box, two_rooms_floor
-from pivot.scene.graph import SceneObject
+from pivot.planning.motion import MotionStatus, plan_motion
+from pivot.scene.examples import box, rectangle_floor, two_rooms_floor
+from pivot.scene.graph import Scene, SceneObject
 
 # A 4 x 3 m room, axis-aligned.
 WALLS = Walls(0.0, np.array([0.0, 0.0]), np.array([4.0, 3.0]))
@@ -133,3 +135,22 @@ def test_kitchen_cabinet_doors_are_not_a_door() -> None:
     doors = [SceneObject(1, "door", box((1.45, 3.0, 1.85), (0.9, 0.1, 0.7)), movable=False),
              SceneObject(2, "door", box((1.45, 3.0, 0.47), (0.9, 0.1, 0.75)), movable=False)]
     assert not clean_openings(doors, {1: upper, 2: lower}, WALLS)
+
+
+def test_furniture_never_goes_through_a_window() -> None:
+    # Floor seen through the glass of a window across the whole room, at y = 3.
+    chair = SceneObject(1, "chair", box((2.0, 1.0, 0.45), (0.5, 0.5, 0.9)))
+    window = SceneObject(2, "window", box((2.0, 3.0, 1.5), (4.0, 0.1, 1.2)))
+    door = SceneObject(3, "door", box((2.0, 4.5, 1.0), (4.0, 0.1, 2.0)))
+    scene = Scene.from_objects([chair, window, door], floor=rectangle_floor(4.0, 6.0))
+
+    def reaches(room: Scene, y: float) -> bool:
+        goal = box((2.0, y, 0.45), (0.5, 0.5, 0.9))
+        return plan_motion(room, 1, goal).status is MotionStatus.SUCCESS
+
+    assert reaches(scene, 5.5)
+    closed = close_windows(scene)
+    assert not reaches(closed, 5.5) and not reaches(closed, 3.0)
+    # Doors stay open, and closing twice changes nothing.
+    assert closed.floor is not None and closed.floor.is_floor(np.array([2.0, 4.5]))
+    assert close_windows(closed) is closed

@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import gzip
 import hashlib
 import hmac
 import json
@@ -40,8 +41,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pivot.agent.loop import Agent
 from pivot.agent.tools import TOOLS_BY_NAME, Session, call_tool
 from pivot.geometry.types import FloatArray
+from pivot.lifting.completion import close_windows, complete_rugs
 from pivot.meta.client import MetaConfig, Usage
-from pivot.meta.image import photo_view
 from pivot.meta.photo import PhotoObject, object_from_photo
 from pivot.meta.sam import SamClient
 from pivot.planning.instructions import instructions
@@ -49,7 +50,7 @@ from pivot.planning.motion import MotionPlan
 from pivot.scene.graph import Scene, carried_objects
 from pivot.server.guard import Guard, guard_from_env
 from pivot.server.limits import (
-    IMAGE_PRICE, PHOTO_PRICE, TRANSCRIBE_PER_SECOND, Budget, Meter, SpendLedger, chat_cost,
+    OWNER, PHOTO_PRICE, TRANSCRIBE_PER_SECOND, Budget, Meter, SpendLedger, chat_cost,
 )
 from pivot.server.speech import Transcriber, read_wav, transcriber_from_env
 from pivot.server.visitors import COOKIE, Visitor, Visitors
@@ -57,16 +58,17 @@ from pivot.viz.plan import instructions_page
 from pivot.viz.pointcloud import ColorArray
 from pivot.viz.web import Features, RoomMenu, render_viewer
 
-_MUTATING = {"move_object", "make_room_and_move", "undo", "remove_object", "add_object",
-             "resize_object"}
+_MUTATING = {"move_object", "make_room_and_move", "make_way", "undo", "remove_object",
+             "add_object", "resize_object"}
 # About a minute of 16 kHz 16-bit mono audio.
 MAX_AUDIO_BYTES = 2_000_000
-# A 3D view sent for a realistic one: a PNG of the page, at most this big.
+# A photo sent by a visitor, at most this big.
 MAX_IMAGE_BYTES = 12_000_000
-# Edits a 3D view (PNG) into a realistic one, given photos of objects brought in.
-Painter = Callable[[bytes, list[tuple[str, bytes]]], bytes]
 # Names the object in a photo, sizes it and cuts it out; None if there is none.
 Photographer = Callable[[bytes], PhotoObject | None]
+
+# Marks the owner's browser, see Meter.owner_token.
+OWNER_COOKIE = "pivot_owner"
 
 
 def _objects(session: Session) -> list[dict[str, Any]]:
@@ -122,8 +124,10 @@ def _chat_reply(visitor: Visitor, agent_factory: Callable[[Session], Agent], mes
     visitor.agent = agent
     before, count = session.scene, len(session.motions)
     spent = Usage(agent.usage.calls, agent.usage.prompt_tokens, agent.usage.completion_tokens)
+    visitor.progress = []
     try:
-        run = agent.ask(message, language)
+        run = agent.ask(message, language, on_step=lambda tool, arguments: visitor.progress.append(
+            {"tool": tool, "object_id": arguments.get("object_id")}))
     except Exception as error:  # pylint: disable=broad-exception-caught
         # An API failure must reach the page, not break the server.
         return JSONResponse({"error": f"The agent could not answer: {error}"})
@@ -156,39 +160,6 @@ def _decode_data_url(url: str) -> bytes | None:
         return base64.b64decode(data, validate=True)
     except (binascii.Error, ValueError):
         return None
-
-
-def _render_reply(visitor: Visitor, painter: Painter, view_url: str, meter: Meter | None,
-                  key: str) -> JSONResponse:
-    """Draws a realistic view of a visitor's room, and charges it.
-
-    Args:
-        visitor: The visitor; the photos of the objects they brought in are drawn.
-        painter: Edits the 3D view into a realistic one.
-        view_url: The 3D view, as a PNG data address.
-        meter: Prices the request, if the deployment has a budget.
-        key: The visitor's key in the ledger.
-
-    Returns:
-        ``{"image": "data:image/...;base64,..."}``, or an error.
-    """
-    if meter is not None and (reason := meter.ledger.refusal(key)):
-        return JSONResponse({"error": reason}, status_code=429)
-    view = _decode_data_url(view_url)
-    if view is None or len(view) > MAX_IMAGE_BYTES:
-        return JSONResponse({"error": "The view could not be read."}, status_code=400)
-    brought = [photo for object_id, photo in visitor.photos.items()
-               if object_id in visitor.session.scene.objects]
-    try:
-        image = painter(view, brought)
-    except Exception as error:  # pylint: disable=broad-exception-caught
-        # A failed drawing must reach the page, not break the server.
-        return JSONResponse({"error": f"Could not draw the view: {error}"})
-    finally:
-        if meter is not None:
-            meter.ledger.record(key, meter.image_price)
-    kind = "png" if image.startswith(b"\x89PNG") else "jpeg"
-    return JSONResponse({"image": f"data:image/{kind};base64,{base64.b64encode(image).decode()}"})
 
 
 def _photo_reply(visitor: Visitor, photographer: Photographer, body: dict[str, Any],
@@ -225,9 +196,6 @@ def _photo_reply(visitor: Visitor, photographer: Photographer, body: dict[str, A
     result: dict[str, Any] = json.loads(call_tool(visitor.session, "add_object", json.dumps(
         {"label": seen.label, **dict(zip(("width_m", "depth_m", "height_m"), seen.size)),
          **(where if len(where) == 2 else {})})))
-    if result.get("added"):
-        object_id = int(result["object_id"])
-        visitor.photos[object_id] = (f"the new {seen.label} (#{object_id})", seen.picture)
     cutout = "data:image/png;base64," + base64.b64encode(seen.picture).decode()
     return JSONResponse({**result, "look": seen.look, "picture": cutout,
                          "objects": _objects(visitor.session)})
@@ -272,7 +240,6 @@ def create_app(rooms: list[Room],
                agent_factory: Callable[[Session], Agent] | None = None,
                transcriber: Transcriber | None = None,
                meter: Meter | None = None,
-               painter: Painter | None = None,
                photographer: Photographer | None = None,
                guard: Guard | None = None) -> FastAPI:
     """Creates the web application for one or several rooms.
@@ -286,7 +253,6 @@ def create_app(rooms: list[Room],
         agent_factory: Creates the agent of a session; None disables requests in words.
         transcriber: Turns spoken requests into text; None disables the microphone.
         meter: Prices requests and enforces a budget; None for a private server.
-        painter: Edits a 3D view into a realistic one; None disables realistic views.
         photographer: Names an object in a photo, sizes it and cuts it out;
             None disables objects from photos.
         guard: Screens requests in words before the agent sees them (Llama
@@ -303,7 +269,7 @@ def create_app(rooms: list[Room],
     pages = _render_pages(rooms, Features(
         interactive=True, chat=agent_factory is not None,
         voice=agent_factory is not None and transcriber is not None,
-        render=painter is not None, photos=photographer is not None))
+        photos=photographer is not None))
 
     @app.middleware("http")
     async def visitor_session(request: Request,
@@ -323,6 +289,11 @@ def create_app(rooms: list[Room],
         response = await call_next(request)
         if request.cookies.get(COOKIE) != token:
             response.set_cookie(COOKIE, token, httponly=True, samesite="lax")
+        if meter is not None and meter.owner_key and hmac.compare_digest(
+                request.query_params.get("owner", ""), meter.owner_key):
+            # The owner opened the page with the key once: their browser keeps the token.
+            response.set_cookie(OWNER_COOKIE, meter.owner_token(), httponly=True,
+                                samesite="lax", max_age=30 * 24 * 3600)
         return response
 
     def key(request: Request) -> str:
@@ -336,11 +307,18 @@ def create_app(rooms: list[Room],
         """
         if meter is None:
             return ""
+        if meter.is_owner(request.cookies.get(OWNER_COOKIE)):
+            return OWNER
         return meter.visitor(request.headers, request.client.host if request.client else None)
 
+    # Pages are compressed once: compressing several megabytes at each visit
+    # took seconds on one CPU.
+    compressed = {room_id: gzip.compress(page.encode(), compresslevel=6)
+                  for room_id, page in pages.items()}
+
     @app.get("/", response_class=HTMLResponse)
-    def viewer(request: Request) -> str:
-        """Serves the viewer page of the requested room.
+    def viewer(request: Request) -> Response:
+        """Serves the viewer page of the requested room, compressed when the browser accepts it.
 
         Args:
             request: The request.
@@ -348,7 +326,11 @@ def create_app(rooms: list[Room],
         Returns:
             The HTML page.
         """
-        return pages[request.state.room.room_id]
+        room_id = request.state.room.room_id
+        if "gzip" not in request.headers.get("accept-encoding", ""):
+            return HTMLResponse(pages[room_id])
+        return Response(compressed[room_id], media_type="text/html; charset=utf-8",
+                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
 
     @app.get("/instructions", response_class=HTMLResponse)
     def moving_plan(request: Request) -> str:
@@ -426,6 +408,19 @@ def create_app(rooms: list[Room],
         return _chat_reply(request.state.visitor, agent_factory, body.get("message", ""),
                            meter, key(request), body.get("language"))
 
+    @app.get("/api/progress")
+    def progress(request: Request) -> JSONResponse:
+        """Says what the agent is doing on the visitor's request in words.
+
+        Args:
+            request: The request.
+
+        Returns:
+            ``{"steps": [{"tool": ..., "object_id": ...}, ...]}``, the tool
+            calls of the current (or last) request so far.
+        """
+        return JSONResponse({"steps": list(request.state.visitor.progress)})
+
     @app.post("/api/transcribe")
     async def transcribe(request: Request) -> JSONResponse:
         """Turns a spoken request into text.
@@ -456,22 +451,6 @@ def create_app(rooms: list[Room],
                 meter.ledger.record(visitor_key, _audio_seconds(audio) * meter.audio_per_second,
                                     request=False)
         return JSONResponse({"text": text})
-
-    @app.post("/api/render")
-    def render(body: dict[str, str], request: Request) -> JSONResponse:
-        """Draws a realistic view of the room from the visitor's 3D view.
-
-        Args:
-            body: ``{"image": "data:image/png;base64,..."}``, the 3D view.
-            request: The request.
-
-        Returns:
-            ``{"image": "data:image/...;base64,..."}``, or an error.
-        """
-        if painter is None:
-            return JSONResponse({"error": "Realistic views are not enabled."}, status_code=404)
-        return _render_reply(request.state.visitor, painter, body.get("image", ""), meter,
-                             key(request))
 
     @app.post("/api/photo")
     def photo(body: dict[str, Any], request: Request) -> JSONResponse:
@@ -572,9 +551,13 @@ def load_room(spec: str, max_points: int | None = None) -> Room:
     scene_dir = Path(path)
     title = title or scene_dir.name
     cloud = np.load(scene_dir / "cloud.npz")
-    points, colors = _subsample(cloud["points"], cloud["colors"], max_points)
+    # Scenes built before rugs were completed and windows closed get it here
+    # (a no-op for the others).
+    scene, points, colors = complete_rugs(close_windows(Scene.load(scene_dir / "scene.json")),
+                                          cloud["points"], cloud["colors"])
+    points, colors = _subsample(points, colors, max_points)
     room_id = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
-    return Room(room_id, title, Scene.load(scene_dir / "scene.json"), points, colors)
+    return Room(room_id, title, scene, points, colors)
 
 
 def _public_meter(config: MetaConfig | None) -> Meter:
@@ -583,7 +566,8 @@ def _public_meter(config: MetaConfig | None) -> Meter:
     The budget comes from :meth:`Budget.from_env`; the ledger is kept at
     ``PIVOT_LEDGER`` (in memory if unset); the visitor key salt is
     ``PIVOT_VISITOR_SALT`` or derived from the API key; ``PIVOT_PROXY_HOPS``
-    proxies are trusted. Open-weight models cost nothing.
+    proxies are trusted; ``PIVOT_OWNER_KEY``, opened once as ``?owner=...``,
+    lifts the daily limits of the owner's browser. Open-weight models cost nothing.
 
     Args:
         config: API configuration, if requests in words are enabled.
@@ -601,8 +585,8 @@ def _public_meter(config: MetaConfig | None) -> Meter:
                  partial(chat_cost, config.agent_model) if api and config else
                  (lambda usage: 0.0),
                  TRANSCRIBE_PER_SECOND if api else 0.0,
-                 IMAGE_PRICE if api else 0.0,
-                 PHOTO_PRICE if api else 0.0)
+                 PHOTO_PRICE if api else 0.0,
+                 os.environ.get("PIVOT_OWNER_KEY", ""))
 
 
 def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: int | None = None,
@@ -627,7 +611,6 @@ def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: in
                       agent_factory=factory,
                       transcriber=transcriber_from_env(config) if config else None,
                       meter=_public_meter(config) if public else None,
-                      painter=partial(photo_view, config) if api and config else None,
                       photographer=_photographer(config) if api and config else None,
                       guard=guard_from_env() if config else None)
 

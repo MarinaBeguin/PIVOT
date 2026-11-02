@@ -79,7 +79,7 @@ class Conflict:
         if self.kind is ConflictKind.WALL_CLEARANCE:
             return f"leaves only {100 * self.amount:.0f} cm of clearance to a wall"
         if self.kind is ConflictKind.OFF_FLOOR:
-            return f"{100 * self.amount:.0f}% of its footprint is outside the walkable floor"
+            return f"has {100 * self.amount:.0f}% of its footprint outside the walkable floor"
         if self.kind is ConflictKind.CEILING:
             return f"{subject}would rise {100 * self.amount:.0f} cm above the ceiling"
         return "is a fixed part of the room and cannot be moved"
@@ -202,6 +202,7 @@ def check_placement(
     floor_margin: float = 0.025,
     collision_tolerance: float = 0.01,
     carried: Collection[int] | None = None,
+    warn: bool = True,
 ) -> PlacementReport:
     """Checks whether an object can be placed at a given pose.
 
@@ -223,6 +224,8 @@ def check_placement(
             noise of boxes fitted to reconstructed points.
         carried: Ids of the objects resting on the moved object, if already
             known. Computed from the scene otherwise.
+        warn: Whether to note the openings the object stands in front of;
+            path checks, which only need conflicts, skip it.
 
     Returns:
         A report listing every conflict.
@@ -251,7 +254,7 @@ def check_placement(
 
     travel = float(np.linalg.norm(box.center[:2] - obj.box.center[:2]))
     return PlacementReport(object_id, box, conflicts, travel=travel,
-                           warnings=opening_warnings(scene, box))
+                           warnings=opening_warnings(scene, box) if warn else [])
 
 
 def _ceiling_conflicts(scene: Scene, box: OrientedBox, child_boxes: dict[int, OrientedBox],

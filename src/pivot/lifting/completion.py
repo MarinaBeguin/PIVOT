@@ -23,9 +23,10 @@ from scipy.spatial import cKDTree
 
 from pivot.geometry.box import OrientedBox, rotation_2d
 from pivot.geometry.collision import box_distance
+from pivot.geometry.floor import FloorMap
 from pivot.geometry.shape import VoxelShape
-from pivot.geometry.types import BoolArray, FloatArray
-from pivot.scene.graph import SceneObject, is_opening
+from pivot.geometry.types import BoolArray, FloatArray, UInt8Array
+from pivot.scene.graph import Scene, SceneObject, is_flat, is_opening
 
 # Smallest footprint of one object of a label, (long side, short side) in meters.
 MIN_FOOTPRINT = {"chair": (0.5, 0.5), "office chair": (0.55, 0.55), "armchair": (0.6, 0.6),
@@ -222,3 +223,209 @@ def complete_hidden(objects: list[SceneObject], max_gap: float = 0.1) -> list[Sc
             shape = _fill(obj, box, others, occluder.box.z_max)
             result.append(dataclasses.replace(obj, box=box, shape=shape))
     return result
+
+
+# A rug continues under furniture by at most this much, in meters.
+_MAX_FLAT_EXTENSION = 2.0
+# Share of a rug's edge that must run along hidden floor for it to continue there:
+# where the floor beyond an edge is seen without the rug, the rug ends there.
+_HIDDEN_EDGE_SHARE = 0.8
+# Spacing of the points tested along an edge, and how far beyond it, in meters.
+_EDGE_STEP = 0.02
+
+
+def _hidden(points: FloatArray, occluders: list[OrientedBox]) -> BoolArray:
+    """Tests which floor points are hidden under furniture.
+
+    Args:
+        points: (N, 2) floor points.
+        occluders: Boxes of the furniture standing on the floor.
+
+    Returns:
+        (N,) True for points inside an occluder's footprint.
+    """
+    hidden = np.zeros(len(points), dtype=bool)
+    for box in occluders:
+        local = (points - box.center[:2]) @ rotation_2d(box.yaw)
+        hidden |= np.all(np.abs(local) <= 0.5 * box.size[:2], axis=1)
+    return hidden
+
+
+def _flat_extent(box: OrientedBox, occluders: list[OrientedBox], floor: FloorMap | None,
+                 axis: int, side: float) -> float:
+    """Measures how far a rug may continue under furniture beyond one of its edges.
+
+    Its edge must run along hidden floor for most of its length (floor seen
+    bare beyond an edge means the rug ends there); the rug then goes on as long
+    as the floor beyond stays hidden, up to the far side of what hides it, and
+    never off the floor.
+
+    Args:
+        box: The rug's box.
+        occluders: Boxes of the furniture standing on the floor.
+        floor: The floor map, if known.
+        axis: 0 or 1, the box axis the edge is perpendicular to.
+        side: +1 or -1, which edge.
+
+    Returns:
+        The extension, in meters (0 if the edge is seen whole).
+    """
+    half = 0.5 * box.size[:2]
+    other = 1 - axis
+    along = np.arange(-half[other], half[other] + 1e-9, _EDGE_STEP)
+    rotation = rotation_2d(box.yaw)
+    extension = 0.0
+    while extension < _MAX_FLAT_EXTENSION:
+        local = np.zeros((len(along), 2))
+        local[:, other] = along
+        local[:, axis] = side * (half[axis] + extension + 0.5 * _EDGE_STEP)
+        points = local @ rotation.T + box.center[:2]
+        if _hidden(points, occluders).mean() < _HIDDEN_EDGE_SHARE:
+            break
+        if floor is not None and not all(floor.is_floor(p) for p in points[::5]):
+            break
+        extension += _EDGE_STEP
+    return extension
+
+
+def complete_flat(objects: list[SceneObject], floor: FloorMap | None = None
+                  ) -> list[SceneObject]:
+    """Completes rugs partly hidden under furniture, as rectangles.
+
+    A rug is seen only where nothing stands on it: under a bed, the camera
+    sees the bed. As a rug is a rectangle, each edge that runs along hidden
+    floor is pushed on under what hides it, up to its far side; the edges seen
+    whole stay. Taking the bed out then shows the whole rug, not a strip.
+
+    Args:
+        objects: Objects with settled boxes.
+        floor: The floor map, which the rugs never leave; unchecked if None.
+
+    Returns:
+        The objects, rugs completed where needed (as plain boxes).
+    """
+    occluders = [o.box for o in objects
+                 if not (is_flat(o) or is_opening(o)) and o.box.z_min < 0.1]
+    result = []
+    for obj in objects:
+        if not is_flat(obj):
+            result.append(obj)
+            continue
+        box = obj.box
+        for axis in (0, 1):
+            for side in (1.0, -1.0):
+                extension = _flat_extent(box, occluders, floor, axis, side)
+                if extension > 0.05:
+                    box = _grown(box, axis, float(box.size[axis]) + extension, side)
+        result.append(obj if box is obj.box else dataclasses.replace(obj, box=box, shape=None))
+    return result
+
+
+def _floor_grid(box: OrientedBox, spacing: float) -> FloatArray:
+    """Spreads points evenly over a box's footprint.
+
+    Args:
+        box: The box.
+        spacing: Distance between the points, in meters.
+
+    Returns:
+        (N, 2) floor points.
+    """
+    half = 0.5 * box.size[:2]
+    grid = np.stack(np.meshgrid(np.arange(-half[0], half[0], spacing) + 0.5 * spacing,
+                                np.arange(-half[1], half[1], spacing) + 0.5 * spacing),
+                    axis=-1).reshape(-1, 2)
+    result: FloatArray = grid @ rotation_2d(box.yaw).T + box.center[:2]
+    return result
+
+
+def hidden_flat_points(before: SceneObject, after: SceneObject, objects: list[SceneObject],
+                       points: FloatArray, colors: UInt8Array, spacing: float = 0.03
+                       ) -> tuple[FloatArray, UInt8Array]:
+    """Makes points for the part of a rug that :func:`complete_flat` added.
+
+    They lie on the rug, in its usual color, only under the furniture that hid
+    it: they show once that furniture is moved or taken out.
+
+    Args:
+        before: The rug as seen.
+        after: The rug completed.
+        objects: The objects of the scene, to find what hides the rug.
+        points: (N, 3) points of the cloud, to take the rug's color from.
+        colors: (N, 3) their colors.
+        spacing: Distance between the new points, in meters.
+
+    Returns:
+        The (M, 3) new points and their (M, 3) colors.
+    """
+    xy = _floor_grid(after.box, spacing)
+    seen = before.box.to_local(np.column_stack([xy, np.full(len(xy), before.box.center[2])]))
+    outside = np.any(np.abs(seen[:, :2]) > 0.5 * before.box.size[:2], axis=1)
+    occluders = [o.box for o in objects if not (is_flat(o) or is_opening(o))
+                 and o.box.z_min < 0.1]
+    keep = outside & _hidden(xy, occluders)
+    inside = np.all(np.abs(before.box.to_local(points)) <= 0.5 * before.box.size, axis=1)
+    color = np.median(colors[inside], axis=0) if inside.any() else np.full(3, 128.0)
+    new = np.column_stack([xy[keep], np.full(int(keep.sum()), after.box.z_max - 0.01)])
+    return new, np.tile(color, (len(new), 1)).astype(np.uint8)
+
+
+def complete_rugs(scene: Scene, points: FloatArray, colors: UInt8Array
+                  ) -> tuple[Scene, FloatArray, UInt8Array]:
+    """Completes the rugs of a scene and adds points where they were hidden.
+
+    Applied once more to a completed scene, it changes nothing.
+
+    Args:
+        scene: The scene.
+        points: (N, 3) points of its cloud.
+        colors: (N, 3) their colors.
+
+    Returns:
+        The scene with its rugs completed, and the cloud with their hidden parts.
+    """
+    objects = list(scene.objects.values())
+    completed = complete_flat(objects, scene.floor)
+    new_points, new_colors = [points], [colors]
+    for before, after in zip(objects, completed):
+        if after is not before:
+            extra, extra_colors = hidden_flat_points(before, after, objects, points, colors)
+            new_points.append(extra.astype(points.dtype))
+            new_colors.append(extra_colors)
+    scene = dataclasses.replace(scene, objects={o.object_id: o for o in completed})
+    return scene, np.concatenate(new_points), np.concatenate(new_colors)
+
+
+WINDOW_WALL = 0.15
+"""Thickness of the wall a window is closed with, in meters: at least three cells."""
+
+
+def close_windows(scene: Scene) -> Scene:
+    """Takes the floor under windows out of the floor map: nothing passes through one.
+
+    Glass gives few depth points, so the floor seen through a window can be
+    mapped as floor, joined to the room's: the window would then be a way
+    out. Each window's box, grown to a wall's thickness and a little along
+    the wall to meet it, is closed. Applied once more, it changes nothing.
+
+    Args:
+        scene: The scene.
+
+    Returns:
+        The scene, its floor map closed under its windows.
+    """
+    floor = scene.floor
+    if floor is None:
+        return scene
+    walkable = floor.floor.copy()
+    for obj in scene.objects.values():
+        if obj.label.lower() != "window":
+            continue
+        size = obj.box.size.copy()
+        thin = int(np.argmin(size[:2]))
+        size[thin] = max(float(size[thin]), WINDOW_WALL)
+        size[1 - thin] += WINDOW_WALL
+        walkable &= ~floor.rasterize(OrientedBox(obj.box.center, size, obj.box.yaw).footprint())
+    if np.array_equal(walkable, floor.floor):
+        return scene
+    return dataclasses.replace(scene, floor=FloorMap(floor.origin, floor.resolution, walkable))

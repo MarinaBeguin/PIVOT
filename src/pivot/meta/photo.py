@@ -2,8 +2,8 @@
 
 "Will this armchair fit?": the visitor photographs it (in a shop, online, at a
 friend's) or picks a photo. Muse Spark names it and estimates its size from
-what it looks like; SAM 3.1 cuts it out of the photo, so the page shows it
-and a realistic view of the room can draw it. The size is an estimate, which
+what it looks like; SAM 3.1 cuts it out of the photo, so the page shows it.
+The size is an estimate, which
 the visitor can correct.
 """
 

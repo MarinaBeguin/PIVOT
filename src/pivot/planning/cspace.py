@@ -17,7 +17,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 
 import numpy as np
-from scipy import ndimage
+from scipy import ndimage, signal
 
 from pivot.geometry.box import OrientedBox, rotation_2d, wrap_angle
 from pivot.geometry.floor import FloorMap
@@ -360,8 +360,11 @@ def _on_floor(floor: FloorMap, size_xy: FloatArray, yaw: float, floor_margin: fl
         A (rows, cols) mask of valid center cells.
     """
     inner_size = np.maximum(size_xy - 2.0 * floor_margin, 0.0)
-    inner = footprint_kernel(inner_size, yaw, floor.resolution).astype(np.int32)
-    # Cells outside the grid are not floor.
-    on_floor = ndimage.correlate(floor.floor.astype(np.int32), inner, mode="constant", cval=0)
-    result: BoolArray = on_floor == inner.sum()
+    inner = footprint_kernel(inner_size, yaw, floor.resolution)
+    # Counts the cells off the floor under the footprint; cells outside the grid
+    # are not floor. The kernel is symmetric: correlation is convolution.
+    radius = inner.shape[0] // 2
+    off_floor = np.pad(~floor.floor, radius, constant_values=True).astype(np.float64)
+    hits = signal.fftconvolve(off_floor, inner.astype(np.float64), mode="valid")
+    result: BoolArray = hits < 0.5
     return result

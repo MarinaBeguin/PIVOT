@@ -18,12 +18,16 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
+from scipy import ndimage
 
 from pivot.geometry.box import OrientedBox
-from pivot.geometry.collision import box_distance_lower_bound, box_penetration
+from pivot.geometry.collision import box_distance, box_distance_lower_bound, box_penetration
+from pivot.geometry.types import BoolArray, FloatArray
 from pivot.planning.cspace import ConfigurationSpace
+from pivot.planning.handling import can_be_carried
+from pivot.planning.lift import carry_height, plan_carried_motion
 from pivot.planning.motion import (
-    MotionOptions, MotionPlan, MotionStatus, densify, plan_motion, straight_motion,
+    WEDGED, MotionOptions, MotionPlan, MotionStatus, densify, plan_motion, straight_motion,
 )
 from pivot.planning.placement import ConflictKind, check_placement
 from pivot.planning.snap import nearest_feasible_pose, ranked_free_poses
@@ -112,14 +116,242 @@ def _clear_of(box: OrientedBox, sweep: list[OrientedBox]) -> bool:
 
 # Longest straight push of a blocker aside, in meters.
 _MAX_PUSH = 2.0
+# Distance from a blocker's start within which free states are its way out, in meters.
+_WAY_OUT = 0.3
+# Search budget of each parking motion.
+_PARK_EXPANSIONS = 20_000
+# Light objects this close to a pushed table move with it, in meters.
+_GROUP_GAP = 0.15
+# Objects whose bottom is lower than this stand on the floor, in meters.
+_ON_FLOOR = 0.1
+# Most objects pushed together.
+_MAX_GROUP = 10
 
 
-def _park(scene: Scene, object_id: int, sweep: list[OrientedBox],
-          options: MotionOptions, max_tries: int = 12) -> MotionPlan | None:
+def _reachable(space: ConfigurationSpace, start: OrientedBox) -> BoolArray:
+    """Finds the free configurations connected to an object's start, on the lattice.
+
+    A start squeezed against another object (a chair under a table) is often
+    not free itself: the free states near it are taken as its way out.
+
+    Args:
+        space: Free configurations of the object.
+        start: Its current box.
+
+    Returns:
+        A (yaw_bins, rows, cols) mask; every free state if none is near the start.
+    """
+    labels, _ = ndimage.label(space.free, structure=np.ones((3, 3, 3), dtype=bool))
+    row, col = space.nearest_cell(start.center[:2])
+    reach = int(np.ceil(_WAY_OUT / space.floor.resolution))
+    near = labels[:, max(0, row - reach):row + reach + 1, max(0, col - reach):col + reach + 1]
+    found = np.unique(near[near > 0])
+    if found.size == 0:
+        return space.free
+    result: BoolArray = np.isin(labels, found)
+    return result
+
+
+def _group(scene: Scene, object_id: int) -> list[int]:
+    """Lists an object and the light objects standing against it (a table and its chairs).
+
+    Args:
+        scene: The scene.
+        object_id: The object.
+
+    Returns:
+        Its id first, then theirs.
+    """
+    box = scene[object_id].box
+    return [object_id, *(o.object_id for o in scene.objects.values()
+                         if o.object_id != object_id and o.movable and can_be_carried(o)
+                         and o.box.z_min < _ON_FLOOR and box_distance(box, o.box) <= _GROUP_GAP)]
+
+
+def _pushed_along(scene: Scene, object_id: int, shift: FloatArray) -> list[int] | None:
+    """Finds what moves when an object is pushed: its chairs, and the furniture it pushes.
+
+    As when a row of tables is moved back, a table that would run into
+    another movable object pushes it too, with that one's chairs; a wall or a
+    fixed object stops the push.
+
+    Args:
+        scene: The scene.
+        object_id: The object pushed.
+        shift: (2,) translation, in meters.
+
+    Returns:
+        The objects moving together, the pushed one first; None if a wall or
+        a fixed object stops them, or if too many would move.
+    """
+    members = _group(scene, object_id)
+    checked: set[int] = set()
+    while len(checked) < len(members):
+        if len(members) > _MAX_GROUP:
+            return None
+        member = next(m for m in members if m not in checked)
+        checked.add(member)
+        rest = dataclasses.replace(scene, objects={
+            i: o for i, o in scene.objects.items() if i == member or i not in members})
+        box = scene[member].box.moved(scene[member].box.center[:2] + shift)
+        for conflict in check_placement(rest, member, box, warn=False).conflicts:
+            other = conflict.other_id
+            if conflict.kind is not ConflictKind.COLLISION or other is None \
+                    or not scene[other].movable:
+                return None
+            members += [m for m in _group(scene, other) if m not in members]
+    return members
+
+
+def _push_group(scene: Scene, object_id: int, sweep: list[OrientedBox],
+                options: MotionOptions) -> list[MotionPlan] | None:
+    """Pushes an object straight aside with its chairs and the furniture it pushes.
+
+    A table is moved back with its chairs, and the tables behind it with
+    theirs, all by the same shift, as people would rearrange a classroom.
+    Each one's straight slide is checked against everything but the group,
+    which moves rigidly; the one furthest ahead goes first, so none runs into
+    another.
+
+    Args:
+        scene: The scene.
+        object_id: The object to push.
+        sweep: Poses of the object whose way must be cleared.
+        options: Motion parameters.
+
+    Returns:
+        The motions, in order, or None if no push clears the sweep.
+    """
+    for distance in np.arange(0.2, _MAX_PUSH + 1e-9, 0.2):
+        for angle in np.linspace(0.0, 2.0 * np.pi, 8, endpoint=False):
+            shift = distance * np.array([np.cos(angle), np.sin(angle)])
+            if not _clear_of(scene[object_id].box.moved(scene[object_id].box.center[:2]
+                                                         + shift), sweep):
+                continue
+            members = _pushed_along(scene, object_id, shift)
+            if members is None or len(members) == 1:
+                continue
+            boxes = {m: scene[m].box.moved(scene[m].box.center[:2] + shift) for m in members}
+            if not all(_clear_of(box, sweep) for box in boxes.values()):
+                continue
+            rest = {i: o for i, o in scene.objects.items() if i not in members}
+            plans = [straight_motion(dataclasses.replace(scene, objects={**rest, m: scene[m]}),
+                                     m, boxes[m], options) for m in members]
+            if all(plan is not None for plan in plans):
+                return sorted((plan for plan in plans if plan is not None),
+                              key=lambda plan: -float(np.dot(
+                                  scene[plan.object_id].box.center[:2], shift)))
+    return None
+
+
+@dataclass(frozen=True)
+class _Lattice:
+    """The free configurations of a blocker, and those connected to where it stands."""
+
+    space: ConfigurationSpace
+    reachable: BoolArray
+
+    def worth_trying(self, box: OrientedBox) -> bool:
+        """Tests whether the lattice shows a pose free and connected to the blocker.
+
+        Args:
+            box: The pose.
+
+        Returns:
+            True if exact checks of it can succeed.
+        """
+        row, col = self.space.nearest_cell(box.center[:2])
+        return bool(self.reachable[self.space.nearest_bin(box.yaw), row, col])
+
+
+def _push_straight(scene: Scene, object_id: int, sweep: list[OrientedBox],
+                   options: MotionOptions, lattice: _Lattice) -> MotionPlan | None:
+    """Pushes a blocker straight aside, shortest push first.
+
+    Args:
+        scene: The scene.
+        object_id: The blocker.
+        sweep: Poses of the object whose way must be cleared.
+        options: Motion parameters.
+        lattice: Its free configurations.
+
+    Returns:
+        The push, or None.
+    """
+    current = scene[object_id].box
+    # A blocker squeezed against another object (a chair under a table) cannot slide
+    # straight out: its start already overlaps, which only a planned motion allows.
+    if not check_placement(scene, object_id, current, options.clearance, warn=False).feasible:
+        return None
+    for distance in np.arange(0.2, _MAX_PUSH + 1e-9, 0.1):
+        for angle in np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False):
+            box = current.moved(current.center[:2]
+                                + distance * np.array([np.cos(angle), np.sin(angle)]))
+            if lattice.worth_trying(box) and _clear_of(box, sweep):
+                plan = straight_motion(scene, object_id, box, options)
+                if plan is not None:
+                    return plan
+    return None
+
+
+def _move_to_free_spot(scene: Scene, object_id: int, sweep: list[OrientedBox],
+                       options: MotionOptions, lattice: _Lattice,
+                       max_tries: int) -> MotionPlan | None:
+    """Moves a blocker to the nearest free spot by any path, carried if it must.
+
+    Args:
+        scene: The scene.
+        object_id: The blocker.
+        sweep: Poses of the object whose way must be cleared.
+        options: Motion parameters.
+        lattice: Its free configurations.
+        max_tries: Maximum number of spots tried.
+
+    Returns:
+        The motion, or None.
+    """
+    current = scene[object_id].box
+    # A spot the lattice connects to the blocker is found fast, or not at all.
+    budget = dataclasses.replace(options, max_expansions=min(options.max_expansions,
+                                                             _PARK_EXPANSIONS),
+                                 refine_yaw_bins=options.yaw_bins)
+    # What cannot slide out (a chair boxed in between tables) can be lifted out, if light.
+    lift = max(carry_height(scene, object_id), current.z_min) \
+        if can_be_carried(scene[object_id]) else None
+    wedged = False
+    tries = 0
+    # Short moves first.
+    for center, yaw in ranked_free_poses(lattice.space, current.center[:2], current.yaw):
+        box = current.moved(center, yaw)
+        if not lattice.worth_trying(box) or not _clear_of(box, sweep):
+            continue
+        if not wedged:
+            plan = plan_motion(scene, object_id, box, budget)
+            if plan.status is MotionStatus.SUCCESS:
+                return plan
+            # No room to slide from where it stands: no other spot will do better.
+            wedged = plan.message == f"The start {WEDGED}"
+        if lift is not None:
+            plan = plan_carried_motion(scene, object_id, box, lift, budget)
+            if plan.status is MotionStatus.SUCCESS:
+                return plan
+        elif wedged:
+            return None
+        tries += 1
+        if tries >= max_tries:
+            break
+    return None
+
+
+def park_aside(scene: Scene, object_id: int, sweep: list[OrientedBox],
+               options: MotionOptions, max_tries: int = 3) -> list[MotionPlan] | None:
     """Moves a blocker to a nearby spot outside a sweep.
 
     First, as a person would, it is pushed straight aside, shortest push
-    first; failing that, it goes to the nearest free spot by any path.
+    first; then, if it cannot be carried (a table), pushed together with the
+    chairs against it; failing that, it goes to the nearest free spot by any
+    path. Only spots the lattice shows free and connected to the blocker are
+    tried: the exact checks are kept for the ones that can succeed.
 
     Args:
         scene: The scene.
@@ -129,31 +361,20 @@ def _park(scene: Scene, object_id: int, sweep: list[OrientedBox],
         max_tries: Maximum number of free spots tried after the pushes.
 
     Returns:
-        The blocker's motion, or None if it cannot be parked.
+        The motions (the blocker's, and those of the chairs pushed with it),
+        or None if it cannot be parked.
     """
-    current = scene[object_id].box
-    for distance in np.arange(0.2, _MAX_PUSH + 1e-9, 0.1):
-        for angle in np.linspace(0.0, 2.0 * np.pi, 16, endpoint=False):
-            box = current.moved(current.center[:2]
-                                + distance * np.array([np.cos(angle), np.sin(angle)]))
-            if _clear_of(box, sweep):
-                plan = straight_motion(scene, object_id, box, options)
-                if plan is not None:
-                    return plan
     space = ConfigurationSpace.build(scene, object_id, clearance=options.clearance)
-    tries = 0
-    # Short moves first.
-    for center, yaw in ranked_free_poses(space, current.center[:2], current.yaw):
-        box = current.moved(center, yaw)
-        if not _clear_of(box, sweep):
-            continue
-        plan = plan_motion(scene, object_id, box, options)
-        if plan.status is MotionStatus.SUCCESS:
-            return plan
-        tries += 1
-        if tries >= max_tries:
-            break
-    return None
+    lattice = _Lattice(space, _reachable(space, scene[object_id].box))
+    pushed = _push_straight(scene, object_id, sweep, options, lattice)
+    if pushed is not None:
+        return [pushed]
+    if not can_be_carried(scene[object_id]):
+        group = _push_group(scene, object_id, sweep, options)
+        if group is not None:
+            return group
+    moved = _move_to_free_spot(scene, object_id, sweep, options, lattice, max_tries)
+    return None if moved is None else [moved]
 
 
 def _put_back(scene: Scene, object_id: int, original: OrientedBox, options: MotionOptions,
@@ -209,13 +430,14 @@ def plan_rearrangement(scene: Scene, object_id: int, goal: OrientedBox,
     initial = scene
     steps = []
     for blocker in blockers:
-        parking = _park(scene, blocker, sweep, options)
+        parking = park_aside(scene, blocker, sweep, options)
         if parking is None:
             return Rearrangement(False, message=f"The {scene[blocker].label} (#{blocker}) is in "
                                  "the way and no free spot nearby keeps the passage clear.",
                                  blockers=blockers)
-        steps.append(parking)
-        scene = scene.moved(blocker, parking.waypoints[-1])
+        for motion in parking:
+            steps.append(motion)
+            scene = scene.moved(motion.object_id, motion.waypoints[-1])
     return _finish(initial, scene, object_id, goal, steps, blockers, options, put_back)
 
 

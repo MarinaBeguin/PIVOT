@@ -85,14 +85,12 @@ class Features:
             and executes moves.
         chat: The server answers requests in words (agent).
         voice: Requests can also be spoken (microphone).
-        render: The server draws realistic views of the room (Muse Image).
         photos: Objects can be brought in from a photo (Muse Spark, SAM 3.1).
     """
 
     interactive: bool = False
     chat: bool = False
     voice: bool = False
-    render: bool = False
     photos: bool = False
 
 

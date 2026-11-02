@@ -141,6 +141,27 @@ def test_public_requests_are_charged_and_refused_over_budget() -> None:
     assert ledger.total == 0.25
 
 
+def test_the_owner_has_no_daily_limit_once_the_key_is_given() -> None:
+    model = ScriptedModel([message("One."), message("Two.")])
+    ledger = SpendLedger(Budget(total_usd=1.0, visitor_daily_usd=1.0, visitor_daily_requests=1))
+    meter = Meter(ledger, "salt", proxy_hops=0, chat_price=lambda usage: 0.25,
+                  owner_key="secret")
+    points = np.zeros((3, 3), dtype=np.float32)
+    colors = np.zeros((3, 3), dtype=np.uint8)
+    app = TestClient(create_app(office(points, colors), agent_factory=lambda session: Agent(
+        session, MetaConfig(api_key="test"), client=model),  # type: ignore[arg-type]
+        meter=meter))
+    # A wrong key changes nothing.
+    assert "owner" not in app.get("/api/limits?owner=guess").json()
+    # The page opened once with the key: the browser keeps a token.
+    app.get("/?owner=secret")
+    assert app.get("/api/limits").json()["owner"]
+    for answer in ("One.", "Two."):
+        assert app.post("/api/chat", json={"message": "Hi"}).json()["answer"] == answer
+    # The total budget still holds.
+    assert ledger.total == 0.5
+
+
 def test_long_recordings_are_refused() -> None:
     points = np.zeros((3, 3), dtype=np.float32)
     colors = np.zeros((3, 3), dtype=np.uint8)

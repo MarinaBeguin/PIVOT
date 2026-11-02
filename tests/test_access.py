@@ -37,6 +37,19 @@ def test_a_door_with_furniture_in_front_is_blocked() -> None:
     assert report.blocked_doors == [1] and not report.from_doors
 
 
+def test_furniture_half_in_front_of_a_door_is_named_even_if_one_squeezes_past() -> None:
+    session = Session(corridor(1.0))
+    clear = json.loads(call_tool(session, "check_access", "{}"))
+    assert clear["doors_clear"] and not clear["doors_with_furniture_in_front"]
+    stool = SceneObject(4, "stool", box((1.4, 0.5, 0.25), (0.4, 0.4, 0.5)))
+    session.record(Scene.from_objects([*session.scene.objects.values(), stool],
+                                      session.scene.floor), [])
+    result = json.loads(call_tool(session, "check_access", "{}"))
+    assert not result["blocked_doors"] and not result["doors_clear"]
+    assert result["doors_with_furniture_in_front"] == [{"id": 1, "label": "door", "in_front": [
+        {"id": 4, "label": "stool", "there_before_any_move": False}]}]
+
+
 def test_the_agent_tool_reports_passages() -> None:
     result = json.loads(call_tool(Session(corridor(0.7)), "check_access", '{"width_m": 0.9}'))
     assert result["unreachable_objects"] == [{"id": 3, "label": "chair"}]

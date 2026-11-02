@@ -101,27 +101,17 @@ def test_an_added_object_goes_where_it_fits_and_can_be_resized_or_undone() -> No
     assert not huge["added"] and "No free spot" in huge["reason"]
 
 
-def test_the_server_brings_in_the_photo_and_draws_it_in_realistic_views() -> None:
+def test_the_server_brings_in_the_object_of_a_photo() -> None:
     points, colors = np.zeros((1, 3)), np.zeros((1, 3), dtype=np.uint8)
     room = Room("office", "Office", office_scene(), points, colors)
-    drawn: list[list[tuple[str, bytes]]] = []
-
-    def painter(_view: bytes, references: list[tuple[str, bytes]]) -> bytes:
-        drawn.append(references)
-        return b"\x89PNG"
-
     seen = PhotoObject("armchair", (0.8, 0.8, 0.9), "red velvet", b"\x89PNGcutout")
-    client = TestClient(create_app([room], painter=painter,
-                                   photographer=lambda photo: seen))
+    client = TestClient(create_app([room], photographer=lambda photo: seen))
     assert '"photos": true' in client.get("/").text
     photo = "data:image/jpeg;base64," + base64.b64encode(jpeg()).decode()
     answer = client.post("/api/photo", json={"image": photo}).json()
     assert answer["added"] and answer["look"] == "red velvet"
     assert answer["picture"].startswith("data:image/png;base64,")
     assert answer["object_id"] in {o["id"] for o in answer["objects"]}
-    view = "data:image/png;base64," + base64.b64encode(b"\x89PNG").decode()
-    client.post("/api/render", json={"image": view})
-    assert drawn[0] == [(f"the new armchair (#{answer['object_id']})", b"\x89PNGcutout")]
     assert "Then bring in: the armchair" in client.get("/instructions").text
     nothing = TestClient(create_app([room], photographer=lambda photo: None))
     assert nothing.post("/api/photo", json={"image": photo}).json() == {

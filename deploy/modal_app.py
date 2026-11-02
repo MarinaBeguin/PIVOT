@@ -5,8 +5,9 @@
 
 Each room is a title and a scene directory (scene.json and cloud.npz, from
 ``python -m pivot.build``), the first one shown by default; the directories
-are copied into the image. The demo never runs SAM, only the agent (Muse Spark)
-and speech transcription, through the Meta API. At deploy time the API key is
+are copied into the image. The demo never tracks videos: it runs the agent
+(Muse Spark), speech transcription and objects brought in from a photo (Muse
+Spark on the photo, SAM 3.1 on one image), through the Meta API. At deploy time the API key is
 read from the repository's .env and handed to Modal as a secret; nothing is
 printed.
 
@@ -57,7 +58,11 @@ def _secret() -> dict[str, str]:
     values = {**dotenv_values(ROOT / ".env"), **os.environ}
     if not values.get("META_API_KEY"):
         raise SystemExit("META_API_KEY is missing: set it in .env or in the environment.")
-    return {"META_API_KEY": str(values["META_API_KEY"])}
+    secrets = {"META_API_KEY": str(values["META_API_KEY"])}
+    # Opened once as ?owner=<key>, it lifts the daily limits of the owner's browser.
+    if values.get("PIVOT_OWNER_KEY"):
+        secrets["PIVOT_OWNER_KEY"] = str(values["PIVOT_OWNER_KEY"])
+    return secrets
 
 
 def _rooms() -> list[tuple[str, Path]]:

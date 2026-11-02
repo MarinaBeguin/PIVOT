@@ -17,8 +17,9 @@ from typing import Any
 import numpy as np
 from scipy import ndimage
 
+from pivot.geometry.collision import polygon_penetration
 from pivot.geometry.types import BoolArray, IntArray
-from pivot.planning.placement import front_zone
+from pivot.planning.placement import OPENING_REACH, front_zone
 from pivot.scene.graph import Scene, is_flat, is_opening, support_parents
 
 # Walking width of an adult, and of a wheelchair (accessible-route guidelines).
@@ -41,6 +42,8 @@ class AccessReport:
         reachable_share: Share of the free floor (clear of objects) a
             person walks on, as a fraction.
         blocked_doors: Ids of the doors with no room to stand in front.
+        obstructed_doors: Doors with furniture in front of them, even partly
+            (one can still squeeze past), by id: the ids of that furniture.
         unreachable: Ids of the objects nobody can get within arm's reach of.
         labels: Labels of the objects named above, by id.
     """
@@ -50,23 +53,36 @@ class AccessReport:
     reachable: BoolArray
     reachable_share: float
     blocked_doors: list[int] = field(default_factory=list)
+    obstructed_doors: dict[int, list[int]] = field(default_factory=dict)
     unreachable: list[int] = field(default_factory=list)
     labels: dict[int, str] = field(default_factory=dict)
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, before: AccessReport | None = None) -> dict[str, Any]:
         """Serializes the report for tool-call responses.
+
+        Args:
+            before: Access before any move, to tell the furniture a move put in
+                front of a door from what already stood there.
 
         Returns:
             A JSON-compatible dictionary.
         """
+        earlier = before.obstructed_doors if before is not None else {}
         return {
             "width_m": self.width,
             "from_doors": self.from_doors,
             "reachable_floor_share": round(self.reachable_share, 3),
             "blocked_doors": [{"id": i, "label": self.labels[i]} for i in self.blocked_doors],
+            "doors_with_furniture_in_front": [
+                {"id": door, "label": self.labels[door],
+                 "in_front": [{"id": i, "label": self.labels[i],
+                               **({"there_before_any_move": i in earlier.get(door, [])}
+                                  if before is not None else {})} for i in ids]}
+                for door, ids in self.obstructed_doors.items()],
             "unreachable_objects": [{"id": i, "label": self.labels[i]}
                                     for i in self.unreachable],
             "accessible": not self.blocked_doors and not self.unreachable,
+            "doors_clear": not self.blocked_doors and not self.obstructed_doors,
         }
 
 
@@ -118,6 +134,30 @@ def _start_components(scene: Scene, components: IntArray) -> tuple[set[int], lis
     return starts, blocked
 
 
+def _obstructed_doors(scene: Scene) -> dict[int, list[int]]:
+    """Finds the furniture standing in front of each door, even partly.
+
+    A door with a table half across it is not blocked (one squeezes past), but
+    it is not clear either: the same zone as the placement warnings is used.
+
+    Args:
+        scene: The scene.
+
+    Returns:
+        For each door with something in front, the ids of what stands there.
+    """
+    found: dict[int, list[int]] = {}
+    for door in sorted((o for o in scene.objects.values() if o.label.lower() == "door"),
+                       key=lambda o: o.object_id):
+        zone = front_zone(door.box, OPENING_REACH["door"]).footprint()
+        ids = [o.object_id for o in sorted(scene.objects.values(), key=lambda o: o.object_id)
+               if not (is_opening(o) or is_flat(o)) and o.box.z_min < HEADROOM
+               and polygon_penetration(o.box.footprint(), zone) > 0.01]
+        if ids:
+            found[door.object_id] = ids
+    return found
+
+
 def check_access(scene: Scene, width: float = WALKING_WIDTH) -> AccessReport | None:
     """Finds the floor a person of a given width can reach from the doors.
 
@@ -154,5 +194,6 @@ def check_access(scene: Scene, width: float = WALKING_WIDTH) -> AccessReport | N
     walked = ndimage.binary_dilation(
         reachable, iterations=max(1, round(0.5 * width / floor.resolution))) & free
     return AccessReport(width, from_doors, reachable,
-                        float(walked.sum()) / max(int(free.sum()), 1), blocked, unreachable,
+                        float(walked.sum()) / max(int(free.sum()), 1), blocked,
+                        _obstructed_doors(scene), unreachable,
                         {o.object_id: o.label for o in scene.objects.values()})
