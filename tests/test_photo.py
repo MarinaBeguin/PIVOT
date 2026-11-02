@@ -86,9 +86,13 @@ def test_muse_names_the_object_and_sam_cuts_it_out() -> None:
 
 def test_an_added_object_goes_where_it_fits_and_can_be_resized_or_undone() -> None:
     session = Session(office_scene())
+    on_desk = call(session, "add_object", label="armchair", width_m=0.8, depth_m=0.85,
+                   height_m=0.9, x=1.5, y=2.5)  # Aimed at the desk: the desk is in the way.
+    assert not on_desk["added"] and on_desk["in_the_way"][0]["label"] == "desk"
+    # Without a spot, it goes to a free one near the middle of the floor.
     added = call(session, "add_object", label="armchair", width_m=0.8, depth_m=0.85,
-                 height_m=0.9, x=1.5, y=2.5)  # Aimed at the desk: put beside it.
-    assert added["added"] and added["shift_m"] > 0.3
+                 height_m=0.9)
+    assert added["added"]
     new = session.scene[added["object_id"]]
     assert new.movable and new.box.z_min == 0.0
     assert call(session, "resize_object", object_id=new.object_id, width_m=0.9, depth_m=0.9,
@@ -109,10 +113,22 @@ def test_the_server_brings_in_the_object_of_a_photo() -> None:
     assert '"photos": true' in client.get("/").text
     photo = "data:image/jpeg;base64," + base64.b64encode(jpeg()).decode()
     answer = client.post("/api/photo", json={"image": photo}).json()
-    assert answer["added"] and answer["look"] == "red velvet"
+    # The photo only says what it is: the visitor then picks its spot.
+    assert answer["recognized"] and answer["look"] == "red velvet"
+    assert answer["label"] == "armchair" and answer["size_m"] == [0.8, 0.8, 0.9]
     assert answer["picture"].startswith("data:image/png;base64,")
-    assert answer["object_id"] in {o["id"] for o in answer["objects"]}
+    assert len(client.get("/api/objects").json()) == 5
+    spot = {"label": "armchair", "size_m": [0.8, 0.8, 0.9], "yaw_deg": 0}
+    assert client.post("/api/spot", json={**spot, "x": 3.5, "y": 1.0}).json() == {
+        "free": True, "in_the_way": []}
+    assert client.post("/api/spot", json={**spot, "x": 1.5, "y": 1.6}).json() == {
+        "free": False, "in_the_way": [3]}
+    placed = client.post("/api/tools/add_object", json={
+        "label": "armchair", "width_m": 0.8, "depth_m": 0.8, "height_m": 0.9,
+        "x": 3.5, "y": 1.0}).json()
+    assert placed["added"] and (placed["x"], placed["y"]) == (3.5, 1.0)
+    assert placed["object_id"] in {o["id"] for o in placed["objects"]}
     assert "Then bring in: the armchair" in client.get("/instructions").text
     nothing = TestClient(create_app([room], photographer=lambda photo: None))
     assert nothing.post("/api/photo", json={"image": photo}).json() == {
-        "added": False, "reason": "no_object"}
+        "recognized": False, "reason": "no_object"}

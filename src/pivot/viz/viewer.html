@@ -83,6 +83,15 @@
   #chat label { font-size: 12px; color: var(--muted); }
   /* First-visit tour: comic speech bubbles pointing at each part of the page. */
   #tour { position: fixed; inset: 0; z-index: 20; background: #0007; display: none; }
+  /* The size of an object from a photo is checked in a dialog before it is placed. */
+  #sizeDialog { position: fixed; inset: 0; z-index: 20; background: #0009; display: none;
+                align-items: center; justify-content: center; padding: 16px; }
+  #sizeDialog .card { background: var(--panel); border: 2px solid var(--accent); border-radius: 12px;
+                      padding: 16px; max-width: 380px; width: 100%; box-sizing: border-box; }
+  #sizeDialog h2 { margin: 0 0 8px; font-size: 17px; }
+  #sizeDialog img { display: block; max-width: 100%; max-height: 30vh; margin: 0 auto 10px;
+                    border-radius: 6px; background: #fff1; }
+  #sizeDialog .grid { margin-top: 12px; }
   #tour .bubble { position: absolute; max-width: 300px; padding: 14px 16px 12px;
     background: #fffdf3; color: #1d2421; border: 2.5px solid #1d2421; border-radius: 22px;
     box-shadow: 4px 5px 0 #1d2421; font: 15px/1.45 "Comic Neue", "Comic Sans MS", system-ui, sans-serif; }
@@ -172,6 +181,7 @@
   <button data-sheet="chat" data-i18n="navAsk" style="display:none">Ask</button>
 </nav>
 <div id="tour"></div>
+<div id="sizeDialog"><div class="card"></div></div>
 <button id="tourButton" data-i18n-title="tourHelp">?</button>
 <script>__PIVOT_LANGUAGES__</script>
 <script id="scene-data" type="application/json">__PIVOT_SCENE_DATA__</script>
@@ -420,7 +430,8 @@ function clearSelection() {
   setTarget(null);
 }
 window.addEventListener("keydown", e => {
-  if (e.key === "Escape" && data.interactive) clearSelection();
+  if (e.key === "Escape" && placing) stopPlacing();
+  else if (e.key === "Escape" && data.interactive) clearSelection();
 });
 
 // Every request names this page's room; the server keeps one session per room.
@@ -573,8 +584,26 @@ const raycaster = new THREE.Raycaster();
 const floorPlane = new THREE.Plane(new THREE.Vector3(0, 0, 1), 0);
 let downAt = null;
 renderer.domElement.addEventListener("pointerdown", e => { downAt = [e.clientX, e.clientY]; });
+function floorPoint(e) {
+  const ndc = new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1,
+                                -(e.clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  return raycaster.ray.intersectPlane(floorPlane, new THREE.Vector3());
+}
+renderer.domElement.addEventListener("pointermove", e => {
+  if (placing && e.pointerType === "mouse") { const p = floorPoint(e); if (p) movePlacing(p); }
+});
 renderer.domElement.addEventListener("pointerup", e => {
   if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 4) return;
+  if (placing) {
+    // With a mouse, the ghost already follows: a click puts it. On a touch
+    // screen, a tap shows it there, and a button confirms.
+    const point = floorPoint(e);
+    if (!point) return;
+    movePlacing(point);
+    if (e.pointerType === "mouse") placeHere(); else placeHereButton.style.display = "";
+    return;
+  }
   const ndc = new THREE.Vector2((e.clientX / window.innerWidth) * 2 - 1,
                                 -(e.clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
@@ -1109,21 +1138,18 @@ async function addFromPhoto(file) {
   photoButton.disabled = true;
   result.textContent = t("analyzing");
   try {
-    const body = { image: await shrunkPhoto(file) };
-    if (target) Object.assign(body, { x: target.x, y: target.y });
     const answer = await (await fetch(scoped("/api/photo"), {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body) })).json();
-    if (answer.error || !answer.added) {
+      body: JSON.stringify({ image: await shrunkPhoto(file) }) })).json();
+    if (answer.error || !answer.recognized) {
       const why = answer.reason === "no_object" ? t("noObjectInPhoto")
         : escapeHtml(answer.error ?? answer.reason);
       result.innerHTML = `<span class="no">${t("notPossible")}</span>\n${why}`;
       return;
     }
-    pictures.set(answer.object_id, answer.picture);
-    applyObjects(answer.objects);
-    clearSelection();
-    showSizeForm(answer.object_id, answer.label, answer.size_m);
+    const size = await confirmSize(answer);
+    if (size) startPlacing({ ...answer, size_m: size });
+    else result.textContent = "";
   } catch (error) {
     result.innerHTML = `<span class="no">${t("error")}</span>\n${escapeHtml(error.message)}`;
   } finally {
@@ -1133,23 +1159,185 @@ async function addFromPhoto(file) {
     showLimits();
   }
 }
-// The estimated size, in centimeters, with fields to correct it.
-function showSizeForm(id, label, size) {
-  const cm = size.map(v => Math.round(100 * v));
+
+// Placing a piece of furniture from a photo: the user picks its spot. It is
+// put there without a path (new furniture is often assembled in place); if
+// something stands there, PIVOT can move it aside with verified motions.
+let placing = null;
+const placeGhost = new THREE.Group();
+scene.add(placeGhost);
+const placeHereButton = document.createElement("button");
+placeHereButton.className = "primary";
+placeHereButton.style.display = "none";
+placeHereButton.onclick = () => placeHere();
+// The ghost is grey until the server has checked the spot (the same check as
+// placing, on the real shapes): green if free, red if something stands there.
+function drawPlacing(free = null) {
+  placeGhost.clear();
+  if (!placing || !placing.at) return;
+  const [sx, sy, sz] = placing.size;
+  const color = free === null ? 0xb0b8c0 : free ? 0x4cc38a : 0xe5484d;
+  const box = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), new THREE.MeshBasicMaterial(
+    { color, transparent: true, opacity: 0.35, depthTest: false }));
+  box.add(new THREE.LineSegments(new THREE.EdgesGeometry(box.geometry),
+    new THREE.LineBasicMaterial({ color, depthTest: false })));
+  box.renderOrder = 11;
+  box.position.set(placing.at.x, placing.at.y, sz / 2);
+  box.rotation.z = placing.yaw;
+  placeGhost.add(box);
+}
+let spotTimer = null;
+function checkSpot() {
+  clearTimeout(spotTimer);
+  spotTimer = setTimeout(async () => {
+    if (!placing?.at) return;
+    const asked = placing.at;
+    const answer = await (await fetch(scoped("/api/spot"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label: placing.label, size_m: placing.size, x: asked.x, y: asked.y,
+                             yaw_deg: THREE.MathUtils.radToDeg(placing.yaw) }) })).json();
+    if (placing?.at === asked) drawPlacing(answer.free);
+  }, 150);
+}
+function movePlacing(point) {
+  placing.at = point;
+  drawPlacing();
+  checkSpot();
+}
+function stopPlacing() {
+  placing = null;
+  placeGhost.clear();
+  placeHereButton.style.display = "none";
+  result.textContent = "";
+}
+// Asks the visitor to check the size estimated from the photo, before placing the object.
+const sizeDialog = document.getElementById("sizeDialog");
+function confirmSize(answer) {
+  return new Promise(resolve => {
+    const card = sizeDialog.querySelector(".card");
+    card.innerHTML = "";
+    const title = document.createElement("h2");
+    title.textContent = t("sizeTitle", { name: nameOf(answer.label) });
+    const ask = document.createElement("div");
+    ask.className = "hint";
+    ask.textContent = t("sizeAsk");
+    if (answer.picture) {
+      const picture = document.createElement("img");
+      picture.src = answer.picture;
+      card.append(picture);
+    }
+    let size = [...answer.size_m];
+    const form = sizeInputs(size, value => { size = value; });
+    const row = document.createElement("div");
+    row.className = "grid two";
+    const cancel = document.createElement("button");
+    cancel.textContent = t("placeCancel");
+    const ok = document.createElement("button");
+    ok.className = "primary";
+    ok.textContent = t("sizeOk");
+    const close = value => { sizeDialog.style.display = "none"; resolve(value); };
+    cancel.onclick = () => close(null);
+    ok.onclick = () => close(size);
+    row.append(cancel, ok);
+    card.append(title, ask, form, row);
+    sizeDialog.style.display = "flex";
+    form.querySelector("input")?.focus();
+  });
+}
+function startPlacing(answer) {
+  clearSelection();
+  placing = { label: answer.label, size: [...answer.size_m], yaw: 0, at: null,
+              picture: answer.picture };
+  const name = nameOf(answer.label);
   result.innerHTML = "";
   const line = document.createElement("div");
-  line.textContent = t("added", { name: objectName({ label, id }), size: cm.join(" × ") + " cm" });
+  line.textContent = t("placeHint", { name, size: answer.size_m.map(v => Math.round(100 * v))
+    .join(" × ") + " cm" });
+  const form = sizeInputs(placing.size, size => { placing.size = size; drawPlacing(); checkSpot(); });
+  const row = document.createElement("div");
+  row.className = "grid three";
+  const turn = document.createElement("button");
+  turn.textContent = t("placeTurn");
+  turn.onclick = () => { placing.yaw += Math.PI / 2; drawPlacing(); checkSpot(); };
+  const cancel = document.createElement("button");
+  cancel.textContent = t("placeCancel");
+  cancel.onclick = stopPlacing;
+  placeHereButton.textContent = t("placeHere");
+  row.append(turn, cancel, placeHereButton);
+  result.append(line, form, row);
+}
+async function placeHere(makeRoom = false) {
+  if (!placing?.at || busy) return;
+  busy = true;
+  placeHereButton.style.display = "none";
+  const [width, depth, height] = placing.size;
+  try {
+    const answer = await callTool("add_object", { label: placing.label, width_m: width,
+      depth_m: depth, height_m: height, x: placing.at.x, y: placing.at.y,
+      yaw_deg: THREE.MathUtils.radToDeg(placing.yaw), make_room: makeRoom });
+    if (!answer.added) {
+      const blocked = answer.in_the_way ?? [];
+      const why = document.createElement("div");
+      why.innerHTML = `<span class="no">${t("notPossible")}</span>\n${escapeHtml(answer.reason)}`;
+      result.querySelectorAll(".placeFail").forEach(node => node.remove());
+      why.className = "placeFail";
+      if (blocked.length && blocked.every(o => o.movable)) {
+        const room = document.createElement("button");
+        room.className = "primary";
+        room.textContent = t("makeRoomHere");
+        room.onclick = () => placeHere(true);
+        why.append(document.createElement("br"), room);
+      }
+      result.append(why);
+      return;
+    }
+    const picture = placing.picture;
+    stopPlacing();
+    await watchMotions(async () => {
+      for (const step of answer.moved_aside ?? []) {
+        drawPath(step.waypoints);
+        await animate(step.object_id, step.carried_along || [], step.waypoints);
+      }
+    });
+    pictures.set(answer.object_id, picture);
+    applyObjects(answer.objects);
+    showSizeForm(answer.object_id, answer.label, answer.size_m, answer.doors ?? []);
+  } finally {
+    busy = false;
+  }
+}
+// Size fields in centimeters; ``changed`` gets the size in meters.
+function sizeInputs(size, changed) {
   const form = document.createElement("div");
   form.className = "sizeForm";
-  const inputs = cm.map(v => {
+  const key = document.createElement("span");
+  key.className = "key";
+  key.textContent = t("sizeCm");
+  const inputs = size.map(v => {
     const input = document.createElement("input");
-    input.type = "number"; input.min = "5"; input.max = "600"; input.value = v;
+    input.type = "number"; input.min = "5"; input.max = "600"; input.value = Math.round(100 * v);
+    input.oninput = () => changed(inputs.map(i => parseFloat(i.value) / 100));
     return input;
   });
+  form.append(key, ...inputs);
+  return form;
+}
+// After placing: the estimated size, to correct, and the doors it passes assembled.
+function showSizeForm(id, label, size, doors = []) {
+  result.innerHTML = "";
+  const line = document.createElement("div");
+  const fits = doors.filter(d => d.fits_assembled);
+  const doorsText = !doors.length ? "" : fits.length
+    ? " " + t("doorsFit", { doors: fits.map(d => objectName({ label: "door", id: d.id })).join(", ") })
+    : " " + t("doorsNone");
+  line.textContent = t("added", { name: objectName({ label, id }),
+    size: size.map(v => Math.round(100 * v)).join(" × ") + " cm" }) + doorsText;
+  let wanted = size;
+  const form = sizeInputs(size, value => { wanted = value; });
   const apply = document.createElement("button");
   apply.textContent = t("apply");
   apply.onclick = async () => {
-    const [width, depth, height] = inputs.map(i => parseFloat(i.value) / 100);
+    const [width, depth, height] = wanted;
     const answer = await callTool("resize_object",
       { object_id: id, width_m: width, depth_m: depth, height_m: height });
     if (!answer.resized) {
@@ -1159,10 +1347,7 @@ function showSizeForm(id, label, size) {
     applyObjects(answer.objects);
     line.textContent = t("resized");
   };
-  const key = document.createElement("span");
-  key.className = "key";
-  key.textContent = t("sizeCm");
-  form.append(key, ...inputs, apply);
+  form.append(apply);
   result.append(line, form);
 }
 if (data.photos) photoButton.style.display = "";
@@ -1178,6 +1363,12 @@ window.pivot = {
   check: () => run("plan_motion"),
   move: () => run("move_object"),
   remove: removeSelected,
+  // A new object as /api/photo describes it, to place: then aimAt and placeHere.
+  place: answer => startPlacing({ picture: "", look: "", ...answer }),
+  // The size dialog shown after a photo; resolves to the size kept, or null.
+  confirmSize: answer => confirmSize({ picture: "", ...answer }),
+  placeAt: (x, y) => movePlacing(new THREE.Vector3(x, y, 0)),
+  placeHere,
   view: (x, y, z, tx, ty, tz) => { camera.position.set(x, y, z); controls.target.set(tx, ty, tz); },
 };
 

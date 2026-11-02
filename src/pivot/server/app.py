@@ -42,6 +42,7 @@ from pivot.agent.loop import Agent
 from pivot.agent.tools import TOOLS_BY_NAME, Session, call_tool
 from pivot.geometry.types import FloatArray
 from pivot.lifting.completion import close_windows, complete_rugs
+from pivot.planning.arrival import arrive, with_new_object
 from pivot.meta.client import MetaConfig, Usage
 from pivot.meta.photo import PhotoObject, object_from_photo
 from pivot.meta.sam import SamClient
@@ -162,20 +163,22 @@ def _decode_data_url(url: str) -> bytes | None:
         return None
 
 
-def _photo_reply(visitor: Visitor, photographer: Photographer, body: dict[str, Any],
+def _photo_reply(photographer: Photographer, body: dict[str, Any],
                  meter: Meter | None, key: str) -> JSONResponse:
-    """Brings an object into a visitor's room from a photo, and charges it.
+    """Recognizes the object of a photo, and charges it; the visitor then places it.
+
+    The object is not added here: the visitor chooses its spot, where it is
+    added (``add_object`` at that spot, see :mod:`pivot.planning.arrival`).
 
     Args:
-        visitor: The visitor.
         photographer: Names, sizes and cuts out the object of a photo.
-        body: The photo as a data address, and optionally where the object should go.
+        body: The photo as a data address.
         meter: Prices the request, if the deployment has a budget.
         key: The visitor's key in the ledger.
 
     Returns:
-        The object added, its look, its picture and the updated objects; or
-        why it was not added.
+        What the object is, its estimated size, its look and its picture; or
+        why none was recognized.
     """
     if meter is not None and (reason := meter.ledger.refusal(key)):
         return JSONResponse({"error": reason}, status_code=429)
@@ -191,14 +194,11 @@ def _photo_reply(visitor: Visitor, photographer: Photographer, body: dict[str, A
         if meter is not None:
             meter.ledger.record(key, meter.photo_price)
     if seen is None:
-        return JSONResponse({"added": False, "reason": "no_object"})
-    where = {k: float(body[k]) for k in ("x", "y") if body.get(k) is not None}
-    result: dict[str, Any] = json.loads(call_tool(visitor.session, "add_object", json.dumps(
-        {"label": seen.label, **dict(zip(("width_m", "depth_m", "height_m"), seen.size)),
-         **(where if len(where) == 2 else {})})))
+        return JSONResponse({"recognized": False, "reason": "no_object"})
     cutout = "data:image/png;base64," + base64.b64encode(seen.picture).decode()
-    return JSONResponse({**result, "look": seen.look, "picture": cutout,
-                         "objects": _objects(visitor.session)})
+    return JSONResponse({"recognized": True, "label": seen.label,
+                         "size_m": [round(v, 2) for v in seen.size], "look": seen.look,
+                         "picture": cutout})
 
 
 def _audio_seconds(audio: bytes) -> float:
@@ -454,21 +454,39 @@ def create_app(rooms: list[Room],
 
     @app.post("/api/photo")
     def photo(body: dict[str, Any], request: Request) -> JSONResponse:
-        """Brings an object into the room from a photo of it.
+        """Recognizes the object of a photo, for the visitor to place it.
 
         Args:
-            body: ``{"image": "data:image/...;base64,...", "x": ..., "y": ...}``;
-                the point where it should go is optional.
+            body: ``{"image": "data:image/...;base64,..."}``.
             request: The request.
 
         Returns:
-            The object added (as ``add_object`` says), its look, its picture,
-            and the updated objects; or why it was not added.
+            What it is, its estimated size, its look and its picture; or why
+            none was recognized.
         """
         if photographer is None:
             return JSONResponse({"error": "Objects from photos are not enabled."},
                                 status_code=404)
-        return _photo_reply(request.state.visitor, photographer, body, meter, key(request))
+        return _photo_reply(photographer, body, meter, key(request))
+
+    @app.post("/api/spot")
+    def spot(body: dict[str, Any], request: Request) -> JSONResponse:
+        """Says whether a new object would fit at a spot, while the visitor picks it.
+
+        Args:
+            body: ``{"label", "size_m": [w, d, h], "x", "y", "yaw_deg"}``.
+            request: The request.
+
+        Returns:
+            ``{"free": ..., "in_the_way": [ids]}``; nothing is added.
+        """
+        size = tuple(float(v) for v in body["size_m"])
+        trial, object_id, box = with_new_object(
+            request.state.visitor.session.scene, str(body.get("label", "object")),
+            (size[0], size[1], size[2]), float(body["x"]), float(body["y"]),
+            float(body.get("yaw_deg", 0.0)))
+        arrival = arrive(trial, object_id, box)
+        return JSONResponse({"free": arrival.placed, "in_the_way": arrival.in_the_way})
 
     @app.get("/api/limits")
     def limits(request: Request) -> dict[str, Any]:

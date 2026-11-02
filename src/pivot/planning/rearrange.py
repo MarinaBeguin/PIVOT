@@ -428,7 +428,7 @@ def plan_rearrangement(scene: Scene, object_id: int, goal: OrientedBox,
         return Rearrangement(False, message=f"{len(blockers)} objects are in the way; at most "
                              f"{max_blockers} are moved aside.", blockers=blockers)
     initial = scene
-    steps = []
+    steps: list[MotionPlan] = []
     for blocker in blockers:
         parking = park_aside(scene, blocker, sweep, options)
         if parking is None:
@@ -496,3 +496,37 @@ def _put_all_back(scene: Scene, initial: Scene, blockers: list[int],
             returns.append(back)
             scene = scene.moved(blocker, back.waypoints[-1])
     return returns
+
+
+def clear_spot(scene: Scene, spot: OrientedBox, blockers: list[int],
+               options: MotionOptions | None = None) -> Rearrangement:
+    """Moves objects aside so that a spot becomes free, each with a verified motion.
+
+    Used when a new piece of furniture arrives where others stand: they are
+    pushed aside, nearest free spot first, out of the spot; they are not put
+    back (the spot is now taken).
+
+    Args:
+        scene: The scene, without the arriving object.
+        spot: The box the arriving object will take.
+        blockers: Objects standing in the spot.
+        options: Motion parameters.
+
+    Returns:
+        The verified steps, or the reason the spot cannot be cleared.
+    """
+    options = options or MotionOptions()
+    carried = {c for b in blockers for c in carried_objects(scene, b)}
+    steps: list[MotionPlan] = []
+    for blocker in (b for b in blockers if b not in carried):
+        if any(step.object_id == blocker for step in steps):
+            continue  # Already pushed aside with a table.
+        parking = park_aside(scene, blocker, [spot], options)
+        if parking is None:
+            return Rearrangement(False, message=f"The {scene[blocker].label} (#{blocker}) stands "
+                                 "there and no free spot nearby can take it.", blockers=blockers)
+        for motion in parking:
+            steps.append(motion)
+            scene = scene.moved(motion.object_id, motion.waypoints[-1])
+    moved = ", ".join(f"the {scene[s.object_id].label} (#{s.object_id})" for s in steps)
+    return Rearrangement(True, steps, f"Room made by moving {moved} aside.", blockers)
