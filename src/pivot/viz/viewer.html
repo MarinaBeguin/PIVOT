@@ -29,6 +29,9 @@
     body.sheet-chat #moveSection { display: none; }
     body.sheet-chat #chat { margin-top: 0; border-top: none; padding-top: 0; }
     #chatLog { max-height: 24vh; }
+    /* A handle: the drawer is swiped down to close. */
+    #panel::before, #controls::before { content: ""; display: block; width: 40px; height: 4px;
+             margin: -4px auto 8px; border-radius: 2px; background: #fff4; }
     .tag { font-size: 10px; padding: 0 4px; }
     /* The long explanation is in the tour; the drawer keeps the controls. */
     #moveSection > .hint { display: none; }
@@ -102,7 +105,7 @@
     border-radius: 50%; padding: 0; font-weight: 700; font-size: 16px; background: var(--panel); }
   /* On phones the bottom bar takes the bottom: top right, over the room. */
   @media (max-width: 720px) { #tourButton { left: auto; right: 12px; top: 12px; bottom: auto; } }
-  @media (max-width: 720px) { #tour .bubble { max-width: calc(100vw - 48px); } }
+  @media (max-width: 720px) { #tour .bubble { max-width: calc(100vw - 32px); box-sizing: border-box; } }
 </style>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Comic+Neue:wght@400;700&display=swap">
 <script type="importmap">
@@ -446,12 +449,32 @@ for (const [id, group] of [["showPoints", cloud], ["showBoxes", boxGroup],
 // Labels can crowd a small screen: off by default on phones.
 const phone = window.matchMedia("(max-width: 720px)");
 const labelBox = document.getElementById("showLabels");
-labelBox.checked = !phone.matches;
+// On by default, phones too: objects are named by their number in the chat.
+labelBox.checked = true;
 document.body.classList.toggle("no-labels", !labelBox.checked);
 labelBox.onchange = () => document.body.classList.toggle("no-labels", !labelBox.checked);
 
 // Phones: one drawer at a time, opened (and closed again) from the bottom bar.
 let sheet = null;
+// A drawer swiped down closes, as on any phone (from its top, or once scrolled to the top).
+for (const drawer of [document.getElementById("panel"), document.getElementById("controls")]) {
+  let startY = null, shift = 0;
+  drawer.addEventListener("touchstart", event => {
+    startY = drawer.scrollTop <= 0 ? event.touches[0].clientY : null;
+    shift = 0;
+  }, { passive: true });
+  drawer.addEventListener("touchmove", event => {
+    if (startY === null || !phone.matches) return;
+    shift = Math.max(0, event.touches[0].clientY - startY);
+    drawer.style.transform = shift ? `translateY(${shift}px)` : "";
+  }, { passive: true });
+  drawer.addEventListener("touchend", () => {
+    drawer.style.transform = "";
+    if (startY !== null && shift > 70 && sheet) openSheet(sheet);
+    startY = null;
+  });
+}
+
 function openSheet(name) {
   sheet = name === sheet ? null : name;
   for (const kind of ["panel", "move", "chat"]) document.body.classList.toggle(`sheet-${kind}`, sheet === kind);
@@ -938,13 +961,47 @@ async function showLimits() {
 // Answers read aloud by the browser's own voice (no server, no cost): on
 // glasses, there is no screen to read them from.
 const aloud = document.getElementById("chatAloud");
-function speak(text) {
-  if (!aloud.checked || !window.speechSynthesis) return;
-  speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.lang = I18n.LANGUAGES[language].speech;
-  speechSynthesis.speak(utterance);
+let voices = [];
+function loadVoices() { voices = window.speechSynthesis ? speechSynthesis.getVoices() : []; }
+if (window.speechSynthesis) {
+  loadVoices();
+  speechSynthesis.addEventListener("voiceschanged", loadVoices);
 }
+function utterance(text) {
+  const lang = I18n.LANGUAGES[language].speech;
+  const said = new SpeechSynthesisUtterance(text);
+  said.lang = lang;
+  // A voice of the page's language, when the browser has one.
+  const voice = voices.find(v => v.lang.replace("_", "-") === lang)
+    || voices.find(v => v.lang.startsWith(lang.split("-")[0]));
+  if (voice) said.voice = voice;
+  return said;
+}
+function speak(text) {
+  if (!aloud.checked || !window.speechSynthesis || !text) return;
+  if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
+  // Sentence by sentence: Chrome stops a long utterance after about 15 seconds. Spoken a
+  // moment after the cancel, which Chrome otherwise applies to the new words too.
+  const sentences = text.match(/[^.!?。！？]+[.!?。！？]*/g) || [text];
+  setTimeout(() => {
+    for (const sentence of sentences) if (sentence.trim()) speechSynthesis.speak(utterance(sentence.trim()));
+    speechSynthesis.resume();
+  }, 100);
+}
+// Ticking the box speaks a short sentence: phones only let a page speak after a tap, and
+// the visitor hears at once that it works (or reads why it cannot).
+aloud.addEventListener("change", () => {
+  if (!aloud.checked) {
+    if (window.speechSynthesis) speechSynthesis.cancel();
+    return;
+  }
+  loadVoices();
+  if (!window.speechSynthesis || !voices.length) {
+    chatLine("tools", t("noVoice"));
+    return;
+  }
+  speechSynthesis.speak(utterance(t("aloudOn")));
+});
 
 // Spoken requests: the microphone is recorded as 16 kHz mono 16-bit WAV (what
 // the transcription models take), sent to the server, and the text is sent
@@ -1188,7 +1245,9 @@ function showTour(index = 0) {
   if (!step.target) {
     // The 3D view: the bubble points down at the middle of the room.
     bubble.classList.add("down");
-    bubble.style.left = `${Math.max(16, window.innerWidth / 2 - 40)}px`;
+    // Centered on the room, but never past the edge of a narrow screen.
+    bubble.style.left = `${Math.max(16, Math.min(window.innerWidth / 2 - 40,
+                                                 window.innerWidth - bubble.offsetWidth - 16))}px`;
     bubble.style.top = `${Math.max(16, window.innerHeight / 2 - bubble.offsetHeight - 30)}px`;
     return;
   }
