@@ -70,7 +70,7 @@ def frames_to_mp4(frames: list[Path], output: Path, fps: float = 6.0, width: int
     return output
 
 
-def subsample_video(video: Path, step: int, output: Path) -> Path:
+def subsample_video(video: Path, step: int, output: Path, width: int | None = None) -> Path:
     """Keeps one frame out of ``step``, as an H.264 MP4.
 
     Frame ``i`` of the output is frame ``step * i`` of the input: a video made
@@ -80,6 +80,8 @@ def subsample_video(video: Path, step: int, output: Path) -> Path:
         video: Input video.
         step: Keep one frame out of ``step``.
         output: Destination ``.mp4`` file.
+        width: Width of the output in pixels, the height keeping the aspect
+            ratio; None keeps the input's size.
 
     Returns:
         The output path.
@@ -93,7 +95,8 @@ def subsample_video(video: Path, step: int, output: Path) -> Path:
     # is wrong on some versions, which then repeat frames.
     rate = video_rate(video)
     command = [ffmpeg_executable(), "-y", "-loglevel", "error", "-i", str(video),
-               "-vf", f"select=not(mod(n\\,{step})),setpts=N/({rate}*TB)", "-r", rate, "-an",
+               "-vf", f"select=not(mod(n\\,{step})),setpts=N/({rate}*TB)"
+               + (f",scale={width}:-2" if width else ""), "-r", rate, "-an",
                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", str(partial)]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
@@ -256,11 +259,16 @@ def main(argv: list[str] | None = None) -> None:
     subsample.add_argument("video", type=Path)
     subsample.add_argument("step", type=int)
     subsample.add_argument("output", type=Path)
+    subsample.add_argument("--width", type=int, help="Scale to this width, in pixels.")
+    commands.add_parser("width", help="Print the width in pixels.").add_argument(
+        "video", type=Path)
     args = parser.parse_args(argv)
     if args.command == "frames":
         print(count_frames(args.video))
+    elif args.command == "width":
+        print(video_size(args.video)[0])
     else:
-        subsample_video(args.video, args.step, args.output)
+        subsample_video(args.video, args.step, args.output, args.width)
 
 
 if __name__ == "__main__":

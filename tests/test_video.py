@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from pivot.data.video import count_frames, frames_to_mp4, subsample_video
+from pivot.data.video import count_frames, frames_to_mp4, subsample_video, video_size
 
 pytestmark = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg not installed")
 
@@ -22,3 +22,6 @@ def test_subsampling_keeps_one_frame_out_of_step(tmp_path: Path) -> None:
     assert count_frames(video) == 10
     every3 = subsample_video(video, 3, tmp_path / "every3.mp4")
     assert count_frames(every3) == 4  # Frames 0, 3, 6 and 9.
+    smaller = subsample_video(video, 1, tmp_path / "half.mp4", width=24)
+    assert count_frames(smaller) == 10
+    assert video_size(smaller) == (24, 16)

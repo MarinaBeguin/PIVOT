@@ -13,7 +13,7 @@ from PIL import Image
 from pivot.data.video import count_frames, frame_runs, frames_to_mp4, select_frames
 from pivot.meta.client import MetaConfig
 from pivot.meta.sam import (
-    Decoding, SamClient, parse_video_block, parse_video_response, response_blocks,
+    Decoding, SamClient, parse_video_block, parse_video_response, piece_videos, response_blocks,
     track_in_parallel,
 )
 from pivot.perception.chunks import join_chunks, mask_iou, plan_chunks
@@ -113,6 +113,12 @@ def test_selected_frames_come_out_in_order(tmp_path: Path) -> None:
     assert frame_runs([0, 1, 2, 5, 7, 8]) == [(0, 2), (5, 5), (7, 8)]
     kept = select_frames(video, [0, 1, 5, 9], tmp_path / "kept.mp4")
     assert count_frames(kept) == 4
+    # A cached piece with the wrong number of frames (a faulty ffmpeg) is made again.
+    pieces = piece_videos(video, [[0, 1, 2, 3, 4, 5], [4, 5, 6, 7, 8, 9]], tmp_path / "pieces")
+    assert [count_frames(p) for p in pieces] == [6, 6]
+    pieces[0].write_bytes(video.read_bytes())  # 12 frames instead of 6.
+    again = piece_videos(video, [[0, 1, 2, 3, 4, 5], [4, 5, 6, 7, 8, 9]], tmp_path / "pieces")
+    assert again == pieces and count_frames(again[0]) == 6
 
 
 def test_every_prompt_and_piece_runs_at_once_and_pieces_are_joined(tmp_path: Path) -> None:
