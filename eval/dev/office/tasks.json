@@ -1,0 +1,362 @@
+[
+ {
+  "task_id": "t000",
+  "kind": "next_to",
+  "prompt": "Move the trash can (#102) next to the table (#73).",
+  "object_id": 102,
+  "anchor_id": 73,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t001",
+  "kind": "next_to_clear",
+  "prompt": "Move the lamp (#33) next to the table (#72). Keep doors and windows clear.",
+  "object_id": 33,
+  "anchor_id": 72,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t002",
+  "kind": "at_point",
+  "prompt": "Move the chair (#6) so that its center is at x = 1.92 m, y = 3.16 m.",
+  "object_id": 6,
+  "anchor_id": null,
+  "point": [
+   1.92,
+   3.16
+  ],
+  "feasible": false
+ },
+ {
+  "task_id": "t003",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#1) under the table (#71), with at least a third of it under the table top.",
+  "object_id": 1,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t004",
+  "kind": "on_surface",
+  "prompt": "Put the trash can (#102) on the table (#71).",
+  "object_id": 102,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t005",
+  "kind": "at_point_blocked",
+  "prompt": "Move the table (#73) so that its center is at x = 1.47 m, y = 4.19 m. Other objects may be moved out of the way.",
+  "object_id": 73,
+  "anchor_id": null,
+  "point": [
+   1.47,
+   4.19
+  ],
+  "feasible": false
+ },
+ {
+  "task_id": "t006",
+  "kind": "next_to",
+  "prompt": "Move the trash can (#102) next to the table (#71).",
+  "object_id": 102,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t007",
+  "kind": "next_to_clear",
+  "prompt": "Move the chair (#1) next to the table (#86). Keep doors and windows clear.",
+  "object_id": 1,
+  "anchor_id": 86,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t008",
+  "kind": "at_point",
+  "prompt": "Move the chair (#1) so that its center is at x = 1.42 m, y = 2.99 m.",
+  "object_id": 1,
+  "anchor_id": null,
+  "point": [
+   1.42,
+   2.99
+  ],
+  "feasible": true
+ },
+ {
+  "task_id": "t009",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#2) under the table (#71), with at least a third of it under the table top.",
+  "object_id": 2,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t010",
+  "kind": "on_surface",
+  "prompt": "Put the chair (#6) on the table (#72).",
+  "object_id": 6,
+  "anchor_id": 72,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t011",
+  "kind": "at_point_blocked",
+  "prompt": "Move the table (#73) so that its center is at x = 3.42 m, y = 1.99 m. Other objects may be moved out of the way.",
+  "object_id": 73,
+  "anchor_id": null,
+  "point": [
+   3.42,
+   1.99
+  ],
+  "feasible": true
+ },
+ {
+  "task_id": "t012",
+  "kind": "next_to",
+  "prompt": "Move the chair (#5) next to the table (#86).",
+  "object_id": 5,
+  "anchor_id": 86,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t013",
+  "kind": "next_to_clear",
+  "prompt": "Move the chair (#3) next to the table (#71). Keep doors and windows clear.",
+  "object_id": 3,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t014",
+  "kind": "at_point",
+  "prompt": "Move the table (#72) so that its center is at x = 0.21 m, y = 2.01 m.",
+  "object_id": 72,
+  "anchor_id": null,
+  "point": [
+   0.21,
+   2.01
+  ],
+  "feasible": false
+ },
+ {
+  "task_id": "t015",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#1) under the table (#71), with at least a third of it under the table top.",
+  "object_id": 1,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t016",
+  "kind": "on_surface",
+  "prompt": "Put the trash can (#102) on the table (#72).",
+  "object_id": 102,
+  "anchor_id": 72,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t017",
+  "kind": "at_point_blocked",
+  "prompt": "Move the table (#71) so that its center is at x = 1.02 m, y = 3.24 m. Other objects may be moved out of the way.",
+  "object_id": 71,
+  "anchor_id": null,
+  "point": [
+   1.02,
+   3.24
+  ],
+  "feasible": true
+ },
+ {
+  "task_id": "t018",
+  "kind": "next_to",
+  "prompt": "Move the trash can (#102) next to the table (#72).",
+  "object_id": 102,
+  "anchor_id": 72,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t019",
+  "kind": "next_to_clear",
+  "prompt": "Move the trash can (#103) next to the table (#73). Keep doors and windows clear.",
+  "object_id": 103,
+  "anchor_id": 73,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t020",
+  "kind": "at_point",
+  "prompt": "Move the trash can (#102) so that its center is at x = 1.02 m, y = 0.74 m.",
+  "object_id": 102,
+  "anchor_id": null,
+  "point": [
+   1.02,
+   0.74
+  ],
+  "feasible": true
+ },
+ {
+  "task_id": "t021",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#6) under the table (#86), with at least a third of it under the table top.",
+  "object_id": 6,
+  "anchor_id": 86,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t022",
+  "kind": "on_surface",
+  "prompt": "Put the chair (#5) on the table (#71).",
+  "object_id": 5,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t023",
+  "kind": "at_point_blocked",
+  "prompt": "Move the table (#86) so that its center is at x = 4.67 m, y = 4.34 m. Other objects may be moved out of the way.",
+  "object_id": 86,
+  "anchor_id": null,
+  "point": [
+   4.67,
+   4.34
+  ],
+  "feasible": false
+ },
+ {
+  "task_id": "t024",
+  "kind": "next_to",
+  "prompt": "Move the chair (#6) next to the table (#72).",
+  "object_id": 6,
+  "anchor_id": 72,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t025",
+  "kind": "next_to_clear",
+  "prompt": "Move the chair (#6) next to the table (#73). Keep doors and windows clear.",
+  "object_id": 6,
+  "anchor_id": 73,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t026",
+  "kind": "at_point",
+  "prompt": "Move the chair (#5) so that its center is at x = 3.59 m, y = 1.8 m.",
+  "object_id": 5,
+  "anchor_id": null,
+  "point": [
+   3.59,
+   1.8
+  ],
+  "feasible": false
+ },
+ {
+  "task_id": "t027",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#3) under the table (#71), with at least a third of it under the table top.",
+  "object_id": 3,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t028",
+  "kind": "on_surface",
+  "prompt": "Put the shelf (#70) on the table (#72).",
+  "object_id": 70,
+  "anchor_id": 72,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t029",
+  "kind": "at_point_blocked",
+  "prompt": "Move the chair (#5) so that its center is at x = 1.27 m, y = 2.59 m. Other objects may be moved out of the way.",
+  "object_id": 5,
+  "anchor_id": null,
+  "point": [
+   1.27,
+   2.59
+  ],
+  "feasible": false
+ },
+ {
+  "task_id": "t030",
+  "kind": "next_to",
+  "prompt": "Move the chair (#5) next to the table (#71).",
+  "object_id": 5,
+  "anchor_id": 71,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t031",
+  "kind": "next_to_clear",
+  "prompt": "Move the trash can (#102) next to the table (#86). Keep doors and windows clear.",
+  "object_id": 102,
+  "anchor_id": 86,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t032",
+  "kind": "at_point",
+  "prompt": "Move the chair (#2) so that its center is at x = 4.22 m, y = 5.39 m.",
+  "object_id": 2,
+  "anchor_id": null,
+  "point": [
+   4.22,
+   5.39
+  ],
+  "feasible": true
+ },
+ {
+  "task_id": "t033",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#2) under the table (#86), with at least a third of it under the table top.",
+  "object_id": 2,
+  "anchor_id": 86,
+  "point": null,
+  "feasible": false
+ },
+ {
+  "task_id": "t034",
+  "kind": "on_surface",
+  "prompt": "Put the monitor (#45) on the table (#72).",
+  "object_id": 45,
+  "anchor_id": 72,
+  "point": null,
+  "feasible": true
+ },
+ {
+  "task_id": "t035",
+  "kind": "at_point_blocked",
+  "prompt": "Move the chair (#5) so that its center is at x = 1.57 m, y = -0.26 m. Other objects may be moved out of the way.",
+  "object_id": 5,
+  "anchor_id": null,
+  "point": [
+   1.57,
+   -0.26
+  ],
+  "feasible": false
+ }
+]

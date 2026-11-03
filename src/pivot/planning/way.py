@@ -436,6 +436,27 @@ def _ranked_spots(scene: Scene, search: _Search, target_id: int, size: tuple[flo
     return [(spot, path, blockers) for _, spot, path, blockers in ranked]
 
 
+def way_is_clear(scene: Scene, target_id: int, width: float = 0.9,
+                 spot_size: tuple[float, float] = WHEELCHAIR_SPOT) -> bool:
+    """Tests whether a person or a wheelchair already gets to an object, nothing moved.
+
+    Args:
+        scene: The scene; must have a floor map.
+        target_id: The object to reach (a table).
+        width: Width of the passage, in meters.
+        spot_size: Depth and width of the spot at the object, in meters.
+
+    Returns:
+        True if some spot at the object is free and reached by a free passage.
+    """
+    if scene.floor is None:
+        return False
+    search = _search(scene, target_id, 0.5 * width)
+    return search is not None and any(
+        not blockers for _, _, blockers in _ranked_spots(scene, search, target_id, spot_size,
+                                                          width))
+
+
 def plan_way(scene: Scene, target_id: int, width: float = 0.9,
              spot_size: tuple[float, float] = WHEELCHAIR_SPOT,
              options: MotionOptions | None = None) -> Way:
