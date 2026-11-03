@@ -69,6 +69,16 @@ class Visitors:
     def __len__(self) -> int:
         return len(self._entries)
 
+    def add_room(self, room: str, scene: Scene) -> None:
+        """Adds a room the visitors can open (one built from a video, say).
+
+        Args:
+            room: The room's id.
+            scene: Its initial scene.
+        """
+        with self._lock:
+            self._scenes[room] = scene
+
     def get(self, token: str | None, room: str) -> tuple[str, Visitor]:
         """Returns a visitor's session of a room, creating what is missing.
 

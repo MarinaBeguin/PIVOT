@@ -88,6 +88,7 @@ class Features:
         photos: Objects can be brought in from a photo (Muse Spark, SAM 3.1).
         voices: Languages the server reads answers aloud in (MMS-TTS); the
             browser's voice for the others.
+        uploads: Visitors can send their own video, built into a new room.
     """
 
     interactive: bool = False
@@ -95,6 +96,7 @@ class Features:
     voice: bool = False
     photos: bool = False
     voices: tuple[str, ...] = ()
+    uploads: bool = False
 
 
 def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,

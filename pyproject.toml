@@ -52,7 +52,8 @@ ignore_missing_imports = true
 # Optional heavy dependencies, installed on the GPU machine only: never analyzed, so that
 # mypy gives the same verdict with or without them (and with or without their types).
 [[tool.mypy.overrides]]
-module = ["sam3.*", "torch.*", "cv2.*", "transformers.*", "imageio_ffmpeg.*", "numba.*"]
+module = ["sam3.*", "torch.*", "cv2.*", "transformers.*", "imageio_ffmpeg.*", "numba.*",
+          "mapanything.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 
