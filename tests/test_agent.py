@@ -9,6 +9,7 @@ import pytest
 from pivot.agent.loop import Agent
 from pivot.agent.tools import TOOLS, Session, call_tool
 from pivot.meta.client import MetaConfig
+from pivot.planning.motion import Stopped, check_stop, stoppable
 from pivot.scene.examples import box, office_scene, rectangle_floor, sofa_scene
 from pivot.scene.graph import Scene, SceneObject
 
@@ -164,3 +165,30 @@ def test_a_chair_taller_than_the_table_top_only_stands_against_it() -> None:
     assert "not the one asked for" in adjusted["reason"]
     assert adjusted["aimed_at"] == [{"id": 1, "label": "table",
                                      "share_of_footprint_over_it_pct": 0}]
+
+
+def test_a_stopped_request_keeps_its_moves_and_answers_every_call() -> None:
+    model = ScriptedModel([
+        message(calls=[tool_call("a", "move_object", object_id=3, x=3.0, y=1.0),
+                       tool_call("b", "move_object", object_id=4, x=4.0, y=3.0)]),
+        message("never asked"),
+    ])
+    session = Session(office_scene())
+    agent = Agent(session, MetaConfig(api_key="test"), client=model)  # type: ignore[arg-type]
+    asked: list[str] = []
+    run = agent.ask("Move them.", on_step=lambda tool, arguments: asked.append(tool),
+                    should_stop=lambda: len(session.motions) >= 1)
+    assert run.stopped and not run.finished and run.answer == ""
+    assert asked == ["move_object"] and [s.tool for s in run.steps] == ["move_object"]
+    assert len(session.motions) == 1  # The first move stays; the second never ran.
+    results = [m for m in agent.messages if m["role"] == "tool"]
+    assert len(results) == 2 and "Stopped" in results[1]["content"]
+    assert len(model.script) == 1  # No model call after the stop.
+
+
+def test_a_search_stops_as_soon_as_the_user_asks() -> None:
+    check_stop()  # Outside a request: nothing to stop.
+    with stoppable(lambda: False):
+        check_stop()
+    with stoppable(lambda: True), pytest.raises(Stopped):
+        check_stop()

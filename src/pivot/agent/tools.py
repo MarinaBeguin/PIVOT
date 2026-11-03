@@ -25,6 +25,7 @@ from pivot.geometry.types import FloatArray
 from pivot.geometry.collision import (
     box_distance, footprint_overlap, polygon_distance, polygon_penetration,
 )
+from pivot.meta.products import LookUp
 from pivot.planning.access import WALKING_WIDTH, check_access
 from pivot.planning.arrival import arrive, boxed, doors_passed, hang, with_new_object
 from pivot.planning.handling import can_be_carried, people_needed
@@ -60,12 +61,17 @@ class Session:
         motions: Every executed motion, in order, for replay in the viewer.
         motion_counts: Number of motions before each history entry: one
             ``undo`` removes every motion of the move it reverts.
+        look_up: Looks a product's published size up on the web, if the
+            Meta API is used (see :mod:`pivot.meta.products`).
+        spent: Dollars spent by tools themselves (web searches), for billing.
     """
 
     scene: Scene
     history: list[Scene] = field(default_factory=list)
     motions: list[MotionPlan] = field(default_factory=list)
     motion_counts: list[int] = field(default_factory=list)
+    look_up: Callable[[str, str], LookUp] | None = None
+    spent: float = 0.0
 
     def record(self, scene: Scene, motions: list[MotionPlan]) -> None:
         """Executes a verified move: keeps the current scene for ``undo``.
@@ -977,6 +983,32 @@ def _size_text(size: FloatArray) -> str:
     return " x ".join(f"{100 * v:.0f}" for v in size) + " cm"
 
 
+def look_up_product(session: Session, product: str = "", url: str = "") -> JsonDict:
+    """Finds a product's published size on the web, or on the page of a link.
+
+    Args:
+        session: The session.
+        product: Brand and model, e.g. ``"IKEA KIVIK 3-seat sofa"``.
+        url: A link the user gave to its page (a shop, an ad).
+
+    Returns:
+        Its name, size and the page the size comes from; or why there is none.
+    """
+    if session.look_up is None:
+        return {"found": False, "reason": "Looking things up on the web needs the Meta API."}
+    if not product and not url:
+        return {"error": "Give the product's name or a link to its page."}
+    result = session.look_up(product, url)
+    session.spent += result.cost
+    if result.product is None:
+        return {"found": False, "reason": f"No published size found for {product or url}; "
+                "ask the user for its width, depth and height, or a photo or screenshot of the "
+                "ad (Add from a photo reads the size written on it)."}
+    return {"found": True, "name": result.product.name,
+            "size_m": [_round(v, 2) for v in result.product.size],
+            "source": result.product.source}
+
+
 def undo(session: Session) -> JsonDict:
     """Reverts the last executed move.
 
@@ -1126,6 +1158,11 @@ TOOLS = [
          _object_schema({"object_id": _ID, "width_m": {"type": "number"},
                          "depth_m": {"type": "number"}, "height_m": {"type": "number"}},
                         ["object_id", "width_m", "depth_m", "height_m"]), resize_object),
+    Tool("look_up_product", "Find the published size of a product the user names (brand and "
+         "model), or of the product of a link the user gives (a shop, a Marketplace ad), with "
+         "the page it comes from, before bringing it in with add_object.",
+         _object_schema({"product": {"type": "string"}, "url": {"type": "string"}}, []),
+         look_up_product),
     Tool("remove_object", "Take an object out of the room, with what rests on it: to get rid of "
          "it, or to replace it with another one. Only when the user asks for it; undo puts it "
          "back.", _object_schema({"object_id": _ID}, ["object_id"]), remove_object),

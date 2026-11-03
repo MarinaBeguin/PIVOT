@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 from collections.abc import Callable
+from functools import partial
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,9 @@ from typing import Any
 from openai import OpenAI
 
 from pivot.agent.tools import TOOLS, Session, call_tool
-from pivot.meta.client import MetaConfig, Usage, call_with_retry
+from pivot.meta.client import DEFAULT_BASE_URL, MetaConfig, Usage, call_with_retry
+from pivot.meta.products import look_up_size
+from pivot.planning.motion import Stopped, stoppable
 from pivot.scene.graph import Scene
 
 # Sent when a request uses up its steps, so that the user still gets an answer.
@@ -63,7 +66,11 @@ Rules:
   asked to take something out (to get rid of it, or to replace it: the old sofa goes before
   the new one comes in). To try a new object (one to buy, or from another room of the
   user's), add_object with its size; a size estimated from a photo can be corrected with
-  resize_object. When the user says where it goes, give that spot (x, y): new furniture is
+  resize_object. When the user names a product (brand and model), or gives a link to its page
+  (a shop, a Marketplace ad: you can read it with look_up_product's url, never say you
+  cannot open a link before trying), first look_up_product for its size and say where it
+  comes from; a size from a photo is an estimate. When
+  the user says where it goes, give that spot (x, y): new furniture is
   often delivered flat-packed and assembled in place, so no path from the door is needed.
   If objects stand there, name them and offer to move them aside (make_room); say from
   "doors" whether it would also pass the doors assembled. Then move it like any other object
@@ -114,6 +121,11 @@ class Step:
     result: dict[str, Any]
 
 
+# The result of a tool call the user stopped, and the note left in the conversation.
+_STOPPED = json.dumps({"error": "Stopped by the user."})
+_STOPPED_NOTE = "(The user stopped this request; the moves done so far stay.)"
+
+
 @dataclass
 class AgentRun:
     """Outcome of one user request.
@@ -122,11 +134,13 @@ class AgentRun:
         answer: The model's final answer.
         steps: Tool calls, in order.
         finished: False if the step budget ran out before an answer.
+        stopped: True if the user stopped the request before an answer.
     """
 
     answer: str
     steps: list[Step] = field(default_factory=list)
     finished: bool = True
+    stopped: bool = False
 
 
 class Agent:
@@ -144,6 +158,9 @@ class Agent:
         self.session = session
         self._config = config
         self._client = client if client is not None else config.client()
+        if config.base_url == DEFAULT_BASE_URL and session.look_up is None:
+            # Web search is a Meta API tool; a local open-weight server has none.
+            session.look_up = partial(look_up_size, config, client=self._client)
         self._max_steps = max_steps
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.usage = Usage()
@@ -174,7 +191,8 @@ class Agent:
         return response.choices[0].message
 
     def ask(self, request: str, language: str | None = None,
-            on_step: Callable[[str, dict[str, Any]], None] | None = None) -> AgentRun:
+            on_step: Callable[[str, dict[str, Any]], None] | None = None,
+            should_stop: Callable[[], bool] | None = None) -> AgentRun:
         """Handles one user request, keeping the conversation history.
 
         Args:
@@ -184,6 +202,8 @@ class Agent:
                 writes in another one.
             on_step: Told each tool call (name, arguments) before it runs, so
                 that a long request can show what it is doing.
+            should_stop: Tells whether the user asked to stop: looked at between
+                steps, and inside the motion planner (see :mod:`pivot.planning.cancel`).
 
         Returns:
             The answer and the tool calls that support it.
@@ -196,28 +216,70 @@ class Agent:
                 f"another language, then in theirs; name objects and rooms in that language.")})
         self.messages.append({"role": "user", "content": request})
         run = AgentRun(answer="")
-        for _ in range(self._max_steps):
-            message = self._complete()
-            calls = message.tool_calls or []
-            self.messages.append({
-                "role": "assistant", "content": message.content or "",
-                **({"tool_calls": [c.model_dump() for c in calls]} if calls else {}),
-            })
-            if not calls:
-                run.answer = message.content or ""
-                return run
-            for call in calls:
-                try:
-                    arguments = json.loads(call.function.arguments or "{}")
-                except json.JSONDecodeError:
-                    arguments = {"raw": call.function.arguments}
-                if on_step is not None:
-                    on_step(call.function.name, arguments)
-                result = call_tool(self.session, call.function.name, call.function.arguments)
-                self.messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
-                run.steps.append(Step(call.function.name, arguments, json.loads(result)))
+        stop = should_stop or (lambda: False)
+        with stoppable(stop):
+            for _ in range(self._max_steps):
+                if stop():
+                    return self._stopped(run)
+                message = self._complete()
+                calls = message.tool_calls or []
+                self.messages.append({
+                    "role": "assistant", "content": message.content or "",
+                    **({"tool_calls": [c.model_dump() for c in calls]} if calls else {}),
+                })
+                if not calls:
+                    run.answer = message.content or ""
+                    return run
+                for call in calls:
+                    self._run_call(call, run, on_step, stop)
+                if run.stopped:
+                    return self._stopped(run)
         run.finished = False
         run.answer = self._wrap_up()
+        return run
+
+    def _run_call(self, call: Any, run: AgentRun,
+                  on_step: Callable[[str, dict[str, Any]], None] | None,
+                  stop: Callable[[], bool]) -> None:
+        """Runs one tool call of the model and records its result.
+
+        Once the user asked to stop, the remaining calls are answered "stopped"
+        without running: the conversation keeps a result for every call.
+
+        Args:
+            call: The model's tool call.
+            run: The request so far; its steps get this one.
+            on_step: Told the call before it runs.
+            stop: Tells whether the user asked to stop.
+        """
+        try:
+            arguments = json.loads(call.function.arguments or "{}")
+        except json.JSONDecodeError:
+            arguments = {"raw": call.function.arguments}
+        result = _STOPPED
+        if not run.stopped and not stop():
+            if on_step is not None:
+                on_step(call.function.name, arguments)
+            try:
+                result = call_tool(self.session, call.function.name, call.function.arguments)
+            except Stopped:
+                result = _STOPPED
+        run.stopped = run.stopped or result == _STOPPED
+        self.messages.append({"role": "tool", "tool_call_id": call.id, "content": result})
+        if result != _STOPPED:
+            run.steps.append(Step(call.function.name, arguments, json.loads(result)))
+
+    def _stopped(self, run: AgentRun) -> AgentRun:
+        """Ends a request the user stopped.
+
+        Args:
+            run: The request so far.
+
+        Returns:
+            It, marked stopped, with no answer (the page says it was stopped).
+        """
+        run.stopped, run.finished = True, False
+        self.messages.append({"role": "assistant", "content": _STOPPED_NOTE})
         return run
 
     def _wrap_up(self) -> str:

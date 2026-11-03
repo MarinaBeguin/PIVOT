@@ -1,7 +1,8 @@
 """Printable moving instructions: a plan seen from above and the numbered steps.
 
 The plan shows the floor, the objects where they end up, each moved object's
-start (dashed) and end (filled) joined by a numbered arrow, and the floor a
+start (dashed) and end (filled) joined by the numbered path it takes (the one
+the 3D view plays), and the floor a
 wheelchair can still reach from the doors after the moves.
 """
 
@@ -187,9 +188,13 @@ def _steps_svg(steps: list[Step], frame: _Frame) -> list[str]:
     for step in steps:
         parts.append(f'<polygon points="{frame.polygon(step.start.footprint())}" fill="none" '
                      'stroke="#c2412d" stroke-width="1.2" stroke-dasharray="4 3"/>')
-        (x0, y0), (x1, y1) = frame.point(step.start.center[:2]), frame.point(step.end.center[:2])
-        parts.append(f'<line x1="{x0:.1f}" y1="{y0:.1f}" x2="{x1:.1f}" y2="{y1:.1f}" '
-                     'stroke="#c2412d" stroke-width="2" marker-end="url(#arrow)"/>')
+        # The path the object takes, as the viewer plays it; a straight arrow without one.
+        centers = [step.start.center[:2], *step.path[1:-1], step.end.center[:2]]
+        points = [frame.point(np.asarray(c, dtype=float)) for c in centers]
+        x0, y0 = points[0]
+        line = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+        parts.append(f'<polyline points="{line}" fill="none" stroke="#c2412d" '
+                     'stroke-width="2" stroke-linejoin="round" marker-end="url(#arrow)"/>')
         parts.append(f'<circle cx="{x0:.1f}" cy="{y0:.1f}" r="9" fill="#c2412d"/>'
                      f'<text x="{x0:.1f}" y="{y0 + 4:.1f}" text-anchor="middle" fill="#fff" '
                      f'font-weight="700">{step.number}</text>')

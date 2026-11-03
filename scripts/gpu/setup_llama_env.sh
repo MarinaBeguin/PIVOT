@@ -28,3 +28,10 @@ fi
 for model in "$MODEL" "$VISION_MODEL"; do
   HF_HUB_CACHE="$SCRATCH/hf_cache" "$ENV/bin/hf" download "$model"
 done
+# Optional: Meta's Muse Glimmer 30B for the agent (PIVOT_OPEN_AGENT=glimmer in
+# run_open.sh), about 60 GB. Its tool-call parser (muse_glimmer) needs a vLLM
+# release that knows it: PIVOT_GLIMMER=1 bash scripts/gpu/setup_llama_env.sh
+if [ "${PIVOT_GLIMMER:-0}" = 1 ]; then
+  "$ENV/bin/python" -m pip install --upgrade vllm
+  HF_HUB_CACHE="$SCRATCH/hf_cache" "$ENV/bin/hf" download meta-models/Muse-Glimmer-30B
+fi

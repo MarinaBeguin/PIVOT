@@ -1,5 +1,6 @@
 """Tests for the object inventory that chooses SAM 3.1's prompts."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -9,7 +10,7 @@ from pivot.geometry.box import OrientedBox
 from pivot.lifting.scene_builder import build_scene
 from pivot.meta.client import MetaConfig
 from pivot.perception.inventory import (
-    BUILT_IN_KINDS, INVENTORY_PROMPT, ask_api, contact_sheet, parse_inventory,
+    BUILT_IN_KINDS, INVENTORY_PROMPT, ask_api, ask_api_video, contact_sheet, parse_inventory,
 )
 from pivot.perception.tracks import Track
 from synthetic import make_reconstruction, orbit_poses, render
@@ -74,3 +75,25 @@ def test_ask_api_sends_the_sheet_to_the_vision_model() -> None:
     text, image = call["messages"][0]["content"]
     assert "at most 7 kinds" in text["text"]
     assert image["image_url"]["url"] == "data:image/jpeg;base64,anBlZw=="
+
+
+def test_muse_spark_can_watch_the_whole_video(tmp_path: Path) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    def upload(**kwargs: Any) -> SimpleNamespace:
+        calls.append(("upload", kwargs))
+        return SimpleNamespace(id="file-9")
+
+    def respond(**kwargs: Any) -> SimpleNamespace:
+        calls.append(("respond", kwargs))
+        return SimpleNamespace(output_text='["sofa", "door"]')
+
+    client = SimpleNamespace(files=SimpleNamespace(create=upload),
+                             responses=SimpleNamespace(create=respond))
+    video = tmp_path / "room.mp4"
+    video.write_bytes(b"not really a video")
+    answer = ask_api_video(MetaConfig(api_key="k"), video, 5, client)
+    assert parse_inventory(answer) == ["sofa", "door"]
+    content = calls[1][1]["input"][0]["content"]
+    assert content[1] == {"type": "input_file", "file_id": "file-9"}
+    assert content[0]["text"].startswith("This video walks through a home")

@@ -173,6 +173,7 @@
     <div id="chatLog"></div>
     <textarea id="chatInput" data-i18n-placeholder="askPlaceholder"></textarea>
     <div class="row"><button id="chatSend" class="primary" data-i18n="send">Send</button>
+      <button id="chatStop" style="display:none" data-i18n="stop">Stop</button>
       <button id="chatMic" style="display:none" data-i18n="speak" data-i18n-title="micTitle">Speak</button>
       <label><input type="checkbox" id="chatAloud"> <span data-i18n="readAloud">Read answers aloud</span></label></div>
   </div>
@@ -947,16 +948,21 @@ async function sendChat() {
   input.value = "";
   chatLine("user", message);
   const pending = chatLine("agent", t("thinking"));
-  // A request may take a minute: say what the agent is checking meanwhile.
+  // A request may take a minute: say what the agent is checking meanwhile, and let the
+  // visitor stop it.
   const watch = setInterval(() => showProgress(pending), 1500);
+  stopButton.style.display = "";
+  stopButton.disabled = false;
+  stopButton.textContent = t("stop");
   try {
     const answer = await (await fetch(scoped("/api/chat"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, language }) })).json();
     clearInterval(watch);
+    stopButton.style.display = "none";
     if (answer.error) { pending.textContent = answer.error; return; }
-    pending.textContent = answer.answer;
-    speak(answer.answer);
+    pending.textContent = answer.stopped ? t("stopped") : answer.answer;
+    speak(pending.textContent);
     if (answer.steps.length) chatLine("tools", t("checkedCount", { n: answer.steps.length }));
     clearSelection();
     await watchMotions(async () => {
@@ -968,17 +974,25 @@ async function sendChat() {
     applyObjects(answer.objects);
   } finally {
     clearInterval(watch);
+    stopButton.style.display = "none";
     busy = false;
     showLimits();
   }
 }
+const stopButton = document.getElementById("chatStop");
+stopButton.onclick = async () => {
+  stopButton.disabled = true;
+  stopButton.textContent = t("stopping");
+  try { await fetch(scoped("/api/stop"), { method: "POST" }); } catch { /* The answer comes anyway. */ }
+};
 
 // What the agent is doing, in words: the last tool call of the request so far.
 const PROGRESS = { list_objects: "progressLook", find_objects: "progressLook",
   plan_motion: "progressPath", move_object: "progressPath", plan_to_room: "progressPath",
   move_to_room: "progressPath", make_room: "progressRoom", make_room_and_move: "progressRoom",
   check_placement: "progressSpot", propose_placements: "progressSpot", add_object: "progressSpot",
-  check_access: "progressAccess", measure_gap: "progressMeasure", make_way: "progressWay" };
+  check_access: "progressAccess", measure_gap: "progressMeasure", make_way: "progressWay",
+  look_up_product: "progressWeb" };
 async function showProgress(line) {
   let steps;
   try { steps = (await (await fetch(scoped("/api/progress"))).json()).steps; } catch { return; }
@@ -1001,8 +1015,9 @@ async function showLimits() {
   // Nothing left today: said in red.
   line.classList.toggle("no", limits.requests_left === 0);
 }
-// Answers read aloud by the browser's own voice (no server, no cost): on
-// glasses, there is no screen to read them from.
+// Answers read aloud (on glasses, there is no screen to read them from): by
+// the server's voice (Meta's MMS-TTS) in the languages it has, else by the
+// browser's own voice.
 const aloud = document.getElementById("chatAloud");
 let voices = [];
 function loadVoices() { voices = window.speechSynthesis ? speechSynthesis.getVoices() : []; }
@@ -1014,14 +1029,42 @@ function utterance(text) {
   const lang = I18n.LANGUAGES[language].speech;
   const said = new SpeechSynthesisUtterance(text);
   said.lang = lang;
-  // A voice of the page's language, when the browser has one.
-  const voice = voices.find(v => v.lang.replace("_", "-") === lang)
-    || voices.find(v => v.lang.startsWith(lang.split("-")[0]));
+  // The best voice of the page's language the browser has: the natural-sounding ones
+  // (Chrome's Google voices, Edge's natural voices, Apple's enhanced ones) before the
+  // robotic eSpeak of Linux, and never one of another language.
+  const score = v => {
+    const name = v.name.toLowerCase();
+    return (v.lang.replace("_", "-") === lang ? 2 : 0)
+      + (/natural|neural|premium|enhanced|siri|google/.test(name) ? 4 : 0)
+      - (/espeak|mbrola|festival/.test(name) ? 8 : 0);
+  };
+  const voice = voices.filter(v => v.lang.replace("_", "-").startsWith(lang.split("-")[0]))
+    .sort((a, b) => score(b) - score(a))[0];
   if (voice) said.voice = voice;
   return said;
 }
-function speak(text) {
-  if (!aloud.checked || !window.speechSynthesis || !text) return;
+// MMS-TTS on the server, for the languages it speaks: the same voice on every device, Safari
+// included. False if it could not, and the browser's voice speaks instead.
+let playing = null;
+async function speakOnServer(text) {
+  if (!(data.voices || []).includes(language)) return false;
+  try {
+    const response = await fetch(scoped("/api/speak"), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, language }) });
+    if (!response.ok) return false;
+    playing?.pause();
+    playing = new Audio(URL.createObjectURL(await response.blob()));
+    await playing.play();
+    return true;
+  } catch {
+    return false;
+  }
+}
+async function speak(text) {
+  if (!aloud.checked || !text) return;
+  if (await speakOnServer(text)) return;
+  if (!window.speechSynthesis) return;
   if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
   // Sentence by sentence: Chrome stops a long utterance after about 15 seconds. Spoken a
   // moment after the cancel, which Chrome otherwise applies to the new words too.
@@ -1035,10 +1078,15 @@ function speak(text) {
 // the visitor hears at once that it works (or reads why it cannot).
 aloud.addEventListener("change", () => {
   if (!aloud.checked) {
+    playing?.pause();
     if (window.speechSynthesis) speechSynthesis.cancel();
     return;
   }
   loadVoices();
+  if ((data.voices || []).includes(language)) {
+    speak(t("aloudOn"));
+    return;
+  }
   if (!window.speechSynthesis || !voices.length) {
     chatLine("tools", t("noVoice"));
     return;
@@ -1098,7 +1146,7 @@ async function stopRecording() {
       method: "POST", headers: { "Content-Type": "audio/wav" },
       body: wavBytes(chunks, context.sampleRate) })).json();
     if (result.error) { chatLine("agent", result.error); return; }
-    if (!result.text) { chatLine("agent", t("heardNothing")); return; }
+    if (!result.text) { chatLine("agent", t("heardNothing")); speak(t("heardNothing")); return; }
     aloud.checked = true;  // Asked by voice, answered by voice.
     document.getElementById("chatInput").value = result.text;
     await sendChat();

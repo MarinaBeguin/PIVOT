@@ -58,6 +58,7 @@ from pivot.server.limits import (
 )
 from pivot.server.speech import Transcriber, read_wav, transcriber_from_env
 from pivot.server.visitors import COOKIE, Visitor, Visitors
+from pivot.server.voice import MAX_TEXT, MMS_VOICES, Speaker, speaker_from_env
 from pivot.viz.plan import instructions_page
 from pivot.viz.pointcloud import ColorArray
 from pivot.viz.web import Features, RoomMenu, render_viewer
@@ -138,23 +139,27 @@ def _chat_reply(visitor: Visitor, agent_factory: Callable[[Session], Agent], mes
     session = visitor.session
     agent: Agent = visitor.agent or agent_factory(session)
     visitor.agent = agent
-    before, count = session.scene, len(session.motions)
+    before, count, spent_before = session.scene, len(session.motions), session.spent
     spent = Usage(agent.usage.calls, agent.usage.prompt_tokens, agent.usage.completion_tokens)
     visitor.progress = []
+    visitor.stop.clear()
     try:
         run = agent.ask(message, language, on_step=lambda tool, arguments: visitor.progress.append(
-            {"tool": tool, "object_id": arguments.get("object_id")}))
+            {"tool": tool, "object_id": arguments.get("object_id")}),
+            should_stop=visitor.stop.is_set)
     except Exception as error:  # pylint: disable=broad-exception-caught
         # An API failure must reach the page, not break the server.
         return JSONResponse({"error": f"The agent could not answer: {error}"})
     finally:
         if meter is not None:
+            # Tokens of the agent, and what its tools spent (web searches).
             meter.ledger.record(key, meter.chat_price(Usage(
                 agent.usage.calls - spent.calls,
                 agent.usage.prompt_tokens - spent.prompt_tokens,
-                agent.usage.completion_tokens - spent.completion_tokens)))
+                agent.usage.completion_tokens - spent.completion_tokens))
+                + session.spent - spent_before)
     return JSONResponse({
-        "answer": run.answer, "finished": run.finished,
+        "answer": run.answer, "finished": run.finished, "stopped": run.stopped,
         "steps": [{"tool": s.tool, "arguments": s.arguments} for s in run.steps],
         "motions": _motions(before, session.motions[count:]),
         "objects": _objects(session)})
@@ -293,13 +298,65 @@ def _render_pages(rooms: list[Room], features: Features) -> dict[str, str]:
             for room in rooms}
 
 
+def _chat_side_routes(app: FastAPI, speaker: Speaker | None) -> None:
+    """Adds the routes beside the chat: stopping a request, reading answers aloud.
+
+    Args:
+        app: The application.
+        speaker: Reads answers aloud (MMS-TTS); None answers 404.
+    """
+    _speech_route(app, speaker)
+
+    @app.post("/api/stop")
+    def stop(request: Request) -> JSONResponse:
+        """Asks the agent to stop: it does between steps, and the planner at once.
+
+        Args:
+            request: The request.
+
+        Returns:
+            ``{"stopping": true}``; the answer to the request then says it stopped.
+        """
+        request.state.visitor.stop.set()
+        return JSONResponse({"stopping": True})
+
+
+def _speech_route(app: FastAPI, speaker: Speaker | None) -> None:
+    """Adds the route that reads answers aloud with the server's voice.
+
+    Args:
+        app: The application.
+        speaker: Reads answers aloud (MMS-TTS); None answers 404.
+    """
+
+    @app.post("/api/speak")
+    def speak(body: dict[str, str]) -> Response:
+        """Reads an answer aloud with the server's voice.
+
+        Args:
+            body: ``{"text": ..., "language": ...}``.
+
+        Returns:
+            A WAV file; 404 if the server has no voice for that language.
+        """
+        try:
+            audio = speaker(body.get("text", "")[:MAX_TEXT], body.get("language", "en")) \
+                if speaker is not None else None
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            # A voice that cannot load leaves the answer to the browser's voice.
+            return JSONResponse({"error": f"The voice failed: {error}"}, status_code=503)
+        if audio is None:
+            return JSONResponse({"error": "No voice for this language."}, status_code=404)
+        return Response(audio, media_type="audio/wav")
+
+
 # pylint: disable-next=too-many-locals
 def create_app(rooms: list[Room],
                agent_factory: Callable[[Session], Agent] | None = None,
                transcriber: Transcriber | None = None,
                meter: Meter | None = None,
                photographer: Photographer | None = None,
-               guard: Guard | None = None) -> FastAPI:
+               guard: Guard | None = None, speaker: Speaker | None = None) -> FastAPI:
     """Creates the web application for one or several rooms.
 
     The room of a request is given by its ``scene`` query parameter (the first
@@ -315,6 +372,7 @@ def create_app(rooms: list[Room],
             None disables objects from photos.
         guard: Screens requests in words before the agent sees them (Llama
             Prompt Guard, Llama Guard); None screens nothing.
+        speaker: Reads answers aloud (MMS-TTS); None leaves it to the browser.
 
     Returns:
         The application.
@@ -327,7 +385,8 @@ def create_app(rooms: list[Room],
     pages = _render_pages(rooms, Features(
         interactive=True, chat=agent_factory is not None,
         voice=agent_factory is not None and transcriber is not None,
-        photos=photographer is not None))
+        photos=photographer is not None,
+        voices=tuple(MMS_VOICES) if speaker is not None else ()))
 
     @app.middleware("http")
     async def visitor_session(request: Request,
@@ -551,6 +610,8 @@ def create_app(rooms: list[Room],
         hung = {} if arrival.box is None else {"box": _ghost_box(arrival.box)}
         return JSONResponse({"free": arrival.placed, "in_the_way": arrival.in_the_way, **hung})
 
+    _chat_side_routes(app, speaker)
+
     @app.get("/api/limits")
     def limits(request: Request) -> dict[str, Any]:
         """Says what the visitor may still use today on a public server.
@@ -696,7 +757,8 @@ def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: in
                       transcriber=transcriber_from_env(config) if config else None,
                       meter=_public_meter(config) if public else None,
                       photographer=_photographer(config) if api and config else None,
-                      guard=guard_from_env() if config else None)
+                      guard=guard_from_env() if config else None,
+                      speaker=speaker_from_env())
 
 
 def _photographer(config: MetaConfig) -> Photographer:

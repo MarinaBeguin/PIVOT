@@ -103,7 +103,7 @@ class OpenTranscriber:
         # Optional dependencies of the open version, installed on the GPU machine.
         # pylint: disable=import-outside-toplevel,import-error
         import torch
-        from transformers import (  # type: ignore[import-not-found]
+        from transformers import (
             Wav2Vec2ForCTC,
             Wav2Vec2Processor,
         )

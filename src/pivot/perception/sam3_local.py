@@ -254,7 +254,7 @@ def main(argv: list[str] | None = None) -> None:
 
     # Heavy GPU dependencies are only installed on the GPU machine.
     # pylint: disable-next=import-outside-toplevel,import-error
-    import cv2  # type: ignore[import-not-found]
+    import cv2
     # pylint: disable-next=import-outside-toplevel,import-error
     import torch
     from sam3.model_builder import (  # pylint: disable=import-outside-toplevel,import-error

@@ -29,7 +29,7 @@ def ffmpeg_executable() -> str:
         return found
     try:
         # Optional dependency, with a static ffmpeg; for hosts without one.
-        import imageio_ffmpeg  # type: ignore[import-not-found]  # pylint: disable=import-outside-toplevel,import-error
+        import imageio_ffmpeg  # pylint: disable=import-outside-toplevel,import-error
     except ImportError:
         raise RuntimeError("ffmpeg is required to encode videos: install it, or "
                            "`pip install imageio-ffmpeg`.") from None
@@ -89,9 +89,11 @@ def subsample_video(video: Path, step: int, output: Path) -> Path:
     """
     output.parent.mkdir(parents=True, exist_ok=True)
     partial = output.with_suffix(".part.mp4")
-    # setpts renumbers the kept frames, so that no player drops or repeats any.
+    # The kept frames are renumbered at the input's rate, read here: ffmpeg's own FRAME_RATE
+    # is wrong on some versions, which then repeat frames.
+    rate = video_rate(video)
     command = [ffmpeg_executable(), "-y", "-loglevel", "error", "-i", str(video),
-               "-vf", f"select=not(mod(n\\,{step})),setpts=N/FRAME_RATE/TB", "-an",
+               "-vf", f"select=not(mod(n\\,{step})),setpts=N/({rate}*TB)", "-r", rate, "-an",
                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", str(partial)]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
@@ -141,10 +143,11 @@ def select_frames(video: Path, indices: list[int], output: Path) -> Path:
     with tempfile.TemporaryDirectory() as tmp:
         # The filter can be long (one term per run of frames): read from a file.
         script = Path(tmp) / "filter.txt"
-        script.write_text(f"select={keep},setpts=N/FRAME_RATE/TB", encoding="utf-8")
+        rate = video_rate(video)
+        script.write_text(f"select={keep},setpts=N/({rate}*TB)", encoding="utf-8")
         command = [ffmpeg_executable(), "-y", "-loglevel", "error", "-i", str(video),
-                   "-filter_script:v", str(script), "-an", "-c:v", "libx264",
-                   "-pix_fmt", "yuv420p", "-crf", "20", str(partial)]
+                   "-filter_script:v", str(script), "-r", rate, "-an",
+                   "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "20", str(partial)]
         completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"ffmpeg failed: {completed.stderr.strip()}")
@@ -169,9 +172,10 @@ def read_frames(video: Path, first: int, last: int, width: int, height: int
     Raises:
         RuntimeError: If ffmpeg fails.
     """
+    rate = video_rate(video)
     command = [ffmpeg_executable(), "-v", "error", "-i", str(video),
-               "-vf", f"select=between(n\\,{first}\\,{last}),setpts=N/FRAME_RATE/TB",
-               "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+               "-vf", f"select=between(n\\,{first}\\,{last}),setpts=N/({rate}*TB)",
+               "-r", rate, "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     completed = subprocess.run(command, capture_output=True, check=False)
     if completed.returncode != 0:
         raise RuntimeError(f"ffmpeg failed: {completed.stderr.decode().strip()}")
@@ -197,6 +201,23 @@ def video_size(video: Path) -> tuple[int, int]:
     if match is None:
         raise RuntimeError(f"Cannot read the size of {video}: {probe.stderr.strip()}")
     return int(match.group(1)), int(match.group(2))
+
+
+def video_rate(video: Path) -> str:
+    """Reads the frame rate of a video.
+
+    Args:
+        video: Video file.
+
+    Returns:
+        Frames per second, as ffmpeg writes it ("30", "29.97"); "30" if it gives none.
+    """
+    # "Stream #0:0: Video: h264 ..., 960x720, ..., 29.97 fps, 29.97 tbr, ...".
+    probe = subprocess.run([ffmpeg_executable(), "-i", str(video)], capture_output=True,
+                           text=True, check=False)
+    line = next((line for line in probe.stderr.splitlines() if "Video:" in line), "")
+    match = re.search(r"(\d+(?:\.\d+)?) fps", line) or re.search(r"(\d+(?:\.\d+)?) tbr", line)
+    return match.group(1) if match else "30"
 
 
 def count_frames(video: Path) -> int:
