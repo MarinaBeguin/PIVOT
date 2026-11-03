@@ -62,7 +62,7 @@ MAX_POINTS = 200_000
 # and its footprint around the object's points at most this much larger: aligning a
 # disk or a square seen askew costs nothing; aligning a chair truly turned adds the
 # empty corners around it.
-ALIGN_SLACK = 0.02
+ALIGN_SLACK = 0.05
 ALIGN_AREA = 1.25
 # A box beyond the room's outer walls by more than this is brought in, in meters; one
 # beyond them by more than a meter is left (something else is wrong with it).
