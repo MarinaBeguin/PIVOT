@@ -200,6 +200,8 @@ const data = JSON.parse(document.getElementById("scene-data").textContent);
 
 // Language: texts of the page, names of objects and rooms, voice. See i18n.js.
 const I18n = window.PivotI18n;
+// A touch screen (phone, tablet): texts say "tap" rather than "click".
+const coarse = window.matchMedia("(pointer: coarse)");
 let language = I18n.initialLanguage();
 const t = (key, values) => I18n.text(language, key, values);
 const nameOf = english => I18n.name(language, english);
@@ -1354,7 +1356,7 @@ function startPlacing(answer) {
   const name = nameOf(answer.label);
   result.innerHTML = "";
   const line = document.createElement("div");
-  line.textContent = t("placeHint", { name, size: answer.size_m.map(v => Math.round(100 * v))
+  line.textContent = t(coarse.matches ? "placeHintTouch" : "placeHint", { name, size: answer.size_m.map(v => Math.round(100 * v))
     .join(" × ") + " cm" });
   const form = sizeInputs(placing.size, size => { placing.size = size; drawPlacing(); checkSpot(); });
   // Its orientation, in degrees: an object may fit one way and not the other.
@@ -1388,7 +1390,7 @@ function startPlacing(answer) {
   row.append(turn, cancel, placeHereButton);
   const how = document.createElement("div");
   how.className = "hint";
-  how.textContent = t(phone.matches ? "placeHowTouch" : "placeHowMouse");
+  how.textContent = t(coarse.matches ? "placeHowTouch" : "placeHowMouse");
   result.append(line, form, turning, row, how);
 }
 async function placeHere(makeRoom = false) {
@@ -1513,9 +1515,12 @@ const tour = document.getElementById("tour");
 const TOUR_KEY = "pivot.tourSeen";
 function tourSteps() {
   const shown = id => document.getElementById(id).offsetParent !== null;
-  const steps = [{ text: "tour1" }, { text: "tour2", target: "panel", side: "left", sheet: "panel" }];
+  // A finger, not a mouse: the bubbles say "tap" and "pinch".
+  const touch = coarse.matches;
+  const steps = [{ text: touch ? "tour1Touch" : "tour1" },
+                 { text: "tour2", target: "panel", side: "left", sheet: "panel" }];
   if (data.interactive) {
-    steps.push({ text: "tour3", target: "controls", side: "right", sheet: "move" },
+    steps.push({ text: touch ? "tour3Touch" : "tour3", target: "controls", side: "right", sheet: "move" },
                { text: "tourEdit", target: "editButtons", side: "right", sheet: "move" });
     if (document.getElementById("photoButton").style.display !== "none")
       steps.push({ text: "tourPhoto", target: "photoButton", side: "right", sheet: "move" });

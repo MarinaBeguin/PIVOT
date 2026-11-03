@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
@@ -80,8 +81,8 @@ class Step:  # pylint: disable=too-many-instance-attributes
             parts[0] += f" from the {first.from_room} to the {last.to_room} ({doors})"
         if self.landmark is not None:
             label, landmark_id, gap = self.landmark
-            where = "against" if gap < 0.03 else f"{_length(gap)} from"
-            parts.append(f"to {where} the {label} (#{landmark_id})")
+            where = "up against" if gap < 0.03 else f"to {_length(gap)} from"
+            parts.append(f"{where} the {label} (#{landmark_id})")
         if abs(self.turn_deg) >= _MIN_TURN_DEG:
             side = "counterclockwise" if self.turn_deg > 0 else "clockwise"
             parts.append(f"turning it {abs(self.turn_deg):.0f} degrees {side}")
@@ -91,6 +92,27 @@ class Step:  # pylint: disable=too-many-instance-attributes
         if self.people > 1:
             sentence += " Two people needed."
         return sentence
+
+    def to_dict(self) -> dict[str, Any]:
+        """Describes the step as data, for the page to word it in any language.
+
+        Returns:
+            A JSON-compatible dictionary.
+        """
+        landmark = None
+        if self.landmark is not None:
+            label, landmark_id, gap = self.landmark
+            landmark = {"label": label, "id": landmark_id, "gap_m": round(gap, 3)}
+        return {"number": self.number, "id": self.object_id, "label": self.label,
+                "distance_m": round(self.distance, 2), "carried": self.carried,
+                "rolled": self.rolled, "people": self.people,
+                "turn_deg": round(self.turn_deg) if abs(self.turn_deg) >= _MIN_TURN_DEG else 0,
+                "landmark": landmark,
+                "rooms": ({"from": self.doorways[0].from_room, "to": self.doorways[-1].to_room}
+                          if self.doorways else None),
+                "doors": [{"id": d.door_id, "spare_cm": (round(100 * d.margin)
+                                                         if math.isfinite(d.margin) else None)}
+                          for d in self.doorways]}
 
 
 def _doorway(doorway: Doorway) -> str:

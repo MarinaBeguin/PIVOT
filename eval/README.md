@@ -75,6 +75,9 @@ Development set (office, 36 requests):
 Held-out set: made and run once on the rooms of the demo as they are finally
 built, every variant at the same time, with Muse and with open weights.
 
+The demo itself is checked by hand before a release or a recording, on a laptop
+and on a phone: [demo-checklist.md](demo-checklist.md).
+
 ## Running it
 
 ```bash
