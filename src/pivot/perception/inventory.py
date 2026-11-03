@@ -124,7 +124,7 @@ def video_sheet(video: Path, frames: int = 16, tile_width: int = 448) -> bytes:
     """
     # OpenCV is only installed on the GPU machine.
     # pylint: disable-next=import-outside-toplevel,import-error
-    import cv2  # type: ignore[import-not-found]
+    import cv2
 
     capture = cv2.VideoCapture(str(video))
     count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -168,6 +168,40 @@ def ask_api(config: MetaConfig, sheet: bytes, limit: int = MAX_PROMPTS,
     return str(response.choices[0].message.content or "")
 
 
+# The same question about the video itself rather than frames of it.
+VIDEO_PROMPT = INVENTORY_PROMPT.replace(
+    "These images are frames of one video walking through a home",
+    "This video walks through a home")
+
+
+def ask_api_video(config: MetaConfig, video: Path, limit: int = MAX_PROMPTS,
+                  client: Any = None) -> str:
+    """Asks Muse Spark about the whole video (video understanding), not frames of it.
+
+    The video is uploaded through the Files API and referenced in a Responses
+    API request; the model sees all of it, so objects shown briefly are less
+    likely to be missed than on a sheet of a few frames.
+
+    Args:
+        config: API configuration; ``vision_model`` is used.
+        video: The video.
+        limit: Most kinds of objects asked for.
+        client: SDK client; created from ``config`` if None.
+
+    Returns:
+        The model's answer.
+    """
+    client = client if client is not None else config.client()
+    uploaded = call_with_retry(lambda: client.files.create(
+        file=(video.name, video.read_bytes()), purpose="user_data"))
+    response = call_with_retry(lambda: client.responses.create(
+        model=config.vision_model,
+        input=[{"role": "user", "content": [
+            {"type": "input_text", "text": VIDEO_PROMPT.format(limit=limit)},
+            {"type": "input_file", "file_id": uploaded.id}]}]))
+    return str(getattr(response, "output_text", "") or "")
+
+
 def ask_open(sheet: bytes, limit: int = MAX_PROMPTS, model: str = OPEN_VISION_MODEL) -> str:
     """Asks Llama 3.2 Vision, run with the released weights on the local GPU.
 
@@ -186,7 +220,7 @@ def ask_open(sheet: bytes, limit: int = MAX_PROMPTS, model: str = OPEN_VISION_MO
 
     import torch
     from PIL import Image
-    from transformers import (  # type: ignore[import-not-found]
+    from transformers import (
         AutoProcessor,
         MllamaForConditionalGeneration,
     )
@@ -224,6 +258,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--model", default=OPEN_VISION_MODEL, help="Model of the open backend.")
     parser.add_argument("--max-objects", type=int, default=MAX_PROMPTS,
                         help="Most kinds of objects listed (each costs SAM 3.1 a pass).")
+    parser.add_argument("--whole-video", action="store_true",
+                        default=os.environ.get("PIVOT_INVENTORY_VIDEO") == "1",
+                        help="API: Muse Spark watches the whole video instead of a frame sheet.")
     args = parser.parse_args(argv)
 
     sheet = video_sheet(args.video)
@@ -231,6 +268,8 @@ def main(argv: list[str] | None = None) -> None:
     args.out.with_suffix(".jpg").write_bytes(sheet)
     if args.backend == "open":
         answer = ask_open(sheet, args.max_objects, args.model)
+    elif args.whole_video:
+        answer = ask_api_video(MetaConfig.from_env(args.env_file), args.video, args.max_objects)
     else:
         answer = ask_api(MetaConfig.from_env(args.env_file), sheet, args.max_objects)
     prompts = parse_inventory(answer, args.max_objects)

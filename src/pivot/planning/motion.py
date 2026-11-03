@@ -17,7 +17,9 @@ from __future__ import annotations
 import dataclasses
 import heapq
 import math
-from collections.abc import Collection
+from collections.abc import Callable, Collection, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -34,6 +36,50 @@ from pivot.planning.cspace import ConfigurationSpace, State
 from pivot.planning.placement import check_placement
 from pivot.planning.validation import Validator, yaw_step
 from pivot.scene.graph import Scene, carried_objects, obstructs
+
+# Stopping a long search when the user asks: the page's "Stop" sets a flag, which the
+# agent looks at between steps and the planner every CHECK_EVERY expansions, inside the
+# tool that runs; the search then ends at once. Moves already executed stay (each was
+# verified), and undo reverts them.
+CHECK_EVERY = 64
+_stop: ContextVar[Callable[[], bool] | None] = ContextVar("pivot_stop", default=None)
+
+
+class Stopped(BaseException):
+    """Raised inside a search the user stopped.
+
+    A ``BaseException``, so that no ``except Exception`` of a planner trying its
+    next option swallows it.
+    """
+
+
+@contextmanager
+def stoppable(stop: Callable[[], bool]) -> Iterator[None]:
+    """Makes the searches run inside the block stop when ``stop()`` becomes true.
+
+    Args:
+        stop: Tells whether the user asked to stop.
+
+    Yields:
+        Nothing.
+    """
+    token = _stop.set(stop)
+    try:
+        yield
+    finally:
+        _stop.reset(token)
+
+
+def check_stop() -> None:
+    """Ends the current search if the user asked to stop.
+
+    Raises:
+        Stopped: If they did.
+    """
+    stop = _stop.get()
+    if stop is not None and stop():
+        raise Stopped
+
 
 _NEIGHBORS = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 # Cost multiplier of steps that leave less than the comfort margin to obstacles.
@@ -377,6 +423,8 @@ class _Search:
                 return path[::-1]
             self.budget -= 1
             self.expansions += 1
+            if self.expansions % CHECK_EVERY == 0:
+                check_stop()  # The user may have asked to stop.
             for neighbor, step in self.neighbors(state):
                 new_cost = cost + step
                 if (state, neighbor) in excluded or new_cost >= costs.get(neighbor, math.inf):

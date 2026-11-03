@@ -118,7 +118,7 @@ def _prompt_guard_pipeline() -> Callable[[str], list[dict[str, Any]]]:
     """
     # Optional dependencies, installed where the guard is enabled.
     # pylint: disable-next=import-outside-toplevel,import-error
-    from transformers import pipeline  # type: ignore[import-not-found]
+    from transformers import pipeline
 
     classify: Callable[[str], list[dict[str, Any]]] = pipeline(
         "text-classification", model=PROMPT_GUARD, device="cpu", truncation=True)

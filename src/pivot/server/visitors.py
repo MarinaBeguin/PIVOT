@@ -30,11 +30,13 @@ class Visitor:
         agent: Their conversation with the agent, created on first use.
         progress: The tool calls of the request being answered, as
             ``{"tool": ..., "object_id": ...}``, for the page to show.
+        stop: Set when the visitor asks to stop the request being answered.
     """
 
     session: Session
     agent: Any = None
     progress: list[dict[str, Any]] = field(default_factory=list)
+    stop: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass

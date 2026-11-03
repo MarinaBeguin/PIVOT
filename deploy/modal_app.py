@@ -17,6 +17,11 @@ Spending stays bounded at three levels:
   (PIVOT_BUDGET_USD, PIVOT_VISITOR_DAILY_USD, PIVOT_VISITOR_DAILY_REQUESTS);
 - one container at most, on one CPU, stopped after 15 idle minutes;
 - spending limits set on the Modal workspace and on the Meta API account.
+
+With ``PIVOT_TTS=mms`` at serve or deploy time, answers are read aloud by MMS-TTS
+(the same voice on every phone): the image then gets torch (CPU) and
+transformers, and the voices, downloaded once at build time; the container
+gets 4 GB instead of 2.
 """
 
 from __future__ import annotations
@@ -96,6 +101,18 @@ image = (
     .run_commands("pip install --no-cache-dir '/root/pivot[serve]'")
     .env(SETTINGS)
 )
+# Read here when serving or deploying, and from the image's environment in the container.
+VOICE = os.environ.get("PIVOT_TTS", "").lower() == "mms"
+if VOICE:
+    image = (image
+             .run_commands("pip install --no-cache-dir torch --index-url "
+                           "https://download.pytorch.org/whl/cpu",
+                           "pip install --no-cache-dir 'transformers>=4.45'")
+             .run_commands('python -c "from pivot.server.voice import MMS_VOICES; '
+                           'from transformers import AutoTokenizer, VitsModel; '
+                           '[(AutoTokenizer.from_pretrained(m), VitsModel.from_pretrained(m)) '
+                           'for m in MMS_VOICES.values()]"')
+             .env({"PIVOT_TTS": "mms"}))
 if modal.is_local():
     ROOMS = _rooms()
     image = image.env({"PIVOT_ROOMS": ";".join(f"{title}=/scenes/{index}"
@@ -107,7 +124,7 @@ secret = modal.Secret.from_dict(_secret() if modal.is_local() else {})
 
 @app.function(image=image, secrets=[secret], volumes={"/ledger": ledger},
               min_containers=0, max_containers=1, scaledown_window=900,
-              cpu=1.0, memory=2048, timeout=600)
+              cpu=1.0, memory=4096 if VOICE else 2048, timeout=600)
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app()
 def web() -> FastAPI:

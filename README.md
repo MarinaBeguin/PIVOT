@@ -90,13 +90,14 @@ tools on this scene):
 - **Accessibility.** After a rearrangement, PIVOT checks that a person (60 cm) or a wheelchair
   (90 cm) can still reach every object from the doors, and names any furniture left in front of
   a door, even partly, saying whether a move put it there.
-- **Moving plan.** A printable page with a plan seen from above and numbered steps ("Slide the
-  chair (#5) 1.2 m to 27 cm from the table (#72), turning it 90 degrees"), flagging the moves that
-  need **two people**.
+- **Moving plan.** A printable page with a plan seen from above, each object's path drawn as the
+  3D view plays it, and numbered steps ("Slide the chair (#5) 1.2 m to 27 cm from the table
+  (#72), turning it 90 degrees"), flagging the moves that need **two people**.
 - **Voice.** Speak instead of typing (Muse Voice Transcribe, or wav2vec 2.0 with open weights);
   answers can be read aloud, as on glasses without a screen.
 - **Undo** any move, including multi-step ones; the 3D viewer animates every executed path, and
-  each object takes its own reconstructed points along, so nothing is left behind.
+  each object takes its own reconstructed points along, so nothing is left behind. A request
+  that takes too long can be **stopped**: the search ends at once, the moves already made stay.
 - **Replace furniture.** Take an object out of the room ("remove the old sofa"), then bring a new
   one in **from a photo**: taken with the phone or picked from the gallery, Muse Spark names it and
   estimates its size, which a dialog asks you to check (when the photo shows several objects, you
@@ -130,14 +131,24 @@ tools on this scene):
 | Model | Role in PIVOT | API version | Open-weight version |
 |---|---|---|---|
 | **SAM 3.1** | Segments and tracks every object of the video from a noun ("chair", "lamp") | Meta Model API, read with Meta's SAM parser | Self-hosted weights (multiplex video predictor, 64 objects per prompt) |
-| **Muse Spark 1.3** | Agent with 16 tools: geometric checks and moves, taking objects out, bringing new ones in; lists the kinds of objects a video shows | Meta Model API | |
+| **Muse Spark 1.3** | Agent with 18 tools: geometric checks and moves, taking objects out, bringing new ones in; lists the kinds of objects a video shows (optionally watching the whole video) | Meta Model API | |
+| **Muse Spark 1.3** with web search | Finds the published size of a product the user names ("IKEA KIVIK 3-seat sofa"), or of the product of a link (a shop, a Marketplace ad, read as a link preview), and quotes the page | Meta Model API | |
 | **Llama 3.1 8B Instruct** | The same agent, with tool calling | | Served by vLLM on the GPU |
+| **Muse Glimmer 30B** | Optional: the same agent, distilled from Muse Spark (`PIVOT_OPEN_AGENT=glimmer`) | | Served by vLLM on two 48 GB GPUs |
 | **Llama 3.2 11B Vision Instruct** | Lists the kinds of objects a video shows | | Hugging Face transformers, on the GPU |
 | **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
 | **Muse Spark 1.3** (vision) and **SAM 3.1** (image) | Name and size an object from a photo, and cut it out | Meta Model API | |
 | **Llama Prompt Guard 2** (86M) and **Llama Guard 3** (1B) | Optional screening of the public demo's requests, on the CPU, before any API call | | Hugging Face transformers, on the CPU |
 | **CoTracker3** | Optional: follows an object's pixels across the cut between two pieces of video tracked in parallel, to join its tracks | | PyTorch, on the GPU or the CPU |
 | **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
+| **MMS-TTS** | Optional: answers read aloud in one voice on every device, in English, French, German and Spanish (`PIVOT_TTS=mms`; non-commercial licence) | Server's CPU | Server's CPU |
+| **SceneScript** | Optional: doors and windows read from the point cloud, to compare with PIVOT's own (non-commercial licence) | | Its own environment, on a CUDA GPU |
+
+Two of these come under a non-commercial licence: **MMS-TTS** (CC-BY-NC 4.0) and **SceneScript**
+(CC BY-NC). They suit a demo and research, not a paid service; their weights are downloaded from
+their publishers on first use and never stored in this repository, whose MIT licence covers
+PIVOT's own code only. Without them, the page reads answers with the browser's voice and PIVOT
+places doors and windows itself.
 
 ![SAM 3.1 tracking the floor lamps through the video, one track per view](assets/sam_tracking.jpg)
 
@@ -178,7 +189,7 @@ flowchart LR
    Poses proven free are not checked one by one and checked segments are remembered, and A* is
    guided around the walls: a battery of 33 moves takes 110 s instead of 235 s, with the same
    verdicts, and planning a chair's way from the living room to the bedroom 7 s instead of 21 s.
-4. **The agent.** Muse or Llama gets the request and 16 tools. Its instructions forbid any claim
+4. **The agent.** Muse or Llama gets the request and 18 tools. Its instructions forbid any claim
    no tool result supports, and require it to quote the measurements, in plain language.
 
 ## Results
@@ -216,12 +227,12 @@ while understanding language. The evaluation can be reproduced from the command 
 | Needs | A Meta Model API key | An NVIDIA GPU (SAM 3.1 peaked at 45 GB on an A6000), no key |
 | Object list | Muse Spark (up to 20 kinds) | Llama 3.2 Vision (up to 8 kinds) |
 | Segmentation | SAM 3.1 through the API, every kind of object at once | SAM 3.1 self-hosted, 3 GPU jobs in parallel |
-| Agent | Muse Spark | Llama 3.1 8B (vLLM) |
+| Agent | Muse Spark | Llama 3.1 8B, or Muse Glimmer 30B (vLLM) |
 | Voice | Muse Voice Transcribe | wav2vec 2.0 (English) |
 
-The open-weight script picks the best objects available: SAM 3.1 API results already computed
-for the video are reused without a key; else, with a key, the API segments; else everything runs
-on your GPUs.
+The open-weight script sends nothing to the Meta API, even with a key in .env: SAM 3.1 API
+results already computed for the video are reused as they are, else everything runs on your
+GPUs. The Meta API key is never sent to the local model server either.
 
 ### Input
 
@@ -271,6 +282,10 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 | `PIVOT_PARSE_WORKERS` | cores, up to 16 | processes decoding SAM 3.1's responses (Meta's parser decodes about three masks a second, in pure Python: this, not the API, sets the time of a run) |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
 | `PIVOT_AGENT_MODEL` | `muse-spark-1.3` | Agent model, e.g. `muse-wonder-1.0` for the stronger preview model |
+| `PIVOT_OPEN_AGENT` | `llama` | Open-weight agent: `llama` (Llama 3.1 8B) or `glimmer` (Muse Glimmer 30B, two GPUs) |
+| `PIVOT_OPEN_URL` / `PIVOT_OPEN_API_KEY` | local vLLM / none | Server of the open-weight agent, e.g. a provider hosting Muse Spark Open, and its own key |
+| `PIVOT_INVENTORY_VIDEO` | 0 | 1: Muse Spark watches the whole video to list the objects, instead of a sheet of frames |
+| `PIVOT_TTS` | unset | `mms`: answers read aloud by MMS-TTS (`pip install -e ".[guard]"` for torch and transformers) |
 | `PIVOT_GUARD` | unset | Screen requests in words: `prompt-guard`, `llama-guard` or both (`pip install -e ".[guard]"`; gated weights: `HF_TOKEN`) |
 | `PORT` | 8765 | Port of the viewer |
 | `PIVOT_SCRATCH` | `~/pivot_scratch` | Large storage: environments, weights, caches, logs |
@@ -352,6 +367,7 @@ with no API cost. On a GPU you already own, the open-weight version costs nothin
 | A question to PIVOT (Muse Spark) | $0.07 on average, $0.04 median, $0.33 at most | Measured: 7 model calls and 49,000 input tokens per request on average, because every tool result is read back |
 | The same with Muse Wonder | $0.24 on average | Same tokens at Muse Wonder's prices |
 | The same with Llama 3.1 8B | No API cost; $1.95 per hour the GPU is up | vLLM on a rented 48 GB GPU, whether it answers or waits |
+| Looking a product's size up on the web | about $0.01 (estimated) | One search ($2.50 per 1,000) and the tokens of the answer |
 | A spoken request | $0.0005 for 10 seconds | Muse Voice Transcribe, $0.18 per hour of audio |
 | Bringing in furniture from a photo | about $0.01 to $0.02 (estimated), budgeted $0.05 | One Muse Spark call on the image, one SAM 3.1 image segmentation ($0.0025) per noun tried, up to four |
 | Screening a request (Llama Guard) | No API cost | On the server's CPU |
@@ -399,7 +415,7 @@ src/pivot/
 ├── lifting/      masks to 3D: fusion, carved volumes, hidden parts, doors and windows
 ├── scene/        scene graph, supports, rooms and doorways, example scenes
 ├── planning/     placement, motion planning, make room, carry, passages, moving plan
-├── agent/        tool-calling agent (Muse or Llama) and its 16 tools (check, move, remove, add...)
+├── agent/        tool-calling agent (Muse or Llama) and its 18 tools (check, move, remove, add...)
 ├── server/       FastAPI server: viewer, chat, speech, visitors' rooms, budget, request screening
 ├── viz/          3D viewer (three.js) in six languages, printable plan
 └── eval/         task suite, variants, judge, metrics
@@ -451,6 +467,8 @@ could take on the new part; the verifier stays the same.
 | **People carrying** | The people holding the sofa modeled, not only the sofa: room for their bodies in a stairwell or a doorway | [SAM 3D Body](https://github.com/facebookresearch/sam-3d-body) (the 3D shape and pose of a person from an image) |
 | **Loading a van** | "Does everything fit in a 12 m³ van, and in which order?": the same collision checks, applied to packing | No new model: the same geometry engine and agent, plus a search for the packing order |
 | **Mixed reality on Quest** | The plan shown in the room itself, each move animated in place, the room taken from the headset instead of a phone scan | The room mesh and anchors Quest already computes ([Mixed Reality Utility Kit](https://developers.meta.com/horizon/documentation/unity/unity-mr-utility-kit-overview/)); Muse or Llama for the agent |
+| **The agent at home, on open weights** | The same agent as the API version, on one's own servers: a home scan never leaves the house | [Muse Spark Open](https://dev.meta.ai/docs/muse-spark-open) (816B parameters, 42B active: 300 GB or more even quantized); PIVOT already talks to any OpenAI-compatible server hosting it (`PIVOT_OPEN_URL`), untested |
+| **Point at what was missed** | An object never named is not detected: clicked in the 3D view, it is found in the video frames that see that spot and tracked from there | SAM 3.1 with point or box prompts instead of a noun (the API accepts both) |
 | **Every language, spoken** | Speech in languages wav2vec 2.0 does not cover, with open weights | [Omnilingual ASR](https://github.com/facebookresearch/omnilingual-asr) (more than 1,600 languages, open weights) |
 
 **Autonomous driving is out of reach of this approach as it is.** PIVOT verifies a static scene
@@ -461,7 +479,7 @@ computation, and static questions such as "does this van fit in this garage?".
 ## Acknowledgements
 
 - **Meta**, for the models PIVOT is built on (SAM 3.1, Muse Spark, Muse Voice Transcribe,
-  Llama, Llama Prompt Guard and Llama Guard, CoTracker3, wav2vec 2.0), the access to the Meta
+  Llama, Llama Prompt Guard and Llama Guard, Muse Glimmer, CoTracker3, MMS-TTS, SceneScript, wav2vec 2.0), the access to the Meta
   Model API, and the Global AI Hackathon.
 - **Modal**, which hosts the live demo.
 - **Cyber Valley**, for its support.

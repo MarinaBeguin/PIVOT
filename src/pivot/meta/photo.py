@@ -32,9 +32,10 @@ DESCRIBE_PROMPT = (
     "pieces of furniture and large objects it shows, the most prominent first, at most six. "
     "Name each one with one short, common English noun, as one would to a mover "
     "(\"armchair\", \"bookshelf\", \"floor lamp\"), and estimate its real size in meters: "
-    "width (the longer side seen from above), depth and height. Use what the photo shows to "
-    "judge the scale, or the usual size of such an object. Describe its look in a few words "
-    '(color, material). Answer with a JSON object only: {"objects": [{"label": ..., '
+    "width (the longer side seen from above), depth and height. If the image is a screenshot "
+    "of an ad or a product page that writes the dimensions, use those numbers; else use what "
+    "the photo shows to judge the scale, or the usual size of such an object. Describe its look "
+    'in a few words (color, material). Answer with a JSON object only: {"objects": [{"label": ..., '
     '"width_m": ..., "depth_m": ..., "height_m": ..., "look": ...}, ...]}; if the photo shows '
     'no such object, {"objects": []}.')
 # Most objects offered from one photo.

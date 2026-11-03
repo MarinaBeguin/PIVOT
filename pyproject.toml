@@ -44,13 +44,25 @@ mypy_path = "src"
 packages = ["pivot"]
 
 [[tool.mypy.overrides]]
-module = ["scipy.*", "sam3.*", "torch.*"]
+module = ["scipy.*"]
 ignore_missing_imports = true
+
+# Optional heavy dependencies, installed on the GPU machine only: never analyzed, so that
+# mypy gives the same verdict with or without them (and with or without their types).
+[[tool.mypy.overrides]]
+module = ["sam3.*", "torch.*", "cv2.*", "transformers.*", "imageio_ffmpeg.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pylint.main]
 source-roots = ["src"]
 load-plugins = ["pylint.extensions.docparams"]
 extension-pkg-allow-list = ["scipy"]
+
+[tool.pylint.typecheck]
+# Compiled, and installed on the GPU machine only: its members cannot be checked, with or
+# without it.
+ignored-modules = ["cv2"]
 
 [tool.pylint.format]
 max-line-length = 100

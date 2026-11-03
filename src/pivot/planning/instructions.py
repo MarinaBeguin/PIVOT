@@ -42,6 +42,7 @@ class Step:  # pylint: disable=too-many-instance-attributes
             id and the gap to it, in meters.
         doorways: The doorways it goes through, when it changes room.
         rolled: Whether it is a rug moved rolled up.
+        path: The (x, y) of its center along the way, as the viewer plays it.
     """
 
     number: int
@@ -55,6 +56,7 @@ class Step:  # pylint: disable=too-many-instance-attributes
     landmark: tuple[str, int, float] | None
     doorways: tuple[Doorway, ...] = ()
     rolled: bool = False
+    path: tuple[tuple[float, float], ...] = ()
 
     @property
     def turn_deg(self) -> float:
@@ -193,4 +195,5 @@ def _step(number: int, before: Scene, after: Scene, motion: MotionPlan,
                 people=people_needed(obj),
                 landmark=_nearest(after, obj.object_id, end, moved_along),
                 doorways=tuple(route(rooms, motion)[1]) if rooms else (),
-                rolled=motion.rolled_up)
+                rolled=motion.rolled_up,
+                path=tuple((float(w.center[0]), float(w.center[1])) for w in motion.waypoints))

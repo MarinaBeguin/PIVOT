@@ -83,3 +83,8 @@ def test_moves_become_steps_a_person_can_follow() -> None:
     page = instructions_page(session.scene, [step], "office")
     assert "<svg" in page and "Slide the office chair" in page
     assert "wheelchair" in page
+    # The plan draws the path the 3D view plays, every waypoint of it.
+    motion = session.motions[-1]
+    assert len(step.path) == len(motion.waypoints)
+    drawn = page.split("<polyline points=\"", 1)[1].split("\"", 1)[0].split()
+    assert len(drawn) == len(motion.waypoints)

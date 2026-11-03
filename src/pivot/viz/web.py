@@ -86,12 +86,15 @@ class Features:
         chat: The server answers requests in words (agent).
         voice: Requests can also be spoken (microphone).
         photos: Objects can be brought in from a photo (Muse Spark, SAM 3.1).
+        voices: Languages the server reads answers aloud in (MMS-TTS); the
+            browser's voice for the others.
     """
 
     interactive: bool = False
     chat: bool = False
     voice: bool = False
     photos: bool = False
+    voices: tuple[str, ...] = ()
 
 
 def render_viewer(scene: Scene, points: FloatArray, colors: ColorArray,

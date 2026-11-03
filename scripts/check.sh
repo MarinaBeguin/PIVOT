@@ -3,6 +3,8 @@
 set -euo pipefail
 BIN="${1:-$(dirname "$(command -v python)")}"
 cd "$(dirname "$0")/.."
+# This checkout's code, not another copy installed in the environment.
+export PYTHONPATH="$PWD/src${PYTHONPATH:+:$PYTHONPATH}"
 "$BIN/python" -m pytest
 "$BIN/mypy"
 "$BIN/pylint" src/pivot

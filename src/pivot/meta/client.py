@@ -60,7 +60,9 @@ class MetaConfig:
         ``PIVOT_AGENT_MODEL``, ``PIVOT_VISION_MODEL``, ``PIVOT_SAM_MODEL``,
         ``PIVOT_REASONING_EFFORT`` (empty for none). With ``open``, the agent
         defaults to Llama on a local vLLM server (``PIVOT_OPEN_URL``); any
-        variable set explicitly still wins.
+        variable set explicitly still wins. The Meta API key is never sent to
+        that server: it gets ``PIVOT_OPEN_API_KEY`` (for a hosted provider of
+        open weights), else none.
 
         Args:
             env_file: Optional ``.env`` file loaded first; existing variables win.
@@ -73,8 +75,9 @@ class MetaConfig:
         """
         load_dotenv(env_file)
         if os.environ.get("PIVOT_BACKEND", "api").lower() == "open":
-            # A local server needs no key; Llama takes no reasoning effort.
-            api_key = os.environ.get("META_API_KEY") or "local"
+            # A local server needs no key, and the Meta key goes to the Meta API only;
+            # Llama takes no reasoning effort.
+            api_key = os.environ.get("PIVOT_OPEN_API_KEY") or "local"
             base_url = os.environ.get("PIVOT_OPEN_URL", OPEN_BASE_URL)
             agent_model, effort = OPEN_AGENT_MODEL, ""
         else:
