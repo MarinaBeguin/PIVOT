@@ -191,7 +191,8 @@ def _pieces(points: FloatArray, resolution: float) -> tuple[IntArray, FloatArray
     """
     grid, cells = _footprint(points, resolution)
     labels, count = ndimage.label(ndimage.binary_dilation(grid, iterations=PIECE_GAP))
-    areas: FloatArray = np.bincount(labels[grid], minlength=count + 1) * resolution**2
+    areas: FloatArray = np.asarray(np.bincount(labels[grid], minlength=count + 1),
+                                   dtype=np.float64) * resolution**2
     areas[0] = 0.0
     piece: IntArray = labels[cells[:, 0], cells[:, 1]]
     return piece, areas
