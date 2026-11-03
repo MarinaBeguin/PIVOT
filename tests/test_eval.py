@@ -105,9 +105,12 @@ def test_replay_rejects_a_motion_through_furniture() -> None:
 
 
 def test_generated_tasks_are_labeled_and_round_trip(tmp_path: Path) -> None:
-    tasks = generate_tasks(office_scene(), count=6, seed=1)
-    # Nothing light enough to put on the desk: that kind is skipped.
-    assert [t.kind for t in tasks] == [k for k in TaskKind if k is not TaskKind.ON_SURFACE]
+    tasks = generate_tasks(office_scene(), count=len(TaskKind), seed=1)
+    # Nothing light enough to put on the desk, one room, nothing in front of the
+    # door: those kinds are skipped.
+    skipped = (TaskKind.ON_SURFACE, TaskKind.TO_ROOM, TaskKind.CLEAR_DOOR)
+    assert [t.kind for t in tasks] == [k for k in TaskKind if k not in skipped]
+    assert all(t.anchor_id != t.object_id for t in tasks if t.kind is TaskKind.NEXT_TO_CLEAR)
     assert all(t.object_id in (1, 3, 4) for t in tasks)  # Not the lamp nor the window.
     save_tasks(tasks, tmp_path / "tasks.json")
     assert load_tasks(tmp_path / "tasks.json") == tasks

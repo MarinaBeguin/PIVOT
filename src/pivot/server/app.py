@@ -19,7 +19,6 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
-import dataclasses
 import gzip
 import hashlib
 import hmac
@@ -44,7 +43,7 @@ from pivot.agent.loop import Agent
 from pivot.agent.tools import TOOLS_BY_NAME, Session, call_tool
 from pivot.geometry.box import OrientedBox
 from pivot.geometry.types import FloatArray
-from pivot.lifting.completion import close_windows, complete_rugs
+from pivot.lifting.completion import prepared_scene
 from pivot.planning.arrival import arrive, with_new_object
 from pivot.meta.client import MetaConfig, Usage
 from pivot.meta.photo import Described, PhotoObject, cut_object, describe_objects
@@ -692,14 +691,7 @@ def load_room(spec: str, max_points: int | None = None) -> Room:
     title, _, path = spec.rpartition("=")
     scene_dir = Path(path)
     title = title or scene_dir.name
-    cloud = np.load(scene_dir / "cloud.npz")
-    # Scenes built before rugs were completed and windows closed get it here
-    # (a no-op for the others).
-    scene, points, colors = complete_rugs(close_windows(Scene.load(scene_dir / "scene.json")),
-                                          cloud["points"], cloud["colors"])
-    if scene.floor is not None:
-        # Where the walls stand: paintings hang on them.
-        scene = dataclasses.replace(scene, floor=scene.floor.with_walls(points))
+    scene, points, colors = prepared_scene(scene_dir)
     points, colors = _subsample(points, colors, max_points)
     room_id = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-")
     return Room(room_id, title, scene, points, colors)

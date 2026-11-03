@@ -1,0 +1,197 @@
+{
+ "tasks": 36,
+ "variants": {
+  "llm_only": {
+   "tasks": 36,
+   "success": 0.528,
+   "success_ci95": [
+    0.37,
+    0.68
+   ],
+   "success_feasible": {
+    "n": 19,
+    "success": 0.737
+   },
+   "success_infeasible": {
+    "n": 17,
+    "success": 0.294
+   },
+   "false_claims": 15,
+   "false_refusals": 2,
+   "checks_mean": 0.0,
+   "latency_s_p50": 19.81,
+   "latency_s_p95": 32.33,
+   "model_calls_mean": 1.0,
+   "by_kind": {
+    "next_to": {
+     "n": 6,
+     "success": 0.667
+    },
+    "next_to_clear": {
+     "n": 6,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 6,
+     "success": 0.833
+    },
+    "tuck_under": {
+     "n": 6,
+     "success": 0.167
+    },
+    "on_surface": {
+     "n": 6,
+     "success": 0.333
+    },
+    "at_point_blocked": {
+     "n": 6,
+     "success": 0.167
+    }
+   }
+  },
+  "planner_only": {
+   "tasks": 36,
+   "success": 0.972,
+   "success_ci95": [
+    0.858,
+    0.995
+   ],
+   "success_feasible": {
+    "n": 19,
+    "success": 1.0
+   },
+   "success_infeasible": {
+    "n": 17,
+    "success": 0.941
+   },
+   "false_claims": 1,
+   "false_refusals": 0,
+   "checks_mean": 1.44,
+   "latency_s_p50": 2.09,
+   "latency_s_p95": 15.0,
+   "model_calls_mean": 0.0,
+   "by_kind": {
+    "next_to": {
+     "n": 6,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 6,
+     "success": 0.833
+    },
+    "at_point": {
+     "n": 6,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 6,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 6,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 6,
+     "success": 1.0
+    }
+   }
+  },
+  "llm_check": {
+   "tasks": 36,
+   "success": 0.861,
+   "success_ci95": [
+    0.713,
+    0.939
+   ],
+   "success_feasible": {
+    "n": 19,
+    "success": 0.737
+   },
+   "success_infeasible": {
+    "n": 17,
+    "success": 1.0
+   },
+   "false_claims": 3,
+   "false_refusals": 2,
+   "checks_mean": 2.14,
+   "latency_s_p50": 40.95,
+   "latency_s_p95": 452.25,
+   "model_calls_mean": 2.5,
+   "by_kind": {
+    "next_to": {
+     "n": 6,
+     "success": 0.833
+    },
+    "next_to_clear": {
+     "n": 6,
+     "success": 0.833
+    },
+    "at_point": {
+     "n": 6,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 6,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 6,
+     "success": 0.667
+    },
+    "at_point_blocked": {
+     "n": 6,
+     "success": 0.833
+    }
+   }
+  },
+  "pivot": {
+   "tasks": 36,
+   "success": 1.0,
+   "success_ci95": [
+    0.904,
+    1.0
+   ],
+   "success_feasible": {
+    "n": 19,
+    "success": 1.0
+   },
+   "success_infeasible": {
+    "n": 17,
+    "success": 1.0
+   },
+   "false_claims": 0,
+   "false_refusals": 0,
+   "checks_mean": 5.33,
+   "latency_s_p50": 13.75,
+   "latency_s_p95": 106.21,
+   "model_calls_mean": 7.08,
+   "by_kind": {
+    "next_to": {
+     "n": 6,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 6,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 6,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 6,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 6,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 6,
+     "success": 1.0
+    }
+   }
+  }
+ }
+}

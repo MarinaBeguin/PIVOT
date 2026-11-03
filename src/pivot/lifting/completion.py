@@ -17,6 +17,7 @@ away, a few tens of centimeters off): it is dropped rather than completed.
 from __future__ import annotations
 
 import dataclasses
+from pathlib import Path
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -429,3 +430,24 @@ def close_windows(scene: Scene) -> Scene:
     if np.array_equal(walkable, floor.floor):
         return scene
     return dataclasses.replace(scene, floor=FloorMap(floor.origin, floor.resolution, walkable))
+
+
+def prepared_scene(scene_dir: Path) -> tuple[Scene, FloatArray, UInt8Array]:
+    """Loads a scene written by :mod:`pivot.build`, completed as the demo shows it.
+
+    Scenes built before windows were closed and rugs completed get it here (a
+    no-op for the others), and the floor map learns where the walls stand.
+
+    Args:
+        scene_dir: Directory with ``scene.json`` and ``cloud.npz``.
+
+    Returns:
+        The scene and its cloud (points and colors).
+    """
+    cloud = np.load(scene_dir / "cloud.npz")
+    scene, points, colors = complete_rugs(close_windows(Scene.load(scene_dir / "scene.json")),
+                                          cloud["points"], cloud["colors"])
+    if scene.floor is not None:
+        # Where the walls stand: paintings hang on them.
+        scene = dataclasses.replace(scene, floor=scene.floor.with_walls(points))
+    return scene, points, colors

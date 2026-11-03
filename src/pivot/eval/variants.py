@@ -28,7 +28,9 @@ from openai import OpenAI
 
 from pivot.agent.loop import Agent
 from pivot.agent.tools import Session, list_objects, plan_path, suggest_placements
-from pivot.eval.tasks import CARRY_HEIGHT, NEXT_TO_GAP, Task, TaskKind, satisfies, solve
+from pivot.eval.tasks import (
+    CARRY_HEIGHT, NEXT_TO_GAP, ROOM_KINDS, Task, TaskKind, satisfies, solve,
+)
 from pivot.meta.client import MetaConfig, Usage, call_with_retry
 from pivot.geometry.box import OrientedBox
 from pivot.planning.motion import MotionPlan, segment_free
@@ -37,7 +39,8 @@ from pivot.scene.graph import Scene
 
 # Tools that run a geometric check.
 CHECK_TOOLS = {"check_placement", "propose_placements", "plan_motion", "move_object",
-               "make_room", "make_room_and_move"}
+               "make_room", "make_room_and_move", "plan_to_room", "move_to_room", "make_way",
+               "check_access"}
 
 POSE_PROMPT = """You rearrange a real room reconstructed in 3D. Coordinates are meters in a
 z-up frame; the floor is z = 0; yaw is in degrees. Objects, with their oriented boxes:
@@ -363,7 +366,8 @@ def planner_only(scene: Scene, task: Task, budget: int = 8) -> Outcome:
     Returns:
         The outcome: the first reachable candidate, or a refusal.
     """
-    if task.kind in (TaskKind.TUCK_UNDER, TaskKind.ON_SURFACE, TaskKind.AT_POINT_BLOCKED):
+    if task.kind not in (TaskKind.NEXT_TO, TaskKind.NEXT_TO_CLEAR, TaskKind.AT_POINT):
+        # The kinds that take more than one plan: the same moves as the task labels.
         solved = solve(scene, task)
         if solved is None:
             return Outcome(None, checks=1)
@@ -412,7 +416,12 @@ def pivot(scene: Scene, task: Task, config: MetaConfig, client: OpenAI | None = 
     agent = Agent(session, config, client, max_steps=3 * budget)
     run = agent.ask(task.prompt)
     checks = sum(step.tool in CHECK_TOOLS for step in run.steps)
-    if session.scene[task.object_id].box is scene[task.object_id].box:
+    unmoved = session.scene[task.object_id].box is scene[task.object_id].box
+    # A task on the room (a wheelchair's way) is answered by moving other objects, or by
+    # none if the way is already clear; then nothing moved is no refusal.
+    answered = task.kind in ROOM_KINDS and (session.motions or satisfies(
+        session.scene, task, session.scene[task.object_id]))
+    if unmoved and not answered:
         return Outcome(None, checks=checks, usage=agent.usage, note=run.answer)
     return Outcome(_pose_of(session.scene, task.object_id), checks=checks,
                    motions=list(session.motions), usage=agent.usage, note=run.answer)

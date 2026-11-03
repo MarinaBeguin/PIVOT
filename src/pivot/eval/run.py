@@ -8,7 +8,10 @@ ones using a model need API access::
         --variants planner_only llm_only llm_check pivot
 
 Results are appended one line per (task, variant), so an interrupted run
-resumes where it stopped. ``summary`` prints the comparison table.
+resumes where it stopped. ``summary`` prints the comparison table, and with
+``--json`` writes the figures as JSON. ``--scene`` takes a ``scene.json``, or
+the directory written by :mod:`pivot.build`: the scene is then completed as
+the demo shows it (windows closed, rugs completed, walls found).
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from typing import Any
 import numpy as np
 
 from pivot.eval.tasks import Task, generate_tasks, load_tasks, save_tasks
+from pivot.lifting.completion import prepared_scene
 from pivot.eval.variants import (
     Outcome, judge, llm_check, llm_only, pivot, planner_only, timed,
 )
@@ -231,6 +235,69 @@ def wilson_interval(successes: int, n: int, z: float = 1.96) -> tuple[float, flo
     return max(0.0, center - half), min(1.0, center + half)
 
 
+def summary_json(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Gathers the figures of the comparison, per variant and per task kind.
+
+    Args:
+        records: Result records.
+
+    Returns:
+        A JSON-compatible dictionary: for each variant, the number of tasks,
+        success (with its 95% Wilson interval), success on feasible and on
+        infeasible tasks, false claims, false refusals, mean checks, latency
+        (median and 95th percentile) and model usage; and success per kind.
+    """
+    variants: dict[str, Any] = {}
+    for name in _variants(records):
+        rows = [r for r in records if r["variant"] == name]
+        if not rows:
+            continue
+        n = len(rows)
+        wins = sum(r["success"] for r in rows)
+        low, high = wilson_interval(wins, n)
+        feasible = [r for r in rows if r["feasible"]]
+        infeasible = [r for r in rows if not r["feasible"]]
+        seconds = np.array([r["seconds"] for r in rows])
+        variants[name] = {
+            "tasks": n, "success": round(wins / n, 3),
+            "success_ci95": [round(low, 3), round(high, 3)],
+            "success_feasible": _share(feasible), "success_infeasible": _share(infeasible),
+            "false_claims": sum(r["claimed"] and not r["success"] for r in rows),
+            "false_refusals": sum(r["feasible"] and not r["claimed"] for r in rows),
+            "checks_mean": round(float(np.mean([r["checks"] for r in rows])), 2),
+            "latency_s_p50": round(float(np.median(seconds)), 2),
+            "latency_s_p95": round(float(np.percentile(seconds, 95)), 2),
+            "model_calls_mean": round(float(np.mean([r.get("model_calls", 0) for r in rows])), 2),
+            "by_kind": {kind: _share([r for r in rows if r["kind"] == kind])
+                        for kind in dict.fromkeys(r["kind"] for r in rows)}}
+    return {"tasks": len({r["task_id"] for r in records}), "variants": variants}
+
+
+def _share(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Counts the successes of some records.
+
+    Args:
+        rows: The records.
+
+    Returns:
+        ``{"n", "success"}``, the rate None when there is no record.
+    """
+    return {"n": len(rows),
+            "success": round(sum(r["success"] for r in rows) / len(rows), 3) if rows else None}
+
+
+def load_scene(path: Path) -> Scene:
+    """Loads the scene of an evaluation.
+
+    Args:
+        path: A ``scene.json``, or a directory written by :mod:`pivot.build`.
+
+    Returns:
+        The scene; from a directory, completed as the demo shows it.
+    """
+    return prepared_scene(path)[0] if path.is_dir() else Scene.load(path)
+
+
 def _by_kind(records: list[dict[str, Any]]) -> str:
     """Builds the table of successes per task kind and variant.
 
@@ -272,17 +339,21 @@ def main(argv: list[str] | None = None) -> None:
     evaluate.add_argument("--tag", default="", help="suffix of the variant names, e.g. _llama")
     summary = commands.add_parser("summary", help="print the comparison table")
     summary.add_argument("--out", type=Path, required=True)
+    summary.add_argument("--json", type=Path, default=None, help="also write the figures here")
     args = parser.parse_args(argv)
 
     if args.command == "generate":
-        tasks = generate_tasks(Scene.load(args.scene), args.count, args.seed)
+        tasks = generate_tasks(load_scene(args.scene), args.count, args.seed)
         save_tasks(tasks, args.tasks)
         print(f"{len(tasks)} tasks, {sum(t.feasible for t in tasks)} feasible -> {args.tasks}")
     elif args.command == "run":
         needs_api = any(v != "planner_only" for v in args.variants)
         config = MetaConfig.from_env(args.env_file) if needs_api else None
-        run(Scene.load(args.scene), load_tasks(args.tasks), args.variants, args.out,
+        run(load_scene(args.scene), load_tasks(args.tasks), args.variants, args.out,
             args.budget, config, args.tag)
         print(summarize(read_results(args.out)))
     else:
-        print(summarize(read_results(args.out)))
+        records = read_results(args.out)
+        print(summarize(records))
+        if args.json is not None:
+            args.json.write_text(json.dumps(summary_json(records), indent=1), encoding="utf-8")
