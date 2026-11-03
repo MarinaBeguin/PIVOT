@@ -30,10 +30,13 @@ OPENING_LABELS = frozenset({"door", "window"})
 # Objects hung on a wall: flat against it. Depth seen in a mirror, or past a
 # curtain through its window, lands behind the wall, so their points spread
 # far from where they hang.
-WALL_MOUNTED_LABELS = frozenset({"mirror", "curtain", "painting", "picture", "poster",
-                                 "whiteboard", "blinds", "board", "blackboard", "chalkboard"})
+# Both forms of a noun: the vision model names a kind "blind" or "blinds".
+WALL_MOUNTED_LABELS = frozenset({"mirror", "curtain", "curtains", "painting", "picture",
+                                 "poster", "whiteboard", "blind", "blinds", "board",
+                                 "blackboard", "chalkboard"})
 # Of those, the ones fixed to their window or wall, which the agent does not move.
-FIXED_WALL_LABELS = frozenset({"curtain", "blinds", "board", "blackboard", "chalkboard"})
+FIXED_WALL_LABELS = frozenset({"curtain", "curtains", "blind", "blinds", "board", "blackboard",
+                               "chalkboard"})
 
 # Floor coverings: flat, they slide under furniture and are walked over.
 FLAT_LABELS = frozenset({"rug", "carpet", "mat", "doormat"})

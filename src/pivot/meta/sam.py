@@ -40,18 +40,17 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import numpy as np
 from meta_sam_parser import (
     CompletedOutcome,
     SegmentationMaskRecord,
     SegmentationResult,
-    decode_mask_to_raster,
     image_segmentation_format,
     video_segmentation_format,
 )
 from openai import OpenAI
 
 from pivot.data.video import count_frames, select_frames, video_size
+from pivot.meta import mask_codec
 from pivot.meta.client import MetaConfig, call_with_retry
 from pivot.perception.chunks import Linker, join_chunks, plan_chunks
 from pivot.perception.cotracker import load_cotracker3, point_linker
@@ -59,6 +58,9 @@ from pivot.perception.detections import Detection
 from pivot.perception.sam3_local import (
     progress_path, prompt_filename, save_detections, write_progress,
 )
+
+# Meta's parser checks masks with the compiled decoder, when numba is installed.
+mask_codec.install()
 
 Media = Literal["image", "video"]
 # Tracks a noun phrase through a video file.
@@ -115,25 +117,29 @@ def parse_sam_output(text: str, media: Media) -> list[Detection]:
     Raises:
         ValueError: If the parser reports an error.
     """
-    result = _parse(text, media)
-    errors = [d for d in result.diagnostics if d.severity == "error"]
-    if errors:
-        raise ValueError(f"Malformed SAM output: {errors[0]}")
+    with mask_codec.keep_decoded() as decoded:
+        result = _parse(text, media)
+        errors = [d for d in result.diagnostics if d.severity == "error"]
+        if errors:
+            raise ValueError(f"Malformed SAM output: {errors[0]}")
 
-    detections = []
-    for record in result.records:
-        if not isinstance(record, SegmentationMaskRecord):
-            continue
-        raster = np.frombuffer(decode_mask_to_raster(record.mask), dtype=np.uint8)
-        mask = raster.reshape(record.mask.height, record.mask.width).astype(bool)
-        bounds = record.bounds
-        detections.append(Detection(
-            object_id=int(record.object_id),
-            frame=record.frame.frame_index if record.frame is not None else 0,
-            bounds=(int(bounds.left), int(bounds.top), int(bounds.right), int(bounds.bottom)),
-            mask=mask,
-            confidence=record.confidence,
-        ))
+        detections = []
+        for record in result.records:
+            if not isinstance(record, SegmentationMaskRecord):
+                continue
+            # The parser decoded the mask to check it; decoded again only without numba.
+            mask = decoded.get(id(record.mask))
+            if mask is None:
+                mask = mask_codec.decode_mask(record.mask)
+            bounds = record.bounds
+            detections.append(Detection(
+                object_id=int(record.object_id),
+                frame=record.frame.frame_index if record.frame is not None else 0,
+                bounds=(int(bounds.left), int(bounds.top), int(bounds.right),
+                        int(bounds.bottom)),
+                mask=mask,
+                confidence=record.confidence,
+            ))
     return detections
 
 
@@ -369,7 +375,9 @@ def piece_videos(video: Path, chunks: list[list[int]], directory: Path) -> list[
     for frames in chunks:
         key = hashlib.sha256(f"{video.resolve()}:{video.stat().st_size}:{frames}".encode())
         path = directory / f"{video.stem}_{key.hexdigest()[:12]}.mp4"
-        if not path.exists():
+        # A piece written by an ffmpeg that repeated frames is made again: its frames
+        # would not be those of the whole video.
+        if not path.exists() or count_frames(path) != len(frames):
             select_frames(video, frames, path)
         paths.append(path)
     return paths

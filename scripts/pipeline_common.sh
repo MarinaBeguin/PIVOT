@@ -82,26 +82,42 @@ KEYFRAMES="${PIVOT_KEYFRAMES:-0}"
 # frames, joined afterwards. SAM 3.1 tracks at most 16 objects of a kind in one
 # request: a classroom with 40 chairs needs pieces. 0 (default) tracks it whole.
 CHUNK_FRAMES="${PIVOT_CHUNK_FRAMES:-0}"
+# PIVOT_COTRACKER=0: pieces are joined by mask overlap only. CoTracker3 follows an
+# object's pixels across each cut, but on the CPU this takes minutes in a room with
+# dozens of objects of one kind (a classroom's chairs).
+COTRACKER=()
+[ "${PIVOT_COTRACKER:-1}" = 1 ] || COTRACKER=(--no-cotracker)
+
+# PIVOT_SAM_WIDTH=W: SAM 3.1 tracks the video scaled to W pixels wide (480: a
+# quarter of the pixels of 960, so smaller uploads and masks). 0 (default)
+# tracks it at its own size.
+SAM_WIDTH="${PIVOT_SAM_WIDTH:-0}"
 
 detections_dir() {
   # Detections depend on the video, the frames tracked and the SAM backend only,
   # so they are cached per video: any run on the same video reuses them.
   local suffix=""
   [ "$STEP" -eq 1 ] || suffix="_every$STEP"
+  [ "$SAM_WIDTH" -eq 0 ] || suffix="${suffix}_w$SAM_WIDTH"
   [ "$1" != sam_api ] || [ "$KEYFRAMES" != 1 ] || suffix="${suffix}_keyframes"
   [ "$1" != sam_api ] || [ "$CHUNK_FRAMES" -eq 0 ] || suffix="${suffix}_pieces$CHUNK_FRAMES"
   echo "$CACHE/$1/$(video_id)$suffix"
 }
 
 sam_video() {
-  # The video SAM 3.1 tracks: the input, or one frame out of STEP of it.
-  local video="$CACHE/videos/$(video_id)_every$STEP.mp4"
-  if [ "$STEP" -eq 1 ]; then
+  # The video SAM 3.1 tracks: the input, or one frame out of STEP of it, scaled
+  # to SAM_WIDTH pixels if set.
+  local video="$CACHE/videos/$(video_id)_every$STEP"
+  if [ "$STEP" -eq 1 ] && [ "$SAM_WIDTH" -eq 0 ]; then
     echo "$VIDEO"
     return
   fi
+  [ "$SAM_WIDTH" -eq 0 ] || video="${video}_w$SAM_WIDTH"
+  video="$video.mp4"
+  local width=()
+  [ "$SAM_WIDTH" -eq 0 ] || width=(--width "$SAM_WIDTH")
   [ -f "$video" ] || (cd "$PIVOT_SRC" && "$PYTHON" -m pivot.data.video subsample "$VIDEO" \
-    "$STEP" "$video")
+    "$STEP" "$video" "${width[@]}")
   echo "$video"
 }
 
@@ -262,7 +278,7 @@ segment_api() {
   mapfile -t missing < <(missing_prompts)
   [ "${#missing[@]}" -eq 0 ] || (cd "$PIVOT_SRC" && PIVOT_BACKEND=api exec "$PYTHON" \
     -m pivot.meta.sam --video "$video" --out "$DETECTIONS" --prompts "${missing[@]}" \
-    "${frames[@]}" --workers "$workers" --chunk-frames "$CHUNK_FRAMES") >"$DETECTIONS/sam.log" 2>&1 &
+    "${frames[@]}" --workers "$workers" --chunk-frames "$CHUNK_FRAMES" "${COTRACKER[@]}") >"$DETECTIONS/sam.log" 2>&1 &
   while [ -n "$(jobs -rp)" ]; do
     show_progress "tracking"
     sleep 5
@@ -293,9 +309,12 @@ segment_local() {
 build_scene() {
   # Lifting, volumes and floor map run on the CPU (a few minutes).
   if [ ! -f "$SCENE/scene.json" ]; then
+    # Masks are in the pixels of the video SAM 3.1 tracked.
+    local width
+    width=$(cd "$PIVOT_SRC" && "$PYTHON" -m pivot.data.video width "$(sam_video)")
     (cd "$PIVOT_SRC" && "$PYTHON" -m pivot.build --scene "$CAPTURE" \
       --detections "$DETECTIONS" --out "$SCENE" --stride $((VIDEO_STRIDE * STEP)) \
-      --prompts "${PROMPTS[@]}")
+      --video-width "$width" --prompts "${PROMPTS[@]}")
   else
     echo "   already built: $SCENE"
   fi

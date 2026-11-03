@@ -98,7 +98,7 @@ image = (
     .add_local_file(ROOT / "pyproject.toml", "/root/pivot/pyproject.toml", copy=True)
     .add_local_file(ROOT / "README.md", "/root/pivot/README.md", copy=True)
     .add_local_dir(ROOT / "src", "/root/pivot/src", copy=True, ignore=["**/__pycache__/**"])
-    .run_commands("pip install --no-cache-dir '/root/pivot[serve]'")
+    .run_commands("pip install --no-cache-dir '/root/pivot[serve,fast]'")
     .env(SETTINGS)
 )
 # Read here when serving or deploying, and from the image's environment in the container.

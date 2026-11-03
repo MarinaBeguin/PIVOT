@@ -86,7 +86,8 @@ def summarize(built: BuiltScene, tracks: list[Track]) -> str:
             f"  {obj.object_id:3d} {obj.label:10s} size {box.size.round(2)} "
             f"center {box.center.round(2)} yaw {math.degrees(box.yaw):6.1f} deg "
             f"z [{box.z_min:.2f}, {box.z_max:.2f}] "
-            f"{len(built.object_points[obj.object_id])} voxels")
+            # Tables set on the rows of desk tops have no mask points of their own.
+            f"{len(built.object_points.get(obj.object_id, ()))} voxels")
     return "\n".join(lines)
 
 

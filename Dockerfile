@@ -17,7 +17,7 @@ WORKDIR /app
 # Dependencies first, so that code changes do not reinstall them.
 COPY pyproject.toml README.md ./
 COPY src ./src
-RUN pip install ".[serve]"
+RUN pip install ".[serve,fast]"
 
 RUN useradd --create-home --uid 1000 pivot
 USER pivot

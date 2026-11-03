@@ -10,6 +10,7 @@ from pivot.geometry.box import OrientedBox, fit_box
 from pivot.geometry.floor import FloorMap
 from pivot.geometry.plane import apply_transform
 from pivot.geometry.types import BoolArray, FloatArray
+from pivot.lifting.agreement import agree_with_camera
 from pivot.lifting.backproject import scene_points
 from pivot.lifting.completion import complete_hidden, drop_fragments
 from pivot.lifting.floor import detect_floor, estimate_ceiling, remove_standing, room_orientation
@@ -19,7 +20,8 @@ from pivot.lifting.objects import (
 )
 from pivot.lifting.openings import Walls, clean_openings
 from pivot.lifting.parts import join_parts
-from pivot.lifting.plausible import drop_implausible
+from pivot.lifting.plausible import drop_hollow_tops, drop_implausible, separate_pieces
+from pivot.lifting.rows import set_tables_on_rows
 from pivot.lifting.volume import CarveConfig, carve_shapes
 from pivot.perception.inventory import BUILT_IN_KINDS
 from pivot.perception.tracks import Track
@@ -163,24 +165,67 @@ def build_scene(recon: Reconstruction, tracks: list[Track],
         The scene and its supporting data.
     """
     config = config or BuildConfig()
-    points = scene_points(recon)
-    _, transform = detect_floor(points, recon.up_direction())
-    leveled = recon.transformed(transform)
-    points = apply_transform(transform, points)
+    leveled, points = _leveled(recon)
 
     room_yaw = room_orientation(points)
     objects, object_points, object_tracks = _lift_objects(leveled, tracks, room_yaw, config)
-    objects = clean_openings(objects, object_points, _walls(points, objects, room_yaw, config))
+    walls = _walls(points, objects, room_yaw, config)
+    objects = clean_openings(objects, object_points, walls)
 
     objects = drop_implausible(settle(objects, config.support_tolerance, config.max_fall))
+    # Boxes are refit to agree best with what the camera saw, before volumes are carved in them.
+    objects, _ = agree_with_camera(objects, object_points, points, room_yaw=room_yaw,
+                                   walls=walls)
     if config.carve is not None:
         masks = {i: _merged_masks(group) for i, group in object_tracks.items()}
         objects = carve_shapes(leveled, objects, object_points, masks, config.carve)
+        objects = drop_hollow_tops(separate_pieces(objects, lambda cloud: fit_object_box(
+            cloud, room_yaw, 0.0, config.align_tolerance_deg)))
+    objects, on_rows = _set_on_rows(objects, points, room_yaw, config)
     objects = complete_hidden(drop_fragments(objects))
     floor = _floor_map(points, objects, config)
-    metadata = {"frames": len(recon), "tracks": len(tracks)}
-    scene = Scene.from_objects(objects, floor, metadata, estimate_ceiling(points, floor))
+    # How well each object agrees with what the camera saw (see lifting.agreement).
+    _, agreement = agree_with_camera(objects, object_points, points, refit=False)
+    scene = Scene.from_objects(objects, floor, {
+        "frames": len(recon), "tracks": len(tracks), "on_rows": on_rows,
+        "agreement": {str(i): score for i, score in agreement.items() if i not in on_rows},
+    }, estimate_ceiling(points, floor))
     return BuiltScene(scene, leveled, object_points)
+
+
+def _leveled(recon: Reconstruction) -> tuple[Reconstruction, FloatArray]:
+    """Levels a reconstruction: its floor at height 0, its up axis z.
+
+    Args:
+        recon: Posed frames with metric depth, in any world frame.
+
+    Returns:
+        The leveled reconstruction, and its scene points.
+    """
+    points = scene_points(recon)
+    _, transform = detect_floor(points, recon.up_direction())
+    return recon.transformed(transform), apply_transform(transform, points)
+
+
+def _set_on_rows(objects: list[SceneObject], points: FloatArray, room_yaw: float,
+                 config: BuildConfig) -> tuple[list[SceneObject], list[int]]:
+    """Sets tables on the rows of desk tops, if the room has rows (see lifting.rows).
+
+    Args:
+        objects: The objects.
+        points: (N, 3) leveled scene points.
+        room_yaw: Orientation of the room's walls, in radians.
+        config: Assembly parameters.
+
+    Returns:
+        The objects, and the ids of the tables set on rows: they follow the desk
+        tops, not their masks, whose points are not theirs to be scored against.
+    """
+    boxes = {o.object_id: o.box for o in objects}
+    objects = set_tables_on_rows(objects, points,
+                                 points[np.abs(points[:, 2]) < config.floor_band, :2], room_yaw)
+    return objects, sorted(o.object_id for o in objects if o.object_id not in boxes
+                           or o.box is not boxes[o.object_id])
 
 
 def _walls(points: FloatArray, objects: list[SceneObject], room_yaw: float,

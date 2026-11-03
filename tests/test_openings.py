@@ -165,11 +165,13 @@ def test_pieces_wider_than_a_door_together_stay_apart() -> None:
     assert cleaned[0].box.size[0] == pytest.approx(1.0, abs=0.06)
 
 
-def test_a_board_hangs_on_its_wall_and_stays() -> None:
+@pytest.mark.parametrize("label", ["board", "blind", "blinds"])
+def test_a_board_hangs_on_its_wall_and_stays(label: str) -> None:
     rng = np.random.default_rng(9)
-    # A blackboard on the wall x = 4, its box reaching 2 m into the room.
+    # A blackboard (or a blind, named either way) on the wall x = 4, its box reaching
+    # 2 m into the room.
     surface = rng.uniform([3.95, 0.5, 0.8], [4.05, 2.5, 2.0], (500, 3))
-    board = SceneObject(8, "board", box((3.0, 1.5, 1.4), (2.0, 2.0, 1.2)))
+    board = SceneObject(8, label, box((3.0, 1.5, 1.4), (2.0, 2.0, 1.2)))
     cleaned = clean_openings([board], {8: surface}, WALLS)
     assert len(cleaned) == 1 and not cleaned[0].movable
     assert cleaned[0].box.center[0] == pytest.approx(4.0, abs=0.05)
