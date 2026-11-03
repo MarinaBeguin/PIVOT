@@ -9,6 +9,9 @@ wheelchair can still reach from the doors after the moves.
 from __future__ import annotations
 
 import html
+import json
+from importlib import resources
+from typing import Any
 
 import numpy as np
 
@@ -138,7 +141,8 @@ def _rooms_svg(final: Scene, frame: _Frame) -> list[str]:
     for room in rooms.rooms:
         x, y = frame.point(room.center)
         labels.append(f'<text x="{x:.1f}" y="{y:.1f}" text-anchor="middle" font-size="14" '
-                      f'font-weight="600" fill="#5b6661">{html.escape(room.name)}</text>')
+                      f'font-weight="600" fill="#5b6661" class="room">'
+                      f'{html.escape(room.name)}</text>')
     return labels
 
 
@@ -231,54 +235,180 @@ def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None,
     return "".join(parts)
 
 
-def _doors_text(report: AccessReport, moved: set[int]) -> str:
-    """Names the moved furniture that ends up in front of a door.
-
-    Args:
-        report: Access after the moves.
-        moved: Ids of the moved objects.
-
-    Returns:
-        A sentence, or nothing if no moved object stands in front of a door.
-    """
-    parts = [f"the {report.labels[i]} (#{i}) in front of the {report.labels[door]} (#{door})"
-             for door, ids in report.obstructed_doors.items() for i in ids if i in moved]
-    return f" Note: {', '.join(parts)}." if parts else ""
-
-
-def _access_text(final: Scene, moved: set[int] | None = None) -> tuple[str, bool]:
-    """Summarizes who can still get around the room after the moves.
+def _access_data(final: Scene, moved: set[int] | None = None) -> dict[str, Any]:
+    """Finds who can still get around the room after the moves.
 
     Args:
         final: The scene after the moves.
         moved: Ids of the moved objects, whose place in front of a door is noted.
 
     Returns:
-        The sentence, and whether every object stays reachable and no moved
-        object stands in front of a door.
+        ``known`` (the floor is), ``accessible`` (a wheelchair reaches every
+        object), ``unreachable`` and ``blocked_doors`` (``[label, id]``),
+        ``walk_ok`` (a person walking reaches every object) and ``in_front``
+        (``[label, id, door label, door id]`` for moved objects before a door).
     """
     wheelchair = check_access(final, WHEELCHAIR_WIDTH)
     if wheelchair is None:
+        return {"known": False}
+    in_front = [[wheelchair.labels[i], i, wheelchair.labels[door], door]
+                for door, ids in wheelchair.obstructed_doors.items() for i in ids
+                if i in (moved or set())]
+    accessible = bool(wheelchair.to_dict()["accessible"])
+    walking = None if accessible else check_access(final, WALKING_WIDTH)
+    return {"known": True, "accessible": accessible,
+            "unreachable": [[wheelchair.labels[i], i] for i in wheelchair.unreachable],
+            "blocked_doors": [[wheelchair.labels[i], i] for i in wheelchair.blocked_doors],
+            "walk_ok": accessible or (walking is not None and walking.to_dict()["accessible"]),
+            "in_front": in_front}
+
+
+def _access_text(access: dict[str, Any]) -> tuple[str, bool]:
+    """Words who can still get around the room, in English.
+
+    Args:
+        access: See :func:`_access_data`.
+
+    Returns:
+        The sentence, and whether every object stays reachable and no moved
+        object stands in front of a door.
+    """
+    if not access["known"]:
         return "The floor is unknown: passages were not checked.", True
-    doors = _doors_text(wheelchair, moved or set())
-    if wheelchair.to_dict()["accessible"]:
+    parts = [f"the {label} (#{i}) in front of the {door} (#{door_id})"
+             for label, i, door, door_id in access["in_front"]]
+    doors = f" Note: {', '.join(parts)}." if parts else ""
+    if access["accessible"]:
         return (f"A wheelchair ({100 * WHEELCHAIR_WIDTH:.0f} cm) can still reach every object "
                 "from the doors." + doors, not doors)
-    walking = check_access(final, WALKING_WIDTH)
-    problems = [f"the {wheelchair.labels[i]} (#{i})" for i in wheelchair.unreachable]
-    problems += [f"the {wheelchair.labels[i]} (#{i}) is blocked" for i in wheelchair.blocked_doors]
-    walk_ok = walking is not None and walking.to_dict()["accessible"]
+    problems = [f"the {label} (#{i})" for label, i in access["unreachable"]]
+    problems += [f"the {label} (#{i}) is blocked" for label, i in access["blocked_doors"]]
     return (f"A wheelchair ({100 * WHEELCHAIR_WIDTH:.0f} cm) cannot reach "
             f"{', '.join(problems)}. "
-            + ("A person walking still can." if walk_ok else
+            + ("A person walking still can." if access["walk_ok"] else
                "A person walking cannot either.") + doors, False)
+
+
+# Words the page in the visitor's language, from the data written next to it: the
+# English text is the server's, every other language is rewritten here, with the
+# texts and object names of the viewer (i18n.js).
+_TRANSLATE = """
+(() => {
+  const I = window.PivotI18n, d = JSON.parse(document.getElementById("plan-data").textContent);
+  const lang = I.LANGUAGES[d.lang] ? d.lang : "en";
+  if (lang === "en") return;
+  document.documentElement.lang = lang;
+  const t = (key, values) => I.text(lang, key, values);
+  const name = (label, id) => t("planName", { label: I.name(lang, label), id });
+  const length = m => m < 1 ? `${Math.round(100 * m)} cm`
+    : `${m.toLocaleString(lang, { maximumFractionDigits: 1, minimumFractionDigits: 1 })} m`;
+  const set = (id, text) => { const node = document.getElementById(id); if (node) node.textContent = text; };
+  set("plan-title", t("planHeading"));
+  document.querySelectorAll("text.room").forEach(node => { node.textContent = I.name(lang, node.textContent); });
+  document.title = `${t("planHeading")} - ${d.title}`;
+  const s = d.summary;
+  set("plan-summary", `${d.title} · ` + (s.moves === 1 ? t("planMoveOne") : t("planMoves", { n: s.moves }))
+    + (s.two ? t("planTwoPeople", { n: s.two }) : "") + (s.added ? t("planBroughtIn", { n: s.added }) : "")
+    + (s.removed ? t("planTakenOut", { n: s.removed }) : "") + ". " + t("planLegend"));
+  set("plan-save", t("planSave"));
+  const a = d.access;
+  let access = t("planAccessUnknown");
+  if (a.known) {
+    const note = a.in_front.length ? " " + t("planDoorNote", { items: a.in_front.map(([l, i, dl, di]) =>
+      t("planInFront", { name: name(l, i), door: name(dl, di) })).join(", ") }) : "";
+    const problems = a.unreachable.map(([l, i]) => name(l, i))
+      .concat(a.blocked_doors.map(([l, i]) => t("planBlocked", { name: name(l, i) })));
+    access = a.accessible ? t("planAccessOk", { cm: d.wheelchair_cm }) + note
+      : t("planAccessNo", { cm: d.wheelchair_cm, names: problems.join(", ") }) + " "
+        + t(a.walk_ok ? "planWalkOk" : "planWalkNo") + note;
+  }
+  set("plan-access", access);
+  if (d.removed.length) set("plan-removed", t("planFirstOut", { names: d.removed.map(([l, i]) => name(l, i)).join(", ") }));
+  if (d.added.length) set("plan-added", t("planThenIn", { names: d.added.map(([l, i, size]) =>
+    `${name(l, i)} (${size} cm)`).join(", ") }));
+  set("plan-empty", t("planNoMove"));
+  document.querySelectorAll("#plan-steps li").forEach((item, k) => {
+    const step = d.steps[k], who = name(step.label, step.id), far = length(step.distance_m);
+    let text = t(step.rolled ? "stepRoll" : step.carried ? "stepCarry" : "stepSlide", { name: who, dist: far });
+    if (step.rooms) {
+      const doors = step.doors.map(door => door.id === null ? t("stepDoorway")
+        : door.spare_cm === null ? name("door", door.id) : t("stepDoor", { door: name("door", door.id), cm: door.spare_cm }));
+      text += t("stepRooms", { from: I.name(lang, step.rooms.from), to: I.name(lang, step.rooms.to), doors: doors.join(", ") });
+    }
+    if (step.landmark) {
+      const near = name(step.landmark.label, step.landmark.id);
+      text += " " + (step.landmark.gap_m < 0.03 ? t("stepAgainst", { name: near })
+        : t("stepNear", { dist: length(step.landmark.gap_m), name: near }));
+    }
+    if (step.turn_deg) text += t(step.turn_deg > 0 ? "stepTurnLeft" : "stepTurnRight", { deg: Math.abs(step.turn_deg) });
+    text += ".";
+    if (step.rolled) text += " " + t("stepUnroll");
+    if (step.people > 1) text += " " + t("stepTwo");
+    item.textContent = text;
+  });
+})();
+"""
+
+
+# The viewer's texts, which translate the page in the visitor's language.
+_LANGUAGES = resources.files("pivot.viz").joinpath("i18n.js").read_text(encoding="utf-8")
+
+def _summary(steps: list[Step], removed: list[tuple[str, int]],
+             added: list[SceneObject]) -> str:
+    """Counts the moves, in English.
+
+    Args:
+        steps: The steps, in order.
+        removed: Objects taken out of the room.
+        added: Objects brought into the room.
+
+    Returns:
+        A sentence such as "3 moves, 1 of them with two people."
+    """
+    two = sum(step.people > 1 for step in steps)
+    return (f"{len(steps)} move{'s' * (len(steps) != 1)}"
+            + (f", {two} of them with two people" if two else "")
+            + (f", {len(added)} brought in" if added else "")
+            + (f", {len(removed)} taken out" if removed else "") + ".")
+
+
+def _plan_body(steps: list[Step], removed: list[tuple[str, int]], added: list[SceneObject],
+               sizes: dict[int, str]) -> str:
+    """Lists, in English, what to take out, the steps, then what to bring in.
+
+    Args:
+        steps: The steps, in order.
+        removed: Objects taken out of the room, as ``(label, id)``.
+        added: Objects brought into the room.
+        sizes: Size of each added object, in centimeters, by id.
+
+    Returns:
+        The HTML of the list.
+    """
+    items = "".join(f"<li>{html.escape(step.text())}</li>" for step in steps)
+    body = (f"<ol id='plan-steps'>{items}</ol>" if steps else
+            "" if added or removed else
+            "<p id='plan-empty'>No move yet: ask PIVOT to rearrange the room, then open this "
+            "page again.</p>")
+    if removed:
+        names = ", ".join(f"the {label} (#{object_id})" for label, object_id in removed)
+        body = (f"<p class='removed' id='plan-removed'>First take out of the room: "
+                f"{html.escape(names)}.</p>" + body)
+    if added:
+        names = ", ".join(f"the {o.label} (#{o.object_id}), {sizes[o.object_id]} cm"
+                          for o in added)
+        body += f"<p class='added' id='plan-added'>Then bring in: {html.escape(names)}.</p>"
+    return body
 
 
 def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
                       save_pdf: bool = False,
                       removed: list[tuple[str, int]] | None = None,
-                      added: list[SceneObject] | None = None) -> str:
-    """Builds the printable instructions page.
+                      added: list[SceneObject] | None = None, language: str = "en") -> str:
+    """Builds the printable instructions page, in the visitor's language.
+
+    The page is written in English, with its facts as data; in another
+    language, a script rewrites it with the viewer's texts (see i18n.js).
 
     Args:
         final: The scene after every step.
@@ -288,38 +418,37 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
             it is loaded, where "Save as PDF" gives the PDF.
         removed: Objects taken out of the room, as ``(label, id)``: they go first.
         added: Objects brought into the room: they come after, where the plan shows them.
+        language: Code of the visitor's language.
 
     Returns:
         A standalone HTML page.
     """
-    items = "".join(f"<li>{html.escape(step.text())}</li>" for step in steps)
     added, removed = added or [], removed or []
-    new_ids = frozenset(o.object_id for o in added)
-    access_text, accessible = _access_text(final, {step.object_id for step in steps})
-    two = sum(step.people > 1 for step in steps)
-    summary = (f"{len(steps)} move{'s' * (len(steps) != 1)}"
-               + (f", {two} of them with two people" if two else "")
-               + (f", {len(added)} brought in" if added else "")
-               + (f", {len(removed)} taken out" if removed else "") + ".")
-    body = (f"<ol>{items}</ol>" if steps else
-            "" if added or removed else
-            "<p>No move yet: ask PIVOT to rearrange the room, then open this page again.</p>")
-    if removed:
-        names = ", ".join(f"the {label} (#{object_id})" for label, object_id in removed)
-        body = f"<p class='removed'>First take out of the room: {html.escape(names)}.</p>" + body
-    if added:
-        names = ", ".join(f"the {o.label} (#{o.object_id}), "
-                          + " x ".join(f"{100 * v:.0f}" for v in o.box.size) + " cm"
-                          for o in added)
-        body += f"<p class='added'>Then bring in: {html.escape(names)}.</p>"
+    access = _access_data(final, {step.object_id for step in steps})
+    access_text, accessible = _access_text(access)
+    sizes = {o.object_id: " x ".join(f"{100 * v:.0f}" for v in o.box.size) for o in added}
+    body = _plan_body(steps, removed, added, sizes)
+    data = {"lang": language, "title": title, "wheelchair_cm": round(100 * WHEELCHAIR_WIDTH),
+            "summary": {"moves": len(steps), "two": sum(step.people > 1 for step in steps),
+                        "added": len(added),
+                        "removed": len(removed)},
+            "access": access, "steps": [step.to_dict() for step in steps],
+            "removed": [[label, i] for label, i in removed],
+            "added": [[o.label, o.object_id, sizes[o.object_id]] for o in added]}
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
             f"<meta name='viewport' content='width=device-width, initial-scale=1'>"
             f"<title>Moving plan - {html.escape(title)}</title><style>{_STYLE}</style></head>"
             f"<body{SAVE_PDF_ON_LOAD if save_pdf else ''}>"
-            f"<h1>Moving plan</h1><div class='muted'>{html.escape(title)} · {summary} "
+            f"<h1 id='plan-title'>Moving plan</h1><div class='muted' id='plan-summary'>"
+            f"{html.escape(title)} · {_summary(steps, removed, added)} "
             f"Dashed: where an object starts; orange: where it ends; green: a new "
             f"object; shaded green: floor a wheelchair can reach.</div>"
-            f"<button onclick='print()'>Save as PDF or print</button>"
-            f"{plan_svg(final, steps, check_access(final, WHEELCHAIR_WIDTH), new_ids)}"
-            f"<p class='access{'' if accessible else ' no'}'>{html.escape(access_text)}</p>"
-            f"{body}</body></html>")
+            f"<button id='plan-save' onclick='print()'>Save as PDF or print</button>"
+            f"{plan_svg(final, steps, check_access(final, WHEELCHAIR_WIDTH),
+                        frozenset(o.object_id for o in added))}"
+            f"<p class='access{'' if accessible else ' no'}' id='plan-access'>"
+            f"{html.escape(access_text)}</p>"
+            f"{body}"
+            f"<script type='application/json' id='plan-data'>"
+            f"{json.dumps(data).replace('</', '<' + chr(92) + '/')}</script>"
+            f"<script>{_LANGUAGES}</script><script>{_TRANSLATE}</script></body></html>")

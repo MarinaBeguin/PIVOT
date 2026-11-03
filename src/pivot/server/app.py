@@ -468,7 +468,8 @@ def create_app(rooms: list[Room],
         page = instructions_page(session.scene, instructions(initial, session.motions),
                                  request.state.room.title,
                                  save_pdf=request.query_params.get("pdf") == "1",
-                                 removed=removed, added=added)
+                                 removed=removed, added=added,
+                                 language=request.query_params.get("lang", "en"))
         # Always the visitor's latest moves, never a copy kept by the browser.
         return HTMLResponse(page, headers={"Cache-Control": "no-store"})
 

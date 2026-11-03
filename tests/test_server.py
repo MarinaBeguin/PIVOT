@@ -105,7 +105,8 @@ def test_moving_plan_lists_the_moves_made() -> None:
     assert "No move yet" in app.get("/instructions").text
     app.post("/api/tools/move_object", json={"object_id": 3, "x": 3.0, "y": 1.0})
     page = app.get("/instructions").text
-    assert "<ol><li>Slide the office chair (#3)" in page and "onload" not in page
+    assert "<ol id='plan-steps'><li>Slide the office chair (#3)" in page
+    assert " onload='print()'" not in page
     # From the viewer's button, the page opens the dialog that saves it as a PDF.
     assert "<body onload='print()'>" in app.get("/instructions?pdf=1").text
 
