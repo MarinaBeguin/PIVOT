@@ -133,3 +133,11 @@ or external API permissions. A real preview video remains the release gate.
 The CPU image verifies OpenCV and the inventory module at build time. Upload jobs
 require an actual inventory: failure stops processing rather than substituting
 office objects. The default inventory cap matches the local API pipeline (20).
+
+## Spoken replies
+
+Modal deployments enable Meta MMS-TTS by default for English, French, German
+and Spanish. The image downloads these voices at build time. Visitors enable
+“Read answers aloud” in the interface; speech recognition remains Muse Voice
+Transcribe. Use `PIVOT_TTS=browser` when serving/deploying to disable server TTS
+and use the device voices. Unsupported languages also use browser voices.

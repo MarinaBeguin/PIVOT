@@ -18,10 +18,9 @@ Spending stays bounded at three levels:
 - one container at most, on one CPU, stopped after 15 idle minutes;
 - spending limits set on the Modal workspace and on the Meta API account.
 
-With ``PIVOT_TTS=mms`` at serve or deploy time, answers are read aloud by MMS-TTS
-(the same voice on every phone): the image then gets torch (CPU) and
-transformers, and the voices, downloaded once at build time; the container
-gets 4 GB instead of 2.
+MMS-TTS reads answers aloud by default (the same voice on every phone).
+The image includes torch (CPU), transformers and voices downloaded at build time.
+Set ``PIVOT_TTS=browser`` at serve or deploy time to use the browser's voice instead.
 """
 
 from __future__ import annotations
@@ -120,7 +119,7 @@ image = (
     .env(SETTINGS)
 )
 # Read here when serving or deploying, and from the image's environment in the container.
-VOICE = os.environ.get("PIVOT_TTS", "").lower() == "mms"
+VOICE = os.environ.get("PIVOT_TTS", "mms").lower() == "mms"
 if VOICE:
     image = (image
              .run_commands("pip install --no-cache-dir torch --index-url "
