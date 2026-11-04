@@ -1,0 +1,7 @@
+# Prevent transitive model dependencies from replacing the CUDA 12.6 stack.
+torch==2.8.0
+torchvision==0.23.0
+torchaudio==2.8.0
+numpy>=1.26,<2
+setuptools<81
+transformers>=4.45,<5

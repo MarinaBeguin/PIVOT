@@ -23,15 +23,22 @@ PYTHON="${PIVOT_PYTHON:-${PIVOT_SCRATCH:-$HOME/pivot_scratch}/conda_envs/pivot_s
 CAPTURE="$OUT_DIR/capture"
 mkdir -p "$OUT_DIR"
 
-echo "== [A] Cameras and depth of every frame (MapAnything, GPU job)"
+echo "== [A] Cameras and depth of every frame (MapAnything, ${PIVOT_EXECUTOR:-slurm})"
 if [ ! -f "$CAPTURE/video.mp4" ]; then
-  JOB=$(sbatch --parsable ${PIVOT_SLURM_PARTITION:+--partition="$PIVOT_SLURM_PARTITION"} \
-    --output="$OUT_DIR/capture_%j.out" --export=ALL \
-    "$PIVOT_SRC/scripts/gpu/video_capture.sbatch" "$VIDEO_IN" "$CAPTURE" \
-    "${PIVOT_CAPTURE_FRAMES:-150}")
-  echo "   job $JOB; log: $OUT_DIR/capture_$JOB.out"
-  while squeue -h -j "$JOB" 2>/dev/null | grep -q .; do sleep 15; done
-  [ -f "$CAPTURE/video.mp4" ] || { echo "   reconstruction failed, see the log" >&2; exit 1; }
+  if [ "${PIVOT_EXECUTOR:-slurm}" = local ]; then
+    "${PIVOT_CAPTURE_PYTHON:-$PYTHON}" -m pivot.reconstruction.video_capture --video "$VIDEO_IN" --out "$CAPTURE" \
+      --frames "${PIVOT_CAPTURE_FRAMES:-150}"
+  elif [ "${PIVOT_EXECUTOR:-slurm}" = slurm ]; then
+    JOB=$(sbatch --parsable ${PIVOT_SLURM_PARTITION:+--partition="$PIVOT_SLURM_PARTITION"} \
+      --output="$OUT_DIR/capture_%j.out" --export=ALL \
+      "$PIVOT_SRC/scripts/gpu/video_capture.sbatch" "$VIDEO_IN" "$CAPTURE" \
+      "${PIVOT_CAPTURE_FRAMES:-150}")
+    echo "   job $JOB; log: $OUT_DIR/capture_$JOB.out"
+    while squeue -h -j "$JOB" 2>/dev/null | grep -q .; do sleep 15; done
+    [ -f "$CAPTURE/video.mp4" ] || { echo "   reconstruction failed, see the log" >&2; exit 1; }
+  else
+    echo "PIVOT_EXECUTOR must be local or slurm" >&2; exit 2
+  fi
 else
   echo "   already done: $CAPTURE"
 fi

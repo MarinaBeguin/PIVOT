@@ -79,6 +79,17 @@ class Visitors:
         with self._lock:
             self._scenes[room] = scene
 
+    def remove_room(self, room: str) -> None:
+        """Drops a deleted uploaded room and every in-memory copy.
+
+        Args:
+            room: Room id to forget.
+        """
+        with self._lock:
+            self._scenes.pop(room, None)
+            for entry in self._entries.values():
+                entry.rooms.pop(room, None)
+
     def get(self, token: str | None, room: str) -> tuple[str, Visitor]:
         """Returns a visitor's session of a room, creating what is missing.
 

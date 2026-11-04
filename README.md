@@ -389,12 +389,35 @@ with the name shown in the room menu:
 PIVOT_DEMO_SCENES="Office=<out_dir>/scene;Bedroom=<other_out_dir>/scene" modal deploy deploy/modal_app.py
 ```
 
-### Docker (serve a built scene)
+### Docker installation (server and local GPU tools)
+
+The Docker setup covers the server, geometry and evaluation, Meta API tools
+(photo, segmentation, agent and speech), plus a GPU image for MapAnything,
+local SAM, vision inventory, speech and guards. Separate images prepare vLLM,
+SceneScript and optional speech/privacy tools without mixing their CUDA stacks.
+See [installation, secrets, model weights and complete commands](docker/README.md).
+The local phone-video runner does not require Slurm or Conda on the host.
+
+To serve an existing scene without a GPU:
 
 ```bash
 docker build -t pivot .
-docker run -p 8000:8000 -e META_API_KEY=... -v /path/to/out_dir/scene:/scene:ro pivot
+docker run --rm -p 127.0.0.1:8000:8000 --env-file .env \
+  -v /absolute/path/to/scene:/scene:ro pivot
 ```
+
+For the local GPU tools, install the NVIDIA Container Toolkit on the host, then:
+
+```bash
+cp .env.example .env  # edit META_API_KEY locally; never commit this file
+mkdir -p data weights
+docker compose --profile tools build tools
+docker compose --profile tools run --rm tools bash docker/tools.sh check
+```
+
+Weights and GPU memory requirements vary by model. Optional adapters still in
+other branches are identified in the installation guide; installing their
+packages does not make those features part of this checkout.
 
 ### Command line
 

@@ -5,7 +5,7 @@
 
 Each room is a title and a scene directory (scene.json and cloud.npz, from
 ``python -m pivot.build``), the first one shown by default; the directories
-are copied into the image. The demo never tracks videos: it runs the agent
+are copied into the image. With uploads enabled, separate GPU/CPU jobs reconstruct visitors' videos. The web service runs the agent
 (Muse Spark), speech transcription and objects brought in from a photo (Muse
 Spark on the photo, SAM 3.1 on one image), through the Meta API. At deploy time the API key is
 read from the repository's .env and handed to Modal as a secret; nothing is
@@ -27,6 +27,7 @@ gets 4 GB instead of 2.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -46,7 +47,16 @@ SETTINGS = {
     "PIVOT_PROXY_HOPS": "1",
     "PIVOT_MAX_POINTS": "200000",
     "PYTHONUNBUFFERED": "1",
+    "PYTHONPATH": "/root/pivot/src:/root/pivot/deploy",
+    "NUMBA_CACHE_DIR": "/tmp/pivot-numba",
+    "PIVOT_MODAL_UPLOADS": os.environ.get("PIVOT_MODAL_UPLOADS", "1"),
 }
+
+for setting in ("PIVOT_UPLOAD_FRAMES", "PIVOT_UPLOAD_OBJECT_KINDS", "PIVOT_UPLOAD_MAX_BYTES",
+                "PIVOT_UPLOAD_MAX_SECONDS", "PIVOT_UPLOAD_DAILY", "PIVOT_UPLOAD_PER_VISITOR",
+                "PIVOT_UPLOAD_ACTIVE", "PIVOT_UPLOAD_RETENTION", "PIVOT_UPLOAD_NAMESPACE"):
+    if setting in os.environ:
+        SETTINGS[setting] = os.environ[setting]
 
 
 def _secret() -> dict[str, str]:
@@ -98,7 +108,15 @@ image = (
     .add_local_file(ROOT / "pyproject.toml", "/root/pivot/pyproject.toml", copy=True)
     .add_local_file(ROOT / "README.md", "/root/pivot/README.md", copy=True)
     .add_local_dir(ROOT / "src", "/root/pivot/src", copy=True, ignore=["**/__pycache__/**"])
-    .run_commands("pip install --no-cache-dir '/root/pivot[serve,fast]'")
+    .add_local_dir(ROOT / "scripts", "/root/pivot/scripts", copy=True,
+                   ignore=["site.env", "**/__pycache__/**"])
+    .add_local_dir(ROOT / "docker", "/root/pivot/docker", copy=True)
+    .add_local_dir(ROOT / "deploy", "/root/pivot/deploy", copy=True,
+                   ignore=["**/__pycache__/**"])
+    .apt_install("ffmpeg")
+    .run_commands("pip install --no-cache-dir '/root/pivot[serve,fast]' "
+                  "'opencv-python-headless==4.10.0.84'", "pip check",
+                  'python -c "import cv2; from pivot.perception.inventory import video_sheet"')
     .env(SETTINGS)
 )
 # Read here when serving or deploying, and from the image's environment in the container.
@@ -122,9 +140,22 @@ if modal.is_local():
 secret = modal.Secret.from_dict(_secret() if modal.is_local() else {})
 
 
-@app.function(image=image, secrets=[secret], volumes={"/ledger": ledger},
+# Public video processing is independently quota-limited, not billed to the chat ledger.
+UPLOADS = os.environ.get("PIVOT_MODAL_UPLOADS", "1") == "1"
+upload_factory = None
+web_volumes = {"/ledger": ledger}
+if UPLOADS:
+    sys.path.insert(0, str(ROOT / "src"))
+    sys.path.insert(0, str(ROOT / "deploy"))
+    from modal_video import attach_uploads
+
+    upload_factory, video_volume = attach_uploads(app, image, secret)
+    web_volumes["/videos"] = video_volume
+
+
+@app.function(image=image, secrets=[secret], volumes=web_volumes,
               min_containers=0, max_containers=1, scaledown_window=900,
-              cpu=1.0, memory=4096 if VOICE else 2048, timeout=600)
+              cpu=1.0, memory=4096 if VOICE or UPLOADS else 2048, timeout=600)
 @modal.concurrent(max_inputs=20)
 @modal.asgi_app()
 def web() -> FastAPI:
@@ -137,4 +168,5 @@ def web() -> FastAPI:
     from pivot.server.app import load_app
 
     return load_app(os.environ["PIVOT_ROOMS"].split(";"), env_file=Path("/root/no.env"),
-                    max_points=int(os.environ["PIVOT_MAX_POINTS"]), public=True)
+                    max_points=int(os.environ["PIVOT_MAX_POINTS"]), public=True,
+                    uploads=upload_factory() if upload_factory else None)

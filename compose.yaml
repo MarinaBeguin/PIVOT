@@ -1,0 +1,68 @@
+services:
+  server:
+    build:
+      context: .
+      target: server
+    image: pivot-server:local
+    env_file: .env
+    environment:
+      PIVOT_SCENE_DIR: /data/room/scene
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - ${PIVOT_DATA_DIR:-./data}:/data
+      - pivot-cache:/cache
+  tools:
+    profiles: [tools]
+    build:
+      context: .
+      target: tools
+    image: pivot-tools:local
+    env_file: .env
+    environment:
+      PIVOT_CAPTURE_FRAMES: ${PIVOT_CAPTURE_FRAMES:-150}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: 8gb
+    ports: ["127.0.0.1:8000:8000"]
+    volumes:
+      - ${PIVOT_DATA_DIR:-./data}:/data
+      - pivot-cache:/cache
+    command: [bash, docker/tools.sh, check]
+  llm:
+    profiles: [llm]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.llm
+    env_file: .env
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    shm_size: 8gb
+    ports: ["127.0.0.1:8001:8000"]
+    volumes: ["pivot-cache:/cache"]
+  scenescript:
+    profiles: [scenescript]
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.scenescript
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    volumes:
+      - ${PIVOT_DATA_DIR:-./data}:/data
+      - ${PIVOT_WEIGHTS_DIR:-./weights}:/weights:ro
+volumes:
+  pivot-cache:

@@ -1,0 +1,14 @@
+# SceneScript uses a separate upstream environment (PyTorch 2.4 / CUDA 12.1).
+FROM continuumio/miniconda3:24.7.1-0
+RUN apt-get update && apt-get install -y --no-install-recommends git build-essential \
+    && rm -rf /var/lib/apt/lists/*
+ARG SCENESCRIPT_REV=516472d0e62ebbf866f1125cd98c85dec315c100
+RUN git clone https://github.com/facebookresearch/scenescript.git /opt/scenescript \
+    && git -C /opt/scenescript checkout "$SCENESCRIPT_REV"
+WORKDIR /opt/scenescript
+# Explicit target architecture allows torchsparse compilation without a visible GPU.
+ENV TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9" FORCE_CUDA=1
+RUN sed -i 's/  - python$/  - python=3.11/; s|torchsparse.git$|torchsparse.git@v2.1.0|' environment.yaml \
+    && conda env create -f environment.yaml && conda clean -afy
+COPY docker/scenescript.py /opt/run_scenescript.py
+ENTRYPOINT ["conda", "run", "--no-capture-output", "-n", "scenescript", "python", "/opt/run_scenescript.py"]

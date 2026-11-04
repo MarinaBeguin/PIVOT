@@ -37,7 +37,8 @@ def detect_floor(points: FloatArray, up_hint: FloatArray, threshold: float = 0.0
     """
     heights = points @ up_hint
     allowed = heights <= np.percentile(heights, low_band)
-    plane, _ = fit_plane_ransac(points, threshold, rng=rng, allowed=allowed)
+    plane, _ = fit_plane_ransac(points, threshold, rng=rng, allowed=allowed,
+                                normal_hint=up_hint, max_tilt_deg=max_tilt_deg)
     tilt = np.degrees(np.arccos(min(1.0, abs(float(plane.normal @ up_hint)))))
     if tilt > max_tilt_deg:
         raise ValueError(f"Best low plane is tilted by {tilt:.0f} degrees; no floor found.")
