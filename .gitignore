@@ -16,6 +16,7 @@ docs/
 /data/
 /outputs/
 /cache/
+/weights/
 *.out
 *.err
 

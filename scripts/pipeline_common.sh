@@ -154,6 +154,10 @@ choose_prompts() {
     if [ -s "$list" ]; then
       mapfile -t PROMPTS < "$list"
     else
+      if [ "${PIVOT_REQUIRE_INVENTORY:-0}" = 1 ]; then
+        echo "   object inventory failed; refusing to substitute unrelated default objects" >&2
+        return 1
+      fi
       echo "   the vision model gave no list; using the default office objects" >&2
       PROMPTS=(chair table monitor lamp "trash can" door window shelf cabinet)
     fi
@@ -325,5 +329,5 @@ serve() {
   [ "${PIVOT_NO_SERVE:-0}" != 1 ] || return 0
   echo "== Serving http://127.0.0.1:$PORT (from your laptop: ssh -L $PORT:127.0.0.1:$PORT <host>)"
   cd "$PIVOT_SRC"
-  "$PYTHON" -m pivot.server --scene-dir "$SCENE" --port "$PORT" --chat
+  "$PYTHON" -m pivot.server --scene-dir "$SCENE" --host "${PIVOT_HOST:-127.0.0.1}" --port "$PORT" --chat
 }

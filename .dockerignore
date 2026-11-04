@@ -1,7 +1,16 @@
-# Only pyproject.toml, README.md and src/ go in the image.
+# Allow only application sources and installation recipes; never .env or data.
 *
 !pyproject.toml
 !README.md
 !src/
+!src/**
+!scripts/
+!scripts/**
+!docker/
+!docker/**
+scripts/site.env
 **/__pycache__
 **/*.py[cod]
+!compose.yaml
+!deploy/
+!deploy/**

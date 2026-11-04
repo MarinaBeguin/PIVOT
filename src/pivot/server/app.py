@@ -56,7 +56,11 @@ from pivot.server.limits import (
     OWNER, PHOTO_PRICE, TRANSCRIBE_PER_SECOND, Budget, Meter, SpendLedger, chat_cost,
 )
 from pivot.server.speech import Transcriber, read_wav, transcriber_from_env
-from pivot.server.uploads import MAX_VIDEO_BYTES, VideoUploads
+from pivot.server.uploads import VideoUploads
+from pivot.server.cloud_uploads import CloudVideoUploads
+from pivot.server.video_routes import (
+    OWNER_COOKIE, add_video_routes, forget_video, prepare_video_request, remember_video_owner,
+)
 from pivot.server.visitors import COOKIE, Visitor, Visitors
 from pivot.server.voice import MAX_TEXT, MMS_VOICES, Speaker, speaker_from_env
 from pivot.viz.plan import instructions_page
@@ -85,7 +89,6 @@ class Photographer:
 
 
 # Marks the owner's browser, see Meter.owner_token.
-OWNER_COOKIE = "pivot_owner"
 # Points of a room built from a visitor's video, sent to the page.
 _UPLOAD_POINTS = 200_000
 
@@ -237,6 +240,8 @@ def _room_adder(rooms: list[Room], by_id: dict[str, Room], visitors: Visitors,
             room_id: The job's id.
             scene_dir: The scene it built.
         """
+        if room_id in by_id:
+            return
         room = replace(load_room(f"Your video={scene_dir}", _UPLOAD_POINTS), room_id=room_id)
         by_id[room_id] = room
         visitors.add_room(room_id, room.scene)
@@ -248,54 +253,6 @@ def _room_adder(rooms: list[Room], by_id: dict[str, Room], visitors: Visitors,
     return add_room
 
 
-def _video_routes(app: FastAPI, uploads: VideoUploads | None, meter: Meter | None,
-                  on_ready: Callable[[str, Path], None]) -> None:
-    """Adds the routes that build rooms from the visitors' videos.
-
-    Args:
-        app: The application.
-        uploads: Runs the pipeline on the videos; None adds no route.
-        meter: On a public server, only the owner's browser may send a video.
-        on_ready: Serves a room once built, from the job's id and its scene.
-    """
-    if uploads is None:
-        return
-    uploads.on_ready = on_ready
-
-    @app.post("/api/video")
-    async def video(request: Request) -> JSONResponse:
-        """Starts building a room from a video sent as the request's body.
-
-        Args:
-            request: Its ``X-Filename`` header names the file.
-
-        Returns:
-            ``{"job": id}``, or why the video is refused.
-        """
-        if meter is not None and not meter.is_owner(request.cookies.get(OWNER_COOKIE)):
-            return JSONResponse({"error": "Rooms from your own video are open on request on "
-                                          "this public demo: run PIVOT yourself, see the "
-                                          "README."}, status_code=403)
-        data = await request.body()
-        if not data or len(data) > MAX_VIDEO_BYTES:
-            return JSONResponse({"error": "Please send a video under 500 MB."}, status_code=413)
-        return JSONResponse({"job": uploads.start(data, request.headers.get("x-filename",
-                                                                           "video.mp4"))})
-
-    @app.get("/api/video/{job_id}")
-    def video_status(job_id: str) -> JSONResponse:
-        """Says how the room of a video is coming along.
-
-        Args:
-            job_id: The job.
-
-        Returns:
-            Its state, the last lines of its log, and its room once built.
-        """
-        status = uploads.status(job_id)
-        if status is None:
-            return JSONResponse({"error": "No such video."}, status_code=404)
-        return JSONResponse(status)
 
 
 def _chosen(body: dict[str, Any]) -> Described | None:
@@ -451,6 +408,50 @@ def _speech_route(app: FastAPI, speaker: Speaker | None) -> None:
         return Response(audio, media_type="audio/wav")
 
 
+def _visitor_middleware(rooms: list[Room], by_id: dict[str, Room], visitors: Visitors,
+                        meter: Meter | None,
+                        uploads: VideoUploads | CloudVideoUploads | None) -> Callable[
+                            [Request, Callable[[Request], Awaitable[Response]]],
+                            Awaitable[Response]]:
+    """Creates middleware for private room access and visitor cookies.
+
+    Args:
+        rooms: Public rooms, default first.
+        by_id: Public and authorized private room registry.
+        visitors: Per-browser scene state.
+        meter: Optional public request limits.
+        uploads: Optional persistent upload backend.
+
+    Returns:
+        The async HTTP middleware.
+    """
+    async def visitor_session(request: Request,
+                              call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        """Attaches the visitor's session to the request, and sets their cookie.
+
+        Args:
+            request: The request.
+            call_next: The route.
+
+        Returns:
+            The route's response.
+        """
+        rejected = await prepare_video_request(request, uploads, by_id)
+        if rejected is not None:
+            return rejected
+        room = by_id.get(request.query_params.get("scene", ""), rooms[0])
+        token, request.state.visitor = visitors.get(request.cookies.get(COOKIE), room.room_id)
+        request.state.token, request.state.room = token, room
+        response = await call_next(request)
+        if request.cookies.get(COOKIE) != token:
+            response.set_cookie(COOKIE, token, httponly=True, samesite="lax")
+        remember_video_owner(request, response, uploads)
+        _remember_owner(request, response, meter)
+        return response
+
+    return visitor_session
+
+
 # pylint: disable-next=too-many-locals
 def create_app(rooms: list[Room],
                agent_factory: Callable[[Session], Agent] | None = None,
@@ -458,7 +459,7 @@ def create_app(rooms: list[Room],
                meter: Meter | None = None,
                photographer: Photographer | None = None,
                guard: Guard | None = None, speaker: Speaker | None = None,
-               uploads: VideoUploads | None = None) -> FastAPI:
+               uploads: VideoUploads | CloudVideoUploads | None = None) -> FastAPI:
     """Creates the web application for one or several rooms.
 
     The room of a request is given by its ``scene`` query parameter (the first
@@ -492,26 +493,7 @@ def create_app(rooms: list[Room],
         photos=photographer is not None, uploads=uploads is not None,
         voices=tuple(MMS_VOICES) if speaker is not None else ()))
 
-    @app.middleware("http")
-    async def visitor_session(request: Request,
-                              call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        """Attaches the visitor's session to the request, and sets their cookie.
-
-        Args:
-            request: The request.
-            call_next: The route.
-
-        Returns:
-            The route's response.
-        """
-        room = by_id.get(request.query_params.get("scene", ""), rooms[0])
-        token, request.state.visitor = visitors.get(request.cookies.get(COOKIE), room.room_id)
-        request.state.token, request.state.room = token, room
-        response = await call_next(request)
-        if request.cookies.get(COOKIE) != token:
-            response.set_cookie(COOKIE, token, httponly=True, samesite="lax")
-        _remember_owner(request, response, meter)
-        return response
+    app.middleware("http")(_visitor_middleware(rooms, by_id, visitors, meter, uploads))
 
     def key(request: Request) -> str:
         """Identifies the visitor of a request in the ledger.
@@ -533,8 +515,10 @@ def create_app(rooms: list[Room],
     compressed = {room_id: gzip.compress(page.encode(), compresslevel=6)
                   for room_id, page in pages.items()}
 
-    _video_routes(app, uploads, meter,
-                  _room_adder(rooms, by_id, visitors, (pages, compressed), features))
+    add_video_routes(app, uploads, meter,
+                     _room_adder(rooms, by_id, visitors, (pages, compressed), features),
+                     partial(forget_video, rooms=by_id, pages=pages,
+                             compressed=compressed, visitors=visitors))
 
     @app.get("/", response_class=HTMLResponse)
     def viewer(request: Request) -> Response:
@@ -847,7 +831,8 @@ def _public_meter(config: MetaConfig | None) -> Meter:
 
 
 def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: int | None = None,
-             public: bool = False) -> FastAPI:
+             public: bool = False,
+             uploads: VideoUploads | CloudVideoUploads | None = None) -> FastAPI:
     """Creates the application for rooms written by :mod:`pivot.build`.
 
     Args:
@@ -856,6 +841,7 @@ def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: in
         max_points: Most points of each cloud sent to the page; all if None.
         public: Whether the server is open to anyone: requests are then priced
             and limited (see :func:`_public_meter`).
+        uploads: Optional remote backend; otherwise use the local environment setting.
 
     Returns:
         The application.
@@ -870,7 +856,8 @@ def load_app(scene_dirs: list[str], env_file: Path | None = None, max_points: in
                       meter=_public_meter(config) if public else None,
                       photographer=_photographer(config) if api and config else None,
                       guard=guard_from_env() if config else None,
-                      speaker=speaker_from_env(), uploads=_uploads_from_env())
+                      speaker=speaker_from_env(),
+                      uploads=uploads if uploads is not None else _uploads_from_env())
 
 
 def _uploads_from_env() -> VideoUploads | None:

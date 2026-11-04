@@ -444,8 +444,8 @@ def prepared_scene(scene_dir: Path) -> tuple[Scene, FloatArray, UInt8Array]:
     Returns:
         The scene and its cloud (points and colors).
     """
-    cloud = np.load(scene_dir / "cloud.npz")
-    scene, points, colors = complete_rugs(close_windows(Scene.load(scene_dir / "scene.json")),
-                                          cloud["points"], cloud["colors"])
+    with np.load(scene_dir / "cloud.npz") as cloud:
+        scene, points, colors = complete_rugs(close_windows(Scene.load(scene_dir / "scene.json")),
+                                              cloud["points"], cloud["colors"])
     scene = scene.with_wall_evidence(points)
     return scene, points, colors

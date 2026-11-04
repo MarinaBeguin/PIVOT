@@ -1,0 +1,33 @@
+# Isolated environments for tools whose dependencies may replace PyTorch.
+# These packages do not imply that unmerged PIVOT adapters are available.
+FROM python:3.12-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 git build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
+ENV HF_HOME=/cache/huggingface TORCH_HOME=/cache/torch
+# Upstream ASR 0.2.0 declares Python <=3.12 (excluding 3.12 patch releases).
+FROM python:3.11-slim AS speech
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg libsndfile1 git build-essential cmake \
+    && rm -rf /var/lib/apt/lists/*
+ENV HF_HOME=/cache/huggingface TORCH_HOME=/cache/torch
+RUN pip install --no-cache-dir torch==2.8.0 torchaudio==2.8.0 --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir omnilingual-asr==0.2.0 fairseq2==0.6.0 'numpy<2' && pip check
+RUN pip install --no-cache-dir --no-deps --force-reinstall 'fairseq2n==0.6.0+cpu' \
+    --index-url https://fair.pkg.atmeta.com/fairseq2/whl/pt2.8.0/cpu && pip check
+RUN pip install --no-cache-dir pyarrow==20.0.0 pandas==2.2.3 numpy==1.26.4 && pip check
+RUN python -c "import torch; from omnilingual_asr.models.inference.pipeline import ASRInferencePipeline; assert torch.version.cuda is None"
+ENTRYPOINT ["python"]
+FROM base AS privacy
+RUN pip install --no-cache-dir torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cpu \
+    && pip install --no-cache-dir egoblur==2.0.1 && pip check
+RUN egoblur-gen1 --help
+ENTRYPOINT ["egoblur-gen1"]
+FROM base AS deploy
+RUN pip install --no-cache-dir modal==1.6.3 && pip check
+WORKDIR /app
+COPY pyproject.toml README.md ./
+COPY src ./src
+COPY deploy ./deploy
+COPY scripts ./scripts
+COPY docker ./docker
+RUN pip install --no-cache-dir '.[serve,fast]'
+ENTRYPOINT ["modal"]

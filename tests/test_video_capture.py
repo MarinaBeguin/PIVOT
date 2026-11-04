@@ -10,6 +10,7 @@ from PIL import Image
 from pivot.data.scannetpp import load_scannetpp_iphone
 from pivot.perception.detections import Detection
 from pivot.privacy import blur, blur_capture, private_masks
+from pivot.reconstruction import video_capture
 from pivot.reconstruction.video_capture import extract_frames, write_capture
 
 
@@ -74,3 +75,11 @@ def test_private_pixels_are_blurred_with_a_margin(tmp_path: Path) -> None:
     assert (tmp_path / "privacy.json").exists()
     untouched = blur(Image.fromarray(pattern), np.zeros((30, 40), dtype=bool))
     assert np.array_equal(np.asarray(untouched), pattern)
+
+
+def test_existing_capture_without_video_resumes_encoding(tmp_path, monkeypatch):
+    write_capture(views(), tmp_path)
+    calls = []
+    monkeypatch.setattr(video_capture, "capture_video", calls.append)
+    video_capture.main(["--video", str(tmp_path / "original.mov"), "--out", str(tmp_path)])
+    assert calls == [tmp_path]

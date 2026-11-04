@@ -93,7 +93,21 @@
                     border-radius: 6px; background: #fff1; }
   #sizeDialog .grid { margin-top: 12px; }
   #sizeDialog .choices { display: grid; gap: 6px; margin: 12px 0; }
-  #videoSection { margin-top: 10px; } #videoStatus { white-space: pre-wrap; margin-top: 6px; }
+  #workspaceTabs { position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 6px; z-index: 11; padding: 6px; }
+  #workspaceTabs button { padding: 8px 14px; white-space: nowrap; }
+  #workspaceTabs button[aria-selected="true"] { background: var(--accent); color: #0b1a12; }
+  #videoSection { display: none; position: fixed; top: 66px; left: 50%;
+    transform: translateX(-50%); width: min(440px, calc(100vw - 60px));
+    max-height: calc(100vh - 150px); z-index: 10; border: 1px solid #fff3; }
+  body.upload-tab #videoSection { display: block !important; }
+  #videoSection h2 { color: var(--text); font-size: 18px; }
+  @media (max-width: 720px) {
+    #workspaceTabs { left: 12px; right: 58px; transform: none; }
+    #workspaceTabs button { flex: 1; min-width: 0; padding: 8px 4px; font-size: 12px; }
+    #videoSection { top: 66px; left: 12px; right: 12px; transform: none; width: auto; }
+  } #videoStatus { white-space: pre-wrap; margin-top: 6px; }
+  #videoStatus a { color: var(--accent); font-weight: 600; display: inline-block; padding: 4px 0; }
   #sizeDialog .choices button { text-align: left; }
   #tour .bubble { position: absolute; max-width: 300px; padding: 14px 16px 12px;
     background: #fffdf3; color: #1d2421; border: 2.5px solid #1d2421; border-radius: 22px;
@@ -128,6 +142,18 @@
 </script>
 </head>
 <body>
+<nav id="workspaceTabs" class="panel" role="tablist" aria-label="PIVOT">
+  <button id="sceneTab" role="tab" aria-selected="true" aria-controls="sceneViewport" data-i18n="sceneTab">Scene</button>
+  <button id="uploadTab" role="tab" aria-selected="false" aria-controls="videoSection" data-i18n="uploadVideoTab">Upload your video</button>
+</nav>
+  <div id="videoSection" class="panel" role="tabpanel" aria-labelledby="uploadTab">
+    <h2 data-i18n="uploadVideoTab">Upload your video</h2>
+    <p class="hint" data-i18n="uploadVideoIntro">Film a room on one level, moving slowly so the floor and furniture are visible.</p>
+    <button id="videoButton" class="primary" data-i18n="chooseVideo" data-i18n-title="sendVideoTitle">Choose a video</button>
+    <input type="file" id="videoInput" accept="video/*" style="display:none">
+    <div id="videoPolicy" class="hint"></div>
+    <div id="videoStatus" class="hint" aria-live="polite"></div>
+  </div>
 <div id="panel" class="panel">
   <h1 id="title">PIVOT scene</h1>
   <select id="sceneMenu" style="display:none" data-i18n-title="chooseRoom"></select>
@@ -140,11 +166,7 @@
   <label><span data-i18n="cutAbove">Cut above</span> <span id="cutValue">2.0</span> m
     <input type="range" id="cut" min="0.3" max="4" step="0.1" value="2.0" style="width:100%"></label>
   <select id="languageMenu" data-i18n-title="language"></select>
-  <div id="videoSection" style="display:none">
-    <button id="videoButton" data-i18n="sendVideo" data-i18n-title="sendVideoTitle">Your own video</button>
-    <input type="file" id="videoInput" accept="video/*" style="display:none">
-    <div id="videoStatus" class="hint"></div>
-  </div>
+
 </div>
 <div id="controls" class="panel">
   <div id="moveSection">
@@ -165,10 +187,10 @@
     <button id="reset" data-i18n="reset">Reset</button>
   </div>
   <div class="grid two" id="extraButtons">
-    <button id="plan" data-i18n="planButton" data-i18n-title="planTitle">Moving plan (PDF)</button>
-    <div id="accessRouteLegend" class="muted" aria-live="polite"></div>
     <button id="photoButton" style="display:none" data-i18n="addPhoto" data-i18n-title="addPhotoTitle">Add from a photo</button>
+    <button id="plan" data-i18n="planButton" data-i18n-title="planTitle">Moving plan (PDF)</button>
   </div>
+  <div id="accessRouteLegend" class="muted" aria-live="polite"></div>
   <input type="file" id="photoInput" accept="image/*" style="display:none">
   <div id="result"></div>
   <div class="row"><button id="makeRoom" class="primary" style="display:none" data-i18n="makeRoom">Make room &amp; move</button></div>
@@ -240,6 +262,7 @@ renderer.setPixelRatio(window.devicePixelRatio);
 // Section plane hiding the ceiling, so the room is seen like a floor plan.
 const cutPlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 2.0);
 renderer.clippingPlanes = [cutPlane];
+renderer.domElement.id = "sceneViewport";
 document.body.appendChild(renderer.domElement);
 const labels = new CSS2DRenderer();
 labels.domElement.style.position = "absolute";
@@ -1554,33 +1577,109 @@ photoButton.onclick = () => photoInput.click();
 // follows the job and links to the room once it is built.
 const videoStatus = document.getElementById("videoStatus");
 const videoInput = document.getElementById("videoInput");
-if (data.uploads) document.getElementById("videoSection").style.display = "";
-document.getElementById("videoButton").onclick = () => videoInput.click();
-async function followVideo(job) {
-  const answer = await (await fetch(scoped(`/api/video/${job}`))).json();
-  if (answer.state === "ready") {
-    videoStatus.innerHTML = "";
-    const link = document.createElement("a");
-    link.href = `?scene=${encodeURIComponent(answer.room)}&lang=${language}`;
-    link.textContent = t("videoReady");
-    videoStatus.append(link);
-    return;
-  }
-  if (answer.state !== "running") {
-    videoStatus.textContent = t("videoFailed") + " " + (answer.log ?? []).slice(-1).join("");
-    return;
-  }
-  videoStatus.textContent = t("videoBuilding") + "\n" + (answer.log ?? []).slice(-2).join("\n");
-  setTimeout(() => followVideo(job), 10000);
+let videoJob = null;
+let videoTimer = null;
+let videoMaxBytes = Infinity;
+const videoButton = document.getElementById("videoButton");
+const videoJobKey = "pivot.video.job";
+function setWorkspaceTab(uploadOpen) {
+  document.body.classList.toggle("upload-tab", uploadOpen);
+  document.getElementById("sceneTab").setAttribute("aria-selected", String(!uploadOpen));
+  document.getElementById("uploadTab").setAttribute("aria-selected", String(uploadOpen));
 }
+document.getElementById("sceneTab").onclick = () => setWorkspaceTab(false);
+document.getElementById("uploadTab").onclick = () => setWorkspaceTab(true);
+document.getElementById("workspaceTabs").onkeydown = event => {
+  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+  event.preventDefault();
+  const upload = event.key === "End" || (event.key !== "Home" && event.target.id === "sceneTab");
+  setWorkspaceTab(upload);
+  document.getElementById(upload ? "uploadTab" : "sceneTab").focus();
+};
+function rememberVideo(job) {
+  videoJob = job;
+  try { if (job) localStorage.setItem(videoJobKey, job); else localStorage.removeItem(videoJobKey); }
+  catch (_) { /* Private browsing may disable storage; the active page still works. */ }
+}
+function deleteVideoButton(job) {
+  const button = document.createElement("button");
+  button.textContent = t("videoDelete");
+  button.onclick = async () => {
+    if (!confirm(t("videoDeleteConfirm"))) return;
+    try {
+      const response = await fetch(scoped(`/api/video/${job}`), { method: "DELETE" });
+      if (!response.ok) throw new Error(t("videoFailed"));
+      clearTimeout(videoTimer);
+      rememberVideo(null);
+      videoButton.disabled = false;
+      if (new URLSearchParams(location.search).get("scene") === job) { window.location.href = `?lang=${language}`; return; }
+      videoStatus.textContent = t("videoDeleted");
+    } catch (error) { videoStatus.textContent = `${t("error")}: ${error.message}`; }
+  };
+  return button;
+}
+async function followVideo(job) {
+  if (job !== videoJob) return;
+  try {
+    const response = await fetch(scoped(`/api/video/${job}`));
+    const answer = await response.json();
+    if (job !== videoJob) return;
+    if (!response.ok) {
+      rememberVideo(null);
+      videoButton.disabled = false;
+      videoStatus.textContent = t("videoFailed") + " " + (answer.error ?? "");
+      return;
+    }
+    videoStatus.textContent = "";
+    if (answer.state === "ready") {
+      videoButton.disabled = false;
+      const link = document.createElement("a");
+      link.href = `?scene=${encodeURIComponent(answer.room)}&lang=${language}`;
+      link.textContent = t("videoReady");
+      videoStatus.append(link, document.createElement("br"), deleteVideoButton(job));
+      return;
+    }
+    if (answer.state !== "running") {
+      videoButton.disabled = false;
+      videoStatus.textContent = t("videoFailed") + " " + (answer.log ?? []).slice(-1).join("");
+      videoStatus.append(deleteVideoButton(job));
+      return;
+    }
+    videoButton.disabled = true;
+    videoStatus.textContent = t("videoBuilding") + "\n" + (answer.log ?? []).slice(-2).join("\n");
+    videoStatus.append(deleteVideoButton(job));
+  } catch (_) {
+    videoStatus.textContent = t("videoReconnecting");
+  }
+  videoTimer = setTimeout(() => followVideo(job), 10000);
+}
+if (data.uploads) {
+  document.getElementById("videoSection").style.display = "";
+  document.getElementById("videoPolicy").textContent = t("videoLocalPolicy");
+  fetch(scoped("/api/video/config")).then(response => response.json()).then(info => {
+    videoMaxBytes = info.max_bytes;
+    document.getElementById("videoPolicy").textContent = info.cloud ? t("videoCloudPolicy", {
+      mb: Math.floor(info.max_bytes / 1000000), seconds: info.max_seconds,
+      hours: info.retention_hours }) : t("videoLocalPolicy");
+  }).catch(() => {});
+  try { videoJob = localStorage.getItem(videoJobKey); } catch (_) {}
+  if (videoJob) followVideo(videoJob);
+} else {
+  videoButton.disabled = true;
+  videoStatus.textContent = t("videoUnavailable");
+}
+videoButton.onclick = () => videoInput.click();
 videoInput.onchange = async () => {
   const file = videoInput.files[0];
   if (!file) return;
+  if (file.size > videoMaxBytes) { videoStatus.textContent = t("videoTooLarge"); return; }
   videoStatus.textContent = t("videoSending");
   try {
     const answer = await (await fetch(scoped("/api/video"), { method: "POST", body: file,
-      headers: { "X-Filename": file.name } })).json();
+      headers: { "X-Filename": encodeURIComponent(file.name) } })).json();
     if (answer.error) { videoStatus.textContent = answer.error; return; }
+    clearTimeout(videoTimer);
+    rememberVideo(answer.job);
     followVideo(answer.job);
   } catch (error) {
     videoStatus.textContent = `${t("error")}: ${error.message}`;
@@ -1625,6 +1724,8 @@ function tourSteps() {
   // A finger, not a mouse: the bubbles say "tap" and "pinch".
   const touch = coarse.matches;
   const steps = [{ text: touch ? "tour1Touch" : "tour1" },
+                 { text: "tourScene", target: "sceneTab", header: true },
+                 { text: "tourUpload", target: "uploadTab", header: true },
                  { text: "tour2", target: "panel", side: "left", sheet: "panel" }];
   if (data.interactive) {
     steps.push({ text: touch ? "tour3Touch" : "tour3", target: "controls", side: "right", sheet: "move" },
@@ -1638,6 +1739,7 @@ function tourSteps() {
   return steps;
 }
 function showTour(index = 0) {
+  setWorkspaceTab(false);
   const steps = tourSteps();
   document.querySelectorAll(".tour-focus, .tour-raise")
     .forEach(node => node.classList.remove("tour-focus", "tour-raise"));
@@ -1685,6 +1787,12 @@ function showTour(index = 0) {
   const target = document.getElementById(step.target);
   target.classList.add("tour-focus");
   target.closest(".panel").classList.add("tour-raise");
+  if (step.header) {
+    const box = target.getBoundingClientRect();
+    bubble.style.left = `${Math.max(16, Math.min(box.left, window.innerWidth - bubble.offsetWidth - 16))}px`;
+    bubble.style.top = `${box.bottom + 20}px`;
+    return;
+  }
   if (phone.matches) {
     // The drawer fills the bottom of the screen: the bubble goes above it.
     bubble.style.left = "16px";

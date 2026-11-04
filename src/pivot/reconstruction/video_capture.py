@@ -175,6 +175,8 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
     if (args.out / "iphone" / "pose_intrinsic_imu.json").exists():
         print(f"already reconstructed: {args.out}")
+        if not (args.out / "video.mp4").exists():
+            capture_video(args.out)
         return
     shutil.rmtree(args.out / "iphone", ignore_errors=True)
     reconstruct(args.video, args.out, args.frames, args.model)

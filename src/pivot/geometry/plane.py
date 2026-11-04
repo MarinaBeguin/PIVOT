@@ -69,6 +69,8 @@ def fit_plane_ransac(
     iterations: int = 500,
     rng: np.random.Generator | None = None,
     allowed: BoolArray | None = None,
+    normal_hint: FloatArray | None = None,
+    max_tilt_deg: float = 15.0,
 ) -> tuple[Plane, BoolArray]:
     """Robustly fits a plane with RANSAC, then refines it on its inliers.
 
@@ -79,12 +81,14 @@ def fit_plane_ransac(
         rng: Random generator, for reproducibility.
         allowed: Optional (N,) mask of points that may be sampled as hypotheses.
             Inliers are still counted over all points.
+        normal_hint: Optional unit direction restricting candidate plane normals.
+        max_tilt_deg: Maximum unsigned normal angle from the hint, in degrees.
 
     Returns:
         A tuple ``(plane, inliers)`` with the refined plane and its (N,) inlier mask.
 
     Raises:
-        ValueError: If fewer than three candidate points are available.
+        ValueError: If fewer than three candidate points or no valid plane exists.
     """
     rng = rng if rng is not None else np.random.default_rng(0)
     candidates = np.flatnonzero(allowed) if allowed is not None else np.arange(len(points))
@@ -99,10 +103,15 @@ def fit_plane_ransac(
         if norm < 1e-12:
             continue
         normal /= norm
+        if normal_hint is not None and abs(float(normal @ normal_hint)) < np.cos(
+                np.radians(max_tilt_deg)):
+            continue
         inliers = np.abs(points @ normal - normal @ sample[0]) < threshold
         if inliers.sum() > best_inliers.sum():
             best_inliers = inliers
 
+    if best_inliers.sum() < 3:
+        raise ValueError("No plane found within the requested orientation constraints.")
     plane = fit_plane_lstsq(points[best_inliers])
     inliers = np.abs(plane.signed_distance(points)) < threshold
     return plane, inliers
