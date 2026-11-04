@@ -956,6 +956,7 @@ async function sendChat() {
   input.value = "";
   chatLine("user", message);
   const pending = chatLine("agent", t("thinking"));
+  pending.dataset.pending = "true";
   // A request may take a minute: say what the agent is checking meanwhile, and let the
   // visitor stop it.
   const watch = setInterval(() => showProgress(pending), 1500);
@@ -966,10 +967,12 @@ async function sendChat() {
     const answer = await (await fetch(scoped("/api/chat"), {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ message, language }) })).json();
+    delete pending.dataset.pending;
     clearInterval(watch);
     stopButton.style.display = "none";
     if (answer.error) { pending.textContent = answer.error; return; }
-    pending.textContent = answer.stopped ? t("stopped") : answer.answer;
+    pending.textContent = answer.stopped ? t("stopped")
+      : (answer.answer || "").trim() || t("chatNoAnswer");
     speak(pending.textContent);
     if (answer.steps.length) chatLine("tools", t("checkedCount", { n: answer.steps.length }));
     clearSelection();
@@ -980,7 +983,11 @@ async function sendChat() {
       }
     });
     applyObjects(answer.objects);
+    if (!answer.stopped) chatLine("agent", t(answer.finished ? "chatDone" : "chatIncomplete"));
+  } catch {
+    pending.textContent = t("chatFailed");
   } finally {
+    delete pending.dataset.pending;
     clearInterval(watch);
     stopButton.style.display = "none";
     busy = false;
@@ -1004,7 +1011,8 @@ const PROGRESS = { list_objects: "progressLook", find_objects: "progressLook",
 async function showProgress(line) {
   let steps;
   try { steps = (await (await fetch(scoped("/api/progress"))).json()).steps; } catch { return; }
-  if (!busy || !steps || !steps.length || !line.isConnected) return;
+  if (!busy || line.dataset.pending !== "true" || !steps || !steps.length
+      || !line.isConnected) return;
   const last = steps[steps.length - 1];
   const obj = views.get(last.object_id)?.obj;
   const key = obj || !["progressPath", "progressRoom", "progressSpot", "progressWay"].includes(PROGRESS[last.tool])

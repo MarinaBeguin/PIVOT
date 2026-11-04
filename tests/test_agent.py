@@ -177,10 +177,12 @@ def test_a_stopped_request_keeps_its_moves_and_answers_every_call() -> None:
     agent = Agent(session, MetaConfig(api_key="test"), client=model)  # type: ignore[arg-type]
     asked: list[str] = []
     run = agent.ask("Move them.", on_step=lambda tool, arguments: asked.append(tool),
-                    should_stop=lambda: len(session.motions) >= 1)
-    assert run.stopped and not run.finished and run.answer == ""
+                    should_stop=lambda: len(agent.session.motions) >= 1)
+    assert run.stopped and not run.finished and run.answer.strip()
+    assert "no new" in run.answer
     assert asked == ["move_object"] and [s.tool for s in run.steps] == ["move_object"]
-    assert len(session.motions) == 1  # The first move stays; the second never ran.
+    assert not session.motions  # The unfinished plan is not applied.
+    assert session.scene[3].box.center[0] == 1.5
     results = [m for m in agent.messages if m["role"] == "tool"]
     assert len(results) == 2 and "Stopped" in results[1]["content"]
     assert len(model.script) == 1  # No model call after the stop.
