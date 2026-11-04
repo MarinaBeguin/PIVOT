@@ -13,9 +13,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 from collections.abc import Callable
 from functools import partial
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -25,11 +26,13 @@ from pivot.agent.tools import TOOLS, Session, call_tool
 from pivot.meta.client import DEFAULT_BASE_URL, MetaConfig, Usage, call_with_retry
 from pivot.meta.products import look_up_size
 from pivot.planning.motion import Stopped, stoppable
+from pivot.planning.way import way_is_clear
 from pivot.scene.graph import Scene
 
 # Sent when a request uses up its steps, so that the user still gets an answer.
 _WRAP_UP = ("You have reached the step limit for this request. Without calling any tool, "
-            "summarize in plain words what you did (all verified) and what remains to do.")
+            "explain what remains unconfirmed. All provisional edits for this request will be "
+            "discarded: never say they were applied or tell the user to undo them.")
 
 SYSTEM_PROMPT = """You are PIVOT, an assistant that rearranges a real room reconstructed in 3D.
 Coordinates are meters in a z-up frame; the floor is z = 0. Yaw is in degrees.
@@ -46,7 +49,9 @@ Rules:
   whose result you already have: these searches take seconds each.
 - If a request is infeasible, say why with the measured numbers, then look for the closest
   feasible alternative (another spot, another orientation, moving another object first).
-  Propose it, but do not move anything to an alternative the user has not agreed to.
+  If the user asked for a move and movable objects obstruct that same requested route,
+  use make_room_and_move to plan and verify the full rearrangement before execution.
+  Propose a different destination, but do not move to it without the user's agreement.
 - A result with goal_adjusted is NOT the pose asked for: before moving, check that the
   adjusted pose still does what the user asked (where, how far in, which side). If it does
   not, the request is infeasible: say so and propose the adjusted pose, without moving.
@@ -58,8 +63,8 @@ Rules:
   chair taller than the space under the table top), it does not fit under: say so with the
   heights, and offer to push it against the table instead.
 - A warning "stands in front of the door" means the passage is blocked; beside the door,
-  against the same wall, raises no warning. A warning does not make a pose infeasible: if
-  the user asked for that exact spot, do it and mention the warning. When several poses do
+  against the same wall, raises no warning. Do not execute a move that newly blocks a door.
+  When several poses do
   what the user asked (along a wall, behind a desk), take one that keeps doors and windows
   clear; if none does, say so before anything else in your answer.
 - Only call move_object when the user asked to move something, and remove_object when they
@@ -100,6 +105,28 @@ names or statuses ("plan_motion", "invalid_goal", "min_clearance"): say what the
 leaves 7 cm").
 - Answer in the user's language, briefly."""
 
+SYSTEM_PROMPT += """
+- Tool edits are prepared provisionally. A stopped or budget-exhausted request discards
+  its new edits. A cancelled-plan note overrides earlier provisional move results.
+- Describe moves using left, right, forward and back, never compass directions. Anchor
+  these directions to an identified object or explicitly to the top-down moving plan;
+  do not assume the user faces the same way as the camera.
+- On failure, name only blockers and gaps actually measured by tools. If the tool did
+  not measure a bottleneck, say the search did not find a route; do not invent a gap.
+- Every wheelchair-access claim must be supported by a successful make_way result in the
+  current request, after the last furniture move. Individual collision-free furniture
+  moves do not prove wheelchair access. Do not ask whether to verify after claiming success.
+- A request asking for the easiest table or route is advisory: compare options without
+  moving furniture, and ask for agreement before rearranging for a proposed table.
+- Keep usable furniture groups together: do not leave pupils' chairs without their table
+  or park furniture in the requested passage. If the tools cannot confirm these constraints,
+  explain the limitation instead of announcing success.
+- Before sending the final answer, remove all compass directions (including door/wall
+  descriptions). Use object identifiers and explicit top-down plan anchors instead.
+- If wheelchair access to the requested table fails, check other suitable tables and
+  propose a verified alternative. Do not move furniture for another table without consent.
+"""
+
 
 # Languages of the viewer, by code, as the agent is told to answer in them.
 LANGUAGE_NAMES = {"en": "English", "fr": "French", "de": "German", "es": "Spanish",
@@ -123,7 +150,7 @@ class Step:
 
 # The result of a tool call the user stopped, and the note left in the conversation.
 _STOPPED = json.dumps({"error": "Stopped by the user."})
-_STOPPED_NOTE = "(The user stopped this request; the moves done so far stay.)"
+_STOPPED_NOTE = "(The user stopped this request; its provisional plan was cancelled.)"
 
 
 @dataclass
@@ -165,6 +192,7 @@ class Agent:
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": SYSTEM_PROMPT}]
         self.usage = Usage()
         self._language: str | None = None
+        self._request_lock = threading.Lock()
 
     def _complete(self, tools: bool = True) -> Any:
         """Requests the next model message.
@@ -193,6 +221,153 @@ class Agent:
     def ask(self, request: str, language: str | None = None,
             on_step: Callable[[str, dict[str, Any]], None] | None = None,
             should_stop: Callable[[], bool] | None = None) -> AgentRun:
+        """Serializes requests and prepares their edits before application.
+
+        Args:
+            request: User request.
+            language: User interface language.
+            on_step: Progress callback.
+            should_stop: Cancellation callback.
+
+        Returns:
+            Answer and recorded planning steps.
+
+        Raises:
+            RuntimeError: If another request is already being prepared.
+        """
+        if self._request_lock.locked():
+            raise RuntimeError("Another request is already being prepared.")
+        with self._request_lock:
+            return self._prepare(request, language, on_step, should_stop)
+
+    def _prepare(self, request: str, language: str | None = None,
+                 on_step: Callable[[str, dict[str, Any]], None] | None = None,
+                 should_stop: Callable[[], bool] | None = None) -> AgentRun:
+        """Prepares a request in an isolated session before applying its changes.
+
+        Args:
+            request: User request.
+            language: User interface language.
+            on_step: Progress callback for planned tool calls.
+            should_stop: Cancellation callback.
+
+        Returns:
+            Recorded answer and steps. Stopped or budget-exhausted plans do
+            not modify the original session.
+        """
+        original = self.session
+        before_scene, spent_before = original.scene, original.spent
+        message_count, previous_language = len(self.messages), self._language
+        trial = replace(original, history=list(original.history), motions=list(original.motions),
+                        motion_counts=list(original.motion_counts))
+        self.session = trial
+        try:
+            run = self._ask(request, language, on_step, should_stop)
+        except Exception:
+            self.messages = self.messages[:message_count]
+            self._language = previous_language
+            raise
+        finally:
+            self.session = original
+            # Bill actual external tool work even if its geometric plan is cancelled.
+            original.spent += trial.spent - spent_before
+        if trial.scene is not before_scene and not self._edits_succeeded(run):
+            run.finished = False
+        if run.finished and not run.stopped and not self._access_goals_hold(run, trial.scene):
+            run.finished = False
+            run.answer = self._fallback(run)
+            self.messages.append({"role": "assistant", "content": run.answer})
+        if run.finished and not run.stopped and original.scene is before_scene:
+            self._apply_trial(original, trial)
+        elif trial.scene is not original.scene:
+            run.finished = False
+            for step in run.steps:
+                step.result["applied"] = False
+                if step.result.get("moved"):
+                    step.result["moved"] = False
+            notes = {
+                "fr": "Le plan n'est pas terminé : aucun nouveau déplacement n'a été appliqué.",
+                "de": "Der Plan ist unvollständig: Es wurden keine neuen Bewegungen angewendet.",
+                "es": "El plan está incompleto: no se ha aplicado ningún movimiento nuevo.",
+                "it": "Il piano è incompleto: nessun nuovo spostamento è stato applicato.",
+                "zh": "计划尚未完成：未执行任何新的移动。",
+            }
+            run.answer = notes.get(self._language or "", "The plan is incomplete: no new "
+                                   "moves have been applied.")
+            measured = self._measured_failure(run)
+            if measured:
+                run.answer += " " + measured
+            self.messages.append({"role": "assistant", "content": run.answer})
+        return run
+
+    @staticmethod
+    def _access_goals_hold(run: AgentRun, scene: Scene) -> bool:
+        """Rechecks successful access goals after every proposed edit is complete.
+
+        Args:
+            run: Tool results claiming that access was made possible.
+            scene: Final proposed scene.
+
+        Returns:
+            True if all claimed access goals still hold in the final layout.
+        """
+        for step in run.steps:
+            if step.tool != "make_way" or not step.result.get("success"):
+                continue
+            target = int(step.arguments["object_id"])
+            if target not in scene.objects or not way_is_clear(
+                    scene, target, float(step.arguments.get("width_m", .9)),
+                    (float(step.arguments.get("spot_depth_m", 1.)),
+                     float(step.arguments.get("spot_width_m", .8)))):
+                return False
+        return True
+
+    @staticmethod
+    def _edits_succeeded(run: AgentRun) -> bool:
+        """Checks the last mutating tool outcome before applying a multi-step plan.
+
+        Args:
+            run: Recorded provisional tool outcomes.
+
+        Returns:
+            False if the last attempted edit failed; a later successful retry
+            can supersede an earlier failure. This does not judge natural-language goals.
+        """
+        flags = {"move_object": "moved", "move_to_room": "moved",
+                 "make_room_and_move": "moved", "make_way": "success",
+                 "add_object": "added", "remove_object": "removed",
+                 "resize_object": "resized", "undo": "undone"}
+        for step in reversed(run.steps):
+            if step.tool in flags:
+                return bool(step.result.get(flags[step.tool]))
+        return True
+
+    @staticmethod
+    def _apply_trial(original: Session, trial: Session) -> None:
+        """Applies a completed plan, grouping its new edits into one undo action.
+
+        Args:
+            original: Unchanged live session.
+            trial: Prepared session, possibly including undo requests.
+        """
+        extends_history = (len(trial.history) > len(original.history)
+                           and all(left is right for left, right in
+                                   zip(original.history, trial.history)))
+        extends_motions = (len(trial.motions) >= len(original.motions)
+                           and all(left is right for left, right in
+                                   zip(original.motions, trial.motions)))
+        if trial.scene is not original.scene and extends_history and extends_motions:
+            original.record(trial.scene, trial.motions[len(original.motions):])
+        else:
+            # Undo/reset requests deliberately replace existing history.
+            original.scene = trial.scene
+            original.history = trial.history
+            original.motions = trial.motions
+            original.motion_counts = trial.motion_counts
+
+    def _ask(self, request: str, language: str | None = None,
+             on_step: Callable[[str, dict[str, Any]], None] | None = None,
+             should_stop: Callable[[], bool] | None = None) -> AgentRun:
         """Handles one user request, keeping the conversation history.
 
         Args:
@@ -228,15 +403,78 @@ class Agent:
                     **({"tool_calls": [c.model_dump() for c in calls]} if calls else {}),
                 })
                 if not calls:
-                    run.answer = message.content or ""
+                    run.answer = (message.content or "").strip()
+                    if not run.answer:
+                        run.finished = False
+                        run.answer = self._wrap_up().strip() or self._fallback(run)
+                        self.messages.append({"role": "assistant", "content": run.answer})
                     return run
                 for call in calls:
                     self._run_call(call, run, on_step, stop)
                 if run.stopped:
                     return self._stopped(run)
         run.finished = False
-        run.answer = self._wrap_up()
+        run.answer = self._wrap_up().strip() or self._fallback(run)
         return run
+
+    def _fallback(self, run: AgentRun) -> str:
+        """Reports an incomplete request without inventing its geometric outcome.
+
+        Args:
+            run: Recorded tool results of the incomplete request.
+
+        Returns:
+            Localized summary stating that provisional changes were not applied.
+        """
+        texts = {
+            "fr": ("Je n'ai pas pu confirmer la demande complète. Aucun nouveau changement "
+                   "n'a été appliqué pour cette demande ; la scène reste dans son état précédent."),
+            "de": ("Ich konnte die gesamte Anfrage nicht bestätigen. Für diese Anfrage wurde "
+                   "keine neue Änderung angewendet; die Szene bleibt im vorherigen Zustand."),
+            "es": ("No he podido confirmar toda la solicitud. No se ha aplicado ningún cambio "
+                   "nuevo para esta solicitud; la escena conserva su estado anterior."),
+            "it": ("Non ho potuto confermare l'intera richiesta. Non è stata applicata alcuna "
+                   "nuova modifica per questa richiesta; la scena resta nello stato precedente."),
+            "zh": "未能确认整个请求已完成。本次请求未应用任何新更改；场景保持原先状态。",
+        }
+        text = texts.get(self._language or "", "I could not confirm the complete request. "
+                         "No new changes were applied for this request; the scene remains "
+                         "in its previous state.")
+        measured = self._measured_failure(run)
+        return text + (" " + measured if measured else "")
+
+    def _measured_failure(self, run: AgentRun) -> str:
+        """Words a measured candidate gap without claiming all routes are impossible.
+
+        Args:
+            run: Tool results, possibly including candidate bottlenecks.
+
+        Returns:
+            Localized measured gap, or an empty string when no measurement exists.
+        """
+        templates = {
+            "en": ("On the attempted passage between {names}: "
+                   "{gap} cm available, {need} cm required."),
+            "fr": ("Sur le passage essayé entre {names} : "
+                   "{gap} cm disponibles, {need} cm nécessaires."),
+            "de": ("Am versuchten Durchgang zwischen {names}: "
+                   "{gap} cm frei, {need} cm erforderlich."),
+            "es": ("En el paso intentado entre {names}: "
+                   "{gap} cm disponibles, se necesitan {need} cm."),
+            "it": ("Nel passaggio provato tra {names}: "
+                   "{gap} cm disponibili, {need} cm necessari."),
+            "zh": "尝试的通道位于 {names} 之间：可用宽度 {gap} 厘米，需要 {need} 厘米。",
+        }
+        for step in reversed(run.steps):
+            gaps = step.result.get("candidate_bottlenecks", [])
+            if not gaps:
+                continue
+            gap = gaps[0]
+            names = " / ".join(f"{obj['label']} (#{obj['id']})" for obj in gap["objects"])
+            return templates.get(self._language or "", templates["en"]).format(
+                names=names, gap=round(100 * gap["gap_m"]),
+                need=round(100 * gap["required_width_m"]))
+        return ""
 
     def _run_call(self, call: Any, run: AgentRun,
                   on_step: Callable[[str, dict[str, Any]], None] | None,
@@ -276,9 +514,10 @@ class Agent:
             run: The request so far.
 
         Returns:
-            It, marked stopped, with no answer (the page says it was stopped).
+            It, marked stopped, with a local summary of recorded moves.
         """
         run.stopped, run.finished = True, False
+        run.answer = self._fallback(run)
         self.messages.append({"role": "assistant", "content": _STOPPED_NOTE})
         return run
 
@@ -293,9 +532,9 @@ class Agent:
             message = self._complete(tools=False)
         except Exception:  # pylint: disable=broad-exception-caught
             # The summary is a courtesy: without it, the user still gets the moves done.
-            return "I ran out of steps before finishing; the moves done so far were verified."
+            return ""
         self.messages.append({"role": "assistant", "content": message.content or ""})
-        return message.content or "I ran out of steps before finishing."
+        return (message.content or "").strip()
 
 
 def main(argv: list[str] | None = None) -> None:
