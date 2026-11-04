@@ -5,6 +5,9 @@ Expected layout (ScanNet++ v2)::
     <scene>/iphone/rgb/frame_XXXXXX.jpg     1920 x 1440 RGB frames
     <scene>/iphone/depth/frame_XXXXXX.png   256 x 192 uint16 depth, millimeters
     <scene>/iphone/pose_intrinsic_imu.json  per-frame intrinsics and poses
+
+A capture rebuilt from any phone video (:mod:`pivot.reconstruction.video_capture`)
+is written in the same layout, with its own image and depth sizes.
 """
 
 import json
@@ -49,9 +52,26 @@ def load_scannetpp_iphone(scene_dir: Path, stride: int = 10,
     ])
     return Reconstruction(
         image_paths=[iphone / "rgb" / f"{name}.jpg" for name in names],
-        image_size=_IMAGE_SIZE,
+        image_size=_image_size(iphone / "rgb" / f"{names[0]}.jpg"),
         intrinsics=np.array([metadata[name]["intrinsic"] for name in names], dtype=np.float64),
         cam_to_world=np.array([metadata[name]["aligned_pose"] for name in names],
                               dtype=np.float64),
         depths=depths,
     )
+
+
+def _image_size(first: Path) -> tuple[int, int]:
+    """Reads the size of a capture's frames.
+
+    Args:
+        first: Its first frame.
+
+    Returns:
+        ``(width, height)``; ScanNet++'s if the frame cannot be read.
+    """
+    try:
+        with Image.open(first) as image:
+            width, height = image.size
+            return width, height
+    except OSError:
+        return _IMAGE_SIZE

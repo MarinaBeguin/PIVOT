@@ -321,6 +321,8 @@ build_scene() {
 }
 
 serve() {
+  # PIVOT_NO_SERVE=1: the scene is served elsewhere (a room built for a running server).
+  [ "${PIVOT_NO_SERVE:-0}" != 1 ] || return 0
   echo "== Serving http://127.0.0.1:$PORT (from your laptop: ssh -L $PORT:127.0.0.1:$PORT <host>)"
   cd "$PIVOT_SRC"
   "$PYTHON" -m pivot.server --scene-dir "$SCENE" --port "$PORT" --chat

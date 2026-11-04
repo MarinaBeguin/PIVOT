@@ -1,5 +1,9 @@
 """Tests of the HTTP server of the interactive viewer."""
 
+import sys
+import time
+from pathlib import Path
+
 import numpy as np
 from fastapi.testclient import TestClient
 
@@ -9,6 +13,7 @@ from pivot.meta.client import MetaConfig
 from pivot.scene.examples import office_scene, sofa_scene
 from pivot.server.app import MAX_AUDIO_BYTES, Room, create_app
 from pivot.server.limits import Budget, Meter, SpendLedger
+from pivot.server.uploads import VideoUploads
 from pivot.viz.pointcloud import ColorArray
 from test_agent import ScriptedModel, message, tool_call
 
@@ -190,3 +195,40 @@ def test_each_room_has_its_page_and_its_own_session() -> None:
     app.post("/api/reset?scene=two-rooms")
     chair = next(o for o in app.get("/api/objects?scene=office").json() if o["id"] == 3)
     assert chair["box"]["center"][:2] == [3.0, 1.0]  # Resetting a room leaves the others.
+
+
+# Stands for scripts/run_video.sh: builds a scene (the example office) from a video.
+FAKE_PIPELINE = """
+import sys
+from pathlib import Path
+import numpy as np
+from pivot.scene.examples import office_scene
+scene = Path(sys.argv[2]) / "room" / "scene"
+scene.mkdir(parents=True)
+office_scene().save(scene / "scene.json")
+np.savez(scene / "cloud.npz", points=np.zeros((5, 3), np.float32), colors=np.zeros((5, 3), np.uint8))
+print("built")
+"""
+
+
+def test_a_room_is_built_from_a_visitors_video(tmp_path: Path) -> None:
+    points = np.zeros((3, 3), dtype=np.float32)
+    colors = np.zeros((3, 3), dtype=np.uint8)
+    uploads = VideoUploads(tmp_path, [sys.executable, "-c", FAKE_PIPELINE])
+    app = TestClient(create_app(office(points, colors), uploads=uploads))
+    assert '"uploads": true' in app.get("/").text
+    job = app.post("/api/video", content=b"video bytes", headers={"X-Filename": "hall.MOV"}).json()
+    assert (tmp_path / job["job"] / "video.mov").read_bytes() == b"video bytes"
+    for _ in range(100):
+        status = app.get(f"/api/video/{job['job']}").json()
+        if status["state"] != "running":
+            break
+        time.sleep(0.1)
+    assert status["state"] == "ready" and status["log"] == ["built"]
+    room = app.get(f"/?scene={status['room']}")
+    assert room.status_code == 200 and "Your video" in room.text
+    assert len(app.get(f"/api/objects?scene={status['room']}").json()) == len(office_scene())
+    # A public demo takes videos from its owner only.
+    meter = Meter(SpendLedger(Budget()), "salt", proxy_hops=0, owner_key="secret")
+    public = TestClient(create_app(office(points, colors), meter=meter, uploads=uploads))
+    assert public.post("/api/video", content=b"x").status_code == 403
