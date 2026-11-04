@@ -205,8 +205,45 @@ def _steps_svg(steps: list[Step], frame: _Frame) -> list[str]:
     return parts
 
 
+def _access_routes_svg(routes: list[dict[str, Any]], frame: _Frame) -> list[str]:
+    """Draws verified person routes independently of furniture motion arrows.
+
+    Args:
+        routes: Final-layout routes and spots.
+        frame: World-to-plan mapping.
+
+    Returns:
+        Blue SVG paths, place footprints and labels.
+    """
+    parts = []
+    for route in routes:
+        if "spot" in route:
+            bounds = route["spot"]
+            corners = np.array([[-.5,-.5],[.5,-.5],[.5,.5],[-.5,.5]]) * bounds["size_m"]
+            yaw = np.deg2rad(bounds["yaw_deg"])
+            rotation = np.array([[np.cos(yaw),-np.sin(yaw)],
+                                 [np.sin(yaw),np.cos(yaw)]])
+            corners = corners @ rotation.T + bounds["center_xy"]
+            parts.append(f'<polygon class="access-spot" points="{frame.polygon(corners)}" '
+                         'fill="#007aaf" fill-opacity="0.12" stroke="#007aaf" '
+                         'stroke-width="2"/>')
+        points = [frame.point(np.asarray(xy)) for xy in route["path_xy"]]
+        coordinates = " ".join(f"{x:.1f},{y:.1f}" for x, y in points)
+        parts.append(f'<polyline class="access-route" points="{coordinates}" fill="none" '
+                     'stroke="#007aaf" stroke-width="4"/>')
+        for x, y in (points[0], points[-1]):
+            parts.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="5" '
+                         'fill="#fff" stroke="#007aaf" stroke-width="2"/>')
+        x, y = points[-1]
+        parts.append(f'<text x="{x+8:.1f}" y="{y-8:.1f}" fill="#007aaf" '
+                     'stroke="#fff" stroke-width="2" paint-order="stroke">'
+                     f'#{int(route["object_id"])} · {100*route["passage_width_m"]:.0f} cm</text>')
+    return parts
+
+
 def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None,
-             added: frozenset[int] = frozenset()) -> str:
+             added: frozenset[int] = frozenset(),
+             access_routes: list[dict[str, Any]] | None = None) -> str:
     """Draws the room from above after the moves.
 
     Args:
@@ -214,6 +251,7 @@ def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None,
         steps: The steps, to draw their starts, ends and arrows.
         access: Reachable floor to shade, if known.
         added: Ids of the objects brought into the room, drawn apart.
+        access_routes: Routes revalidated in the final layout, distinct from moves.
 
     Returns:
         An ``<svg>`` element.
@@ -231,6 +269,7 @@ def plan_svg(final: Scene, steps: list[Step], access: AccessReport | None,
     parts += _rooms_svg(final, frame)
     parts += _objects_svg(final, frame, {s.object_id for s in steps}, added)
     parts += _steps_svg(steps, frame)
+    parts += _access_routes_svg(access_routes or [], frame)
     parts.append("</svg>")
     return "".join(parts)
 
@@ -311,6 +350,9 @@ _TRANSLATE = """
     + (s.two ? t("planTwoPeople", { n: s.two }) : "") + (s.added ? t("planBroughtIn", { n: s.added }) : "")
     + (s.removed ? t("planTakenOut", { n: s.removed }) : "") + ". " + t("planLegend"));
   set("plan-save", t("planSave"));
+  set("plan-routes", (d.routes || []).map(route => t("accessRoute", {
+    door: route.from_door, id: route.object_id,
+    width: Math.round(100 * route.passage_width_m) })).join(" · "));
   const a = d.access;
   let access = t("planAccessUnknown");
   if (a.known) {
@@ -404,7 +446,8 @@ def _plan_body(steps: list[Step], removed: list[tuple[str, int]], added: list[Sc
 def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
                       save_pdf: bool = False,
                       removed: list[tuple[str, int]] | None = None,
-                      added: list[SceneObject] | None = None, language: str = "en") -> str:
+                      added: list[SceneObject] | None = None, language: str = "en",
+                      access_routes: list[dict[str, Any]] | None = None) -> str:
     """Builds the printable instructions page, in the visitor's language.
 
     The page is written in English, with its facts as data; in another
@@ -419,6 +462,7 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
         removed: Objects taken out of the room, as ``(label, id)``: they go first.
         added: Objects brought into the room: they come after, where the plan shows them.
         language: Code of the visitor's language.
+        access_routes: Verified routes to show in blue independently of furniture moves.
 
     Returns:
         A standalone HTML page.
@@ -432,7 +476,8 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
             "summary": {"moves": len(steps), "two": sum(step.people > 1 for step in steps),
                         "added": len(added),
                         "removed": len(removed)},
-            "access": access, "steps": [step.to_dict() for step in steps],
+            "access": access, "routes": access_routes or [],
+            "steps": [step.to_dict() for step in steps],
             "removed": [[label, i] for label, i in removed],
             "added": [[o.label, o.object_id, sizes[o.object_id]] for o in added]}
     return (f"<!doctype html><html lang='en'><head><meta charset='utf-8'>"
@@ -445,7 +490,8 @@ def instructions_page(final: Scene, steps: list[Step], title: str = "PIVOT",
             f"object; shaded green: floor a wheelchair can reach.</div>"
             f"<button id='plan-save' onclick='print()'>Save as PDF or print</button>"
             f"{plan_svg(final, steps, check_access(final, WHEELCHAIR_WIDTH),
-                        frozenset(o.object_id for o in added))}"
+                        frozenset(o.object_id for o in added), access_routes)}"
+            f"<p id='plan-routes' style='color:#007aaf'></p>"
             f"<p class='access{'' if accessible else ' no'}' id='plan-access'>"
             f"{html.escape(access_text)}</p>"
             f"{body}"

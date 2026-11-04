@@ -395,6 +395,71 @@ def _kind(objects: list[SceneObject], widest: float) -> str:
     return "hallway" if widest < HALLWAY_WIDTH else "room"
 
 
+def _merge_without_wall_evidence(labels: IntArray, clearance: FloatArray,
+                                 scene: Scene) -> IntArray:
+    """Rejects floor necks that have neither a detected door nor flanking wall evidence.
+
+    Legacy scenes without a wall layer retain the topology-only result. New
+    captures retain observed upper-wall cells, so a furniture aisle alone is
+    insufficient evidence of two separate rooms.
+
+    Args:
+        labels: Provisional room regions.
+        clearance: Distance to the floor boundary.
+        scene: Scene with optional observed wall evidence.
+
+    Returns:
+        Regions after unsupported boundaries are merged.
+    """
+    floor = scene.floor
+    assert floor is not None
+    if floor.walls is None or not floor.walls.any():
+        return labels
+    result = labels.copy()
+    doors = [o for o in scene.objects.values() if o.label.lower() == "door"]
+    for (first, second), (half_width, cell) in _widest_border_cells(labels, clearance).items():
+        center = _cell_center(floor, cell)
+        if any(np.linalg.norm(door.box.center[:2] - center) <= 1.0 for door in doors):
+            continue
+        if not _wall_flanks(floor, labels, (first, second), half_width, cell):
+            old_first = int(result[labels == first][0])
+            old_second = int(result[labels == second][0])
+            result[result == old_second] = old_first
+    return _merge_small(result, floor)
+
+
+def _wall_flanks(floor: FloorMap, labels: IntArray, pair: tuple[int, int],
+                  half_width: float, cell: tuple[int, int]) -> bool:
+    """Looks for observed wall stretches on both sides of a candidate opening.
+
+    Args:
+        floor: Map with observed wall cells.
+        labels: Provisional room regions.
+        pair: Rooms meeting at this opening.
+        half_width: Half of the candidate passage width, in meters.
+        cell: Candidate opening center as row and column.
+
+    Returns:
+        True if both sides have upper-wall support.
+    """
+    assert floor.walls is not None
+    means = [np.array(ndimage.center_of_mass(labels == index)) for index in pair]
+    direction = means[1] - means[0]
+    if np.linalg.norm(direction) < 1e-9:
+        return False
+    tangent = np.array([-direction[1], direction[0]]) / np.linalg.norm(direction)
+    observed = ndimage.maximum_filter(floor.walls, size=5)
+    for sign in (-1, 1):
+        offsets = np.arange(half_width + 0.15, half_width + 1.0, floor.resolution)
+        cells = np.rint(np.array(cell) + sign * offsets[:, None]
+                        * tangent / floor.resolution).astype(int)
+        inside = ((cells >= 0).all(axis=1) & (cells[:, 0] < floor.shape[0])
+                  & (cells[:, 1] < floor.shape[1]))
+        if not inside.any() or observed[cells[inside, 0], cells[inside, 1]].mean() < 0.4:
+            return False
+    return True
+
+
 def find_rooms(scene: Scene) -> RoomMap | None:
     """Splits the floor of a scene into named rooms.
 
@@ -409,6 +474,7 @@ def find_rooms(scene: Scene) -> RoomMap | None:
         return None
     labels, clearance = _label_rooms(floor)
     labels = _merge_small(labels, floor)
+    labels = _merge_without_wall_evidence(labels, clearance, scene)
     object_rooms = _object_rooms(scene, labels)
     kinds = {}
     for room_id in range(1, int(labels.max()) + 1):

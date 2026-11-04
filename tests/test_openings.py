@@ -150,7 +150,8 @@ def test_doors_too_tall_too_wide_or_on_a_window_are_dropped() -> None:
                SceneObject(3, "door", box((2.65, 3.0, 1.0), (0.9, 0.1, 2.0)), movable=False),
                SceneObject(4, "door", box((4.0, 1.45, 1.5), (0.1, 0.9, 3.0)), movable=False)]
     cleaned = clean_openings(objects, {1: door, 2: window, 3: on_window, 4: tall}, WALLS)
-    assert [o.object_id for o in cleaned] == [1, 2]
+    assert [o.object_id for o in cleaned if o.label != "door leaf"] == [1, 2]
+    assert len([o for o in cleaned if o.label == "door leaf"]) == 1
 
 
 def test_pieces_wider_than_a_door_together_stay_apart() -> None:
@@ -161,8 +162,9 @@ def test_pieces_wider_than_a_door_together_stay_apart() -> None:
     doors = [SceneObject(1, "door", box((0.7, 3.0, 1.0), (1.0, 0.1, 2.0)), movable=False),
              SceneObject(2, "door", box((1.75, 3.0, 1.0), (1.0, 0.1, 2.0)), movable=False)]
     cleaned = clean_openings(doors, {1: left, 2: right}, WALLS)
-    assert [o.object_id for o in cleaned] == [1]
+    assert [o.object_id for o in cleaned if o.label != "door leaf"] == [1]
     assert cleaned[0].box.size[0] == pytest.approx(1.0, abs=0.06)
+    assert all(not o.movable for o in cleaned if o.label == "door leaf")
 
 
 @pytest.mark.parametrize("label", ["board", "blind", "blinds"])

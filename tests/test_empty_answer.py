@@ -108,7 +108,7 @@ def test_access_goal_is_rechecked_after_later_provisional_moves():
         tool_call("a", "make_way", object_id=2),
         tool_call("b", "move_object", object_id=3, x=4.6, y=1.5),
     ]), message("The table is accessible")])
-    session = Session(room(chair(3, 3., 1.5)))
+    session = Session(room(*[chair(3+i, 3., y) for i, y in enumerate((.3, 1.1, 1.9, 2.7))]))
     original = session.scene
     agent = Agent(session, MetaConfig(api_key="test"), client=model)
     run = agent.ask("Make the table accessible")

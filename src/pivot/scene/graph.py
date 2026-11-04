@@ -19,9 +19,11 @@ from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import polygon_penetration
 from pivot.geometry.floor import FloorMap
 from pivot.geometry.shape import VoxelShape
+from pivot.geometry.types import FloatArray
 
 # Labels of objects that are part of the building and can never be moved.
-STRUCTURAL_LABELS = frozenset({"wall", "floor", "ceiling", "door", "window", "radiator", "column"})
+STRUCTURAL_LABELS = frozenset({"wall", "floor", "ceiling", "door", "door leaf", "window",
+                               "radiator", "column"})
 
 # Openings in walls: not obstacles inside the room (their volume is mostly what
 # the camera saw through them), but places that should be kept clear.
@@ -201,6 +203,20 @@ class Scene:
 
     def __len__(self) -> int:
         return len(self.objects)
+
+    def with_wall_evidence(self, points: FloatArray) -> Scene:
+        """Adds missing partition evidence to legacy scenes without changing their objects.
+
+        Args:
+            points: Observed scene cloud, including upper walls.
+
+        Returns:
+            The same scene when evidence is already stored, otherwise a copy
+            with the same wall-height band used by new scene builds.
+        """
+        if self.floor is None or self.floor.walls is not None:
+            return self
+        return dataclasses.replace(self, floor=self.floor.with_walls(points,low=1.4,high=2.2))
 
     def find(self, query: str) -> list[SceneObject]:
         """Finds objects whose label contains a query, case-insensitively.

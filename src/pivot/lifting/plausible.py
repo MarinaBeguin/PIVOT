@@ -58,11 +58,13 @@ MIN_SIZE = {
 }
 
 
-def plausible(obj: SceneObject) -> bool:
+def plausible(obj: SceneObject, upper_margin: float = 0.0) -> bool:
     """Tests whether an object is neither bigger nor smaller than real objects of its label.
 
     Args:
         obj: The object.
+        upper_margin: Temporary allowance above maximum dimensions, in meters,
+            for a candidate awaiting camera refinement. Zero for final acceptance.
 
     Returns:
         True if its box is within the limits of its label (those it has).
@@ -71,20 +73,22 @@ def plausible(obj: SceneObject) -> bool:
     size = (long_side, short_side, float(obj.box.size[2]))
     largest = MAX_SIZE.get(obj.label.lower())
     smallest = MIN_SIZE.get(obj.label.lower())
-    return bool((largest is None or all(s <= m for s, m in zip(size, largest)))
+    return bool((largest is None or all(s <= m + upper_margin for s, m in zip(size, largest)))
                 and (smallest is None or all(s >= m for s, m in zip(size, smallest))))
 
 
-def drop_implausible(objects: list[SceneObject]) -> list[SceneObject]:
+def drop_implausible(objects: list[SceneObject], upper_margin: float = 0.0
+                     ) -> list[SceneObject]:
     """Drops objects bigger or smaller than any real object of their label.
 
     Args:
         objects: Objects with settled boxes.
+        upper_margin: Temporary excess allowed before refinement, in meters.
 
     Returns:
         The plausible objects.
     """
-    return [o for o in objects if plausible(o)]
+    return [o for o in objects if plausible(o, upper_margin)]
 
 
 # Cells this many cells apart are in one piece.
