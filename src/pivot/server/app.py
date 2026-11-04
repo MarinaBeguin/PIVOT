@@ -548,9 +548,10 @@ def create_app(rooms: list[Room],
         """
         room_id = request.state.room.room_id
         if "gzip" not in request.headers.get("accept-encoding", ""):
-            return HTMLResponse(pages[room_id])
+            return HTMLResponse(pages[room_id],headers={"Cache-Control":"no-store"})
         return Response(compressed[room_id], media_type="text/html; charset=utf-8",
-                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding"})
+                        headers={"Content-Encoding": "gzip", "Vary": "Accept-Encoding",
+                                 "Cache-Control":"no-store"})
 
     @app.get("/instructions", response_class=HTMLResponse)
     def moving_plan(request: Request) -> HTMLResponse:
@@ -573,6 +574,7 @@ def create_app(rooms: list[Room],
                                  request.state.room.title,
                                  save_pdf=request.query_params.get("pdf") == "1",
                                  removed=removed, added=added,
+                                 access_routes=session.access_routes(),
                                  language=request.query_params.get("lang", "en"))
         # Always the visitor's latest moves, never a copy kept by the browser.
         return HTMLResponse(page, headers={"Cache-Control": "no-store"})
@@ -630,6 +632,19 @@ def create_app(rooms: list[Room],
             return JSONResponse({"error": reason, "screened": True})
         return _chat_reply(request.state.visitor, agent_factory, body.get("message", ""),
                            meter, key(request), body.get("language"))
+
+    @app.get("/api/access-routes")
+    def access_routes(request: Request) -> JSONResponse:
+        """Returns wheelchair routes verified in this visitor's current layout.
+
+        Args:
+            request: Request with its isolated visitor session.
+
+        Returns:
+            Current verified routes, without caching stale geometry.
+        """
+        return JSONResponse(request.state.visitor.session.access_routes(),
+                            headers={"Cache-Control": "no-store"})
 
     @app.get("/api/progress")
     def progress(request: Request) -> JSONResponse:

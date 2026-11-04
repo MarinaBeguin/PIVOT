@@ -166,6 +166,7 @@
   </div>
   <div class="grid two" id="extraButtons">
     <button id="plan" data-i18n="planButton" data-i18n-title="planTitle">Moving plan (PDF)</button>
+    <div id="accessRouteLegend" class="muted" aria-live="polite"></div>
     <button id="photoButton" style="display:none" data-i18n="addPhoto" data-i18n-title="addPhotoTitle">Add from a photo</button>
   </div>
   <input type="file" id="photoInput" accept="image/*" style="display:none">
@@ -535,6 +536,57 @@ pathLine.renderOrder = 10;
 pathLine.visible = false;
 scene.add(ghost, pathLine);
 
+// Verified person routes persist separately from yellow furniture-motion previews.
+const accessLayer = new THREE.Group();
+scene.add(accessLayer);
+const accessMaterial = new LineMaterial({ color: 0x36caff, linewidth: 5,
+  depthTest: false, transparent: true });
+const accessDotMaterial = new THREE.MeshBasicMaterial({ color: 0x36caff,
+  depthTest: false, transparent: true });
+let accessRefresh = 0;
+function drawAccessRoutes(routes) {
+  for (const child of [...accessLayer.children]) {
+    child.geometry.dispose();
+    accessLayer.remove(child);
+  }
+  function line(points) {
+    const geometry = new LineGeometry();
+    geometry.setPositions(points.flatMap(([x,y]) => [x,y,0.04]));
+    const drawing = new Line2(geometry, accessMaterial);
+    drawing.computeLineDistances(); drawing.renderOrder = 12;
+    accessLayer.add(drawing);
+  }
+  for (const route of routes) {
+    const path = route.path_xy;
+    if (!path?.length) continue;
+    line(path);
+    for (const [x,y] of [path[0], path[path.length-1]]) {
+      const dot = new THREE.Mesh(new THREE.CircleGeometry(0.09, 20), accessDotMaterial);
+      dot.position.set(x,y,0.05); dot.renderOrder = 13; accessLayer.add(dot);
+    }
+    const spot = route.spot;
+    if (spot) {
+      const [depth,width] = spot.size_m, [x,y] = spot.center_xy;
+      const yaw = spot.yaw_deg*Math.PI/180, c=Math.cos(yaw), s=Math.sin(yaw);
+      const corners = [[-1,-1],[1,-1],[1,1],[-1,1],[-1,-1]].map(([a,b]) =>
+        [x+c*a*depth/2-s*b*width/2, y+s*a*depth/2+c*b*width/2]);
+      line(corners);
+      line([[x,y],[x-c*depth/2,y-s*depth/2]]);
+    }
+  }
+  document.getElementById("accessRouteLegend").textContent = routes.map(route =>
+    t("accessRoute", { door:route.from_door, id:route.object_id,
+      width:Math.round(100*route.passage_width_m) })).join(" · ");
+}
+async function refreshAccessRoutes() {
+  const version = ++accessRefresh;
+  drawAccessRoutes([]);
+  try {
+    const routes = await (await fetch(scoped("/api/access-routes"))).json();
+    if (version === accessRefresh) drawAccessRoutes(routes);
+  } catch { /* No verified route is displayed when its check cannot be fetched. */ }
+}
+
 function select(id) {
   selectedId = id;
   views.forEach((v, key) => {
@@ -860,6 +912,7 @@ function applyObjects(objects) {
     views.get(obj.id).z = obj.box.center[2];
     setPose(obj.id, obj.box.center[0], obj.box.center[1], obj.box.yaw);
   }
+  if (data.interactive) refreshAccessRoutes();
 }
 
 // Squeezes an object along its long side: a rug rolls up (factor < 1) or out (1).
@@ -1678,6 +1731,7 @@ function resize() {
   renderer.setSize(w, h);
   labels.setSize(w, h);
   pathMaterial.resolution.set(w, h);
+  accessMaterial.resolution.set(w, h);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
 }

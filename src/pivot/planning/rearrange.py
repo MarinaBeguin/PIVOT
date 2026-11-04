@@ -14,6 +14,7 @@ motion.
 from __future__ import annotations
 
 import dataclasses
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -24,10 +25,14 @@ from pivot.geometry.box import OrientedBox
 from pivot.geometry.collision import box_distance, box_distance_lower_bound, box_penetration
 from pivot.geometry.types import BoolArray, FloatArray
 from pivot.planning.cspace import ConfigurationSpace
+from pivot.planning.access import preserves_doors
 from pivot.planning.handling import can_be_carried
 from pivot.planning.lift import carry_height, plan_carried_motion
+from pivot.planning.parking_motion import carry_between
+from pivot.planning.parking_pockets import parking_pockets
 from pivot.planning.motion import (
-    WEDGED, MotionOptions, MotionPlan, MotionStatus, densify, plan_motion, straight_motion,
+    WEDGED, MotionOptions, MotionPlan, MotionStatus, check_stop, densify, plan_motion,
+    straight_motion,
 )
 from pivot.planning.placement import ConflictKind, check_placement
 from pivot.planning.snap import nearest_feasible_pose, ranked_free_poses
@@ -231,17 +236,51 @@ def _push_group(scene: Scene, object_id: int, sweep: list[OrientedBox],
             members = _pushed_along(scene, object_id, shift)
             if members is None or len(members) == 1:
                 continue
-            boxes = {m: scene[m].box.moved(scene[m].box.center[:2] + shift) for m in members}
-            if not all(_clear_of(box, sweep) for box in boxes.values()):
-                continue
-            rest = {i: o for i, o in scene.objects.items() if i not in members}
-            plans = [straight_motion(dataclasses.replace(scene, objects={**rest, m: scene[m]}),
-                                     m, boxes[m], options) for m in members]
-            if all(plan is not None for plan in plans):
-                return sorted((plan for plan in plans if plan is not None),
-                              key=lambda plan: -float(np.dot(
-                                  scene[plan.object_id].box.center[:2], shift)))
+            verified = _verified_group(scene, members, shift, sweep, options)
+            if verified is not None:
+                return verified
     return None
+
+
+def _verified_group(scene: Scene, members: list[int], shift: FloatArray,
+                    sweep: list[OrientedBox], options: MotionOptions) -> list[MotionPlan] | None:
+    """Checks a group translation in its actual sequential execution order.
+
+    Args:
+        scene: Complete scene, including the other group members.
+        members: Furniture and chairs translated by the same amount.
+        shift: Translation in meters.
+        sweep: Corridor that must remain free.
+        options: Motion validation settings.
+
+    Returns:
+        Fully verified sequential slides, or None if any intermediate move fails.
+    """
+    boxes = {member: scene[member].box.moved(scene[member].box.center[:2] + shift)
+             for member in members}
+    if not all(_clear_of(bounds, sweep) for bounds in boxes.values()):
+        return None
+    ordered = sorted(members, key=lambda member: -float(np.dot(
+        scene[member].box.center[:2], shift)))
+    current = scene
+    verified = []
+    for member in ordered:
+        checked = straight_motion(current, member, boxes[member], options)
+        if checked is None:
+            attempted = plan_motion(current, member, boxes[member], dataclasses.replace(
+                options, max_expansions=min(5000, options.max_expansions)))
+            if attempted.status is MotionStatus.SUCCESS:
+                checked = attempted
+        if checked is None and can_be_carried(current[member]):
+            carried = plan_carried_motion(current, member, boxes[member],
+                                          carry_height(current, member), options)
+            if carried.status is MotionStatus.SUCCESS:
+                checked = carried
+        if checked is None:
+            return None
+        verified.append(checked)
+        current = current.moved(member, checked.waypoints[-1])
+    return verified
 
 
 @dataclass(frozen=True)
@@ -296,7 +335,8 @@ def _push_straight(scene: Scene, object_id: int, sweep: list[OrientedBox],
 
 def _move_to_free_spot(scene: Scene, object_id: int, sweep: list[OrientedBox],
                        options: MotionOptions, lattice: _Lattice,
-                       max_tries: int) -> MotionPlan | None:
+                       max_tries: int, prefer_edges: bool = False,
+                       accept: Callable[[Scene], bool] | None = None) -> MotionPlan | None:
     """Moves a blocker to the nearest free spot by any path, carried if it must.
 
     Args:
@@ -306,45 +346,124 @@ def _move_to_free_spot(scene: Scene, object_id: int, sweep: list[OrientedBox],
         options: Motion parameters.
         lattice: Its free configurations.
         max_tries: Maximum number of spots tried.
+        prefer_edges: Require peripheral parking for light obstacles cleared for people.
+        accept: Optional final-layout circulation predicate.
 
     Returns:
         The motion, or None.
     """
-    current = scene[object_id].box
     # A spot the lattice connects to the blocker is found fast, or not at all.
-    budget = dataclasses.replace(options, max_expansions=min(options.max_expansions,
+    options = dataclasses.replace(options, max_expansions=min(options.max_expansions,
                                                              _PARK_EXPANSIONS),
                                  refine_yaw_bins=options.yaw_bins)
     # What cannot slide out (a chair boxed in between tables) can be lifted out, if light.
-    lift = max(carry_height(scene, object_id), current.z_min) \
+    lift = max(carry_height(scene, object_id), scene[object_id].box.z_min) \
         if can_be_carried(scene[object_id]) else None
     wedged = False
-    tries = 0
     # Short moves first.
-    for center, yaw in ranked_free_poses(lattice.space, current.center[:2], current.yaw):
-        box = current.moved(center, yaw)
-        if not lattice.worth_trying(box) or not _clear_of(box, sweep):
+    for center, yaw in _parking_poses(scene, object_id, lattice, prefer_edges, accept, sweep):
+        box = scene[object_id].box.moved(center, yaw)
+        if not _clear_of(box, sweep) or (lift is None and not lattice.worth_trying(box)):
             continue
-        if not wedged:
-            plan = plan_motion(scene, object_id, box, budget)
+        if not wedged and lattice.worth_trying(box):
+            plan = plan_motion(scene, object_id, box, options)
             if plan.status is MotionStatus.SUCCESS:
                 return plan
             # No room to slide from where it stands: no other spot will do better.
             wedged = plan.message == f"The start {WEDGED}"
         if lift is not None:
-            plan = plan_carried_motion(scene, object_id, box, lift, budget)
+            plan = plan_carried_motion(scene, object_id, box, lift, options)
             if plan.status is MotionStatus.SUCCESS:
                 return plan
+            if plan.status is MotionStatus.INVALID_START:
+                departure = _pull_out_and_carry(scene, object_id, box, lift, options, lattice)
+                if departure is not None:
+                    return departure
+            if prefer_edges and plan.status in (MotionStatus.INVALID_START,
+                                                MotionStatus.INVALID_GOAL):
+                departure = carry_between(scene,object_id,box,lift,options,lattice.space)
+                if departure is not None:
+                    return departure
         elif wedged:
             return None
-        tries += 1
-        if tries >= max_tries:
+        max_tries -= 1
+        if max_tries <= 0:
+            break
+    return None
+
+
+def _parking_poses(scene: Scene, object_id: int, lattice: _Lattice, edges: bool,
+                   accept: Callable[[Scene], bool] | None = None,
+                   sweep: list[OrientedBox] | None = None
+                   ) -> Iterator[tuple[FloatArray, float]]:
+    """Filters peripheral destinations before expensive motion verification."""
+    current = scene[object_id].box
+    boundary = parking_pockets(scene,object_id) if edges else None
+    rejected: list[FloatArray] = []
+    for center,yaw in ranked_free_poses(lattice.space,current.center[:2],current.yaw):
+        check_stop()
+        if boundary is not None and not boundary.accepts(current.moved(center,yaw)):
+            continue
+        if accept is not None:
+            if sweep is not None and not _clear_of(current.moved(center,yaw),sweep):
+                continue
+            if any(np.linalg.norm(center-other)<.3 for other in rejected):
+                continue
+            if not accept(scene.moved(object_id,current.moved(center,yaw))):
+                rejected.append(center)
+                continue
+        yield center,yaw
+
+
+def _pull_out_and_carry(scene: Scene, object_id: int, goal: OrientedBox, height: float,
+                        options: MotionOptions, lattice: _Lattice) -> MotionPlan | None:
+    """Tries up to four nearby departures before lifting an object from under furniture.
+
+    Args:
+        scene: Complete scene before the move.
+        object_id: Light object to extract.
+        goal: Free parking pose.
+        height: Bottom height during carrying.
+        options: Bounded motion settings.
+        lattice: Free on-floor poses connected to the initial pose.
+
+    Returns:
+        Joined verified slide, lift, carry and lowering, or no verified solution.
+    """
+    start = scene[object_id].box
+    tried = 0
+    for center, yaw in ranked_free_poses(lattice.space, start.center[:2], start.yaw):
+        if np.linalg.norm(center - start.center[:2]) > 1.:
+            break
+        departure = start.moved(center, yaw)
+        if not lattice.worth_trying(departure):
+            continue
+        lifted = plan_carried_motion(scene.moved(object_id, departure), object_id,
+                                     goal, height, dataclasses.replace(
+                                         options, max_expansions=min(5000, options.max_expansions)))
+        if lifted.status is MotionStatus.INVALID_START:
+            continue
+        tried += 1
+        if lifted.status is MotionStatus.SUCCESS:
+            slide = plan_motion(scene, object_id, departure, dataclasses.replace(
+                options, max_expansions=min(5000, options.max_expansions)))
+            if slide.status is MotionStatus.SUCCESS:
+                return dataclasses.replace(lifted,
+                    waypoints=slide.waypoints + lifted.waypoints[1:],
+                    expansions=slide.expansions + lifted.expansions,
+                    min_clearance=(min(slide.min_clearance, lifted.min_clearance)
+                                   if slide.min_clearance is not None
+                                   and lifted.min_clearance is not None else None),
+                    message="Verified departure, lift, carry and lowering.")
+        if tried == 4:
             break
     return None
 
 
 def park_aside(scene: Scene, object_id: int, sweep: list[OrientedBox],
-               options: MotionOptions, max_tries: int = 3) -> list[MotionPlan] | None:
+               options: MotionOptions, max_tries: int = 3,
+               prefer_edges: bool = False,
+               accept: Callable[[Scene], bool] | None = None) -> list[MotionPlan] | None:
     """Moves a blocker to a nearby spot outside a sweep.
 
     First, as a person would, it is pushed straight aside, shortest push
@@ -359,22 +478,51 @@ def park_aside(scene: Scene, object_id: int, sweep: list[OrientedBox],
         sweep: Densified poses of the object whose way must be cleared.
         options: Motion parameters.
         max_tries: Maximum number of free spots tried after the pushes.
+        prefer_edges: Park light obstacles near boundaries rather than in open circulation.
+        accept: Optional predicate preserving circulation in the candidate layout.
 
     Returns:
         The motions (the blocker's, and those of the chairs pushed with it),
         or None if it cannot be parked.
     """
+    # Prefer a coherent group. A single small adjustment is still allowed if
+    # it preserves the nearby seats' relation to their table.
+    if not can_be_carried(scene[object_id]) and len(_group(scene, object_id)) > 1:
+        grouped = _push_group(scene, object_id, sweep, options)
+        if grouped is not None and _accepted(scene, grouped, accept):
+            return grouped
     space = ConfigurationSpace.build(scene, object_id, clearance=options.clearance)
     lattice = _Lattice(space, _reachable(space, scene[object_id].box))
-    pushed = _push_straight(scene, object_id, sweep, options, lattice)
-    if pushed is not None:
+    pushed = (None if prefer_edges and can_be_carried(scene[object_id])
+              else _push_straight(scene, object_id, sweep, options, lattice))
+    if pushed is not None and _keeps_group(scene, object_id, pushed) \
+            and _accepted(scene, [pushed], accept):
         return [pushed]
-    if not can_be_carried(scene[object_id]):
+    if not can_be_carried(scene[object_id]) and len(_group(scene, object_id)) == 1:
         group = _push_group(scene, object_id, sweep, options)
-        if group is not None:
+        if group is not None and _accepted(scene, group, accept):
             return group
-    moved = _move_to_free_spot(scene, object_id, sweep, options, lattice, max_tries)
-    return None if moved is None else [moved]
+    moved = _move_to_free_spot(scene, object_id, sweep, options, lattice, max_tries,
+                               prefer_edges and can_be_carried(scene[object_id]), accept)
+    return None if moved is None or not _keeps_group(scene, object_id, moved) else [moved]
+
+
+def _accepted(scene: Scene, plans: list[MotionPlan], accept: Callable[[Scene], bool] | None
+               ) -> bool:
+    """Checks a complete candidate group layout before choosing its parking plan."""
+    if accept is None:
+        return True
+    for plan in plans:
+        scene = scene.moved(plan.object_id,plan.waypoints[-1])
+    return accept(scene)
+
+
+def _keeps_group(scene: Scene, object_id: int, plan: MotionPlan) -> bool:
+    """Allows small desk adjustments without abandoning its adjacent light furniture."""
+    if can_be_carried(scene[object_id]):
+        return True
+    return all(box_distance(plan.waypoints[-1], scene[member].box) <= 2 * _GROUP_GAP
+               for member in _group(scene, object_id)[1:])
 
 
 def _put_back(scene: Scene, object_id: int, original: OrientedBox, options: MotionOptions,
@@ -396,6 +544,38 @@ def _put_back(scene: Scene, object_id: int, original: OrientedBox, options: Moti
         return None
     plan = plan_motion(scene, object_id, goal, options)
     return plan if plan.status is MotionStatus.SUCCESS else None
+
+
+def restore_group(scene: Scene, initial: Scene, object_id: int, sweep: list[OrientedBox],
+                  options: MotionOptions, accept: Callable[[Scene],bool] | None = None
+                  ) -> list[MotionPlan] | None:
+    """Tries a partial return of a displaced furniture group without closing its passage.
+
+    Args:
+        scene: Current proposed layout.
+        initial: Layout before rearrangement.
+        object_id: Heavy furniture whose adjacent chairs moved with it.
+        sweep: Reserved route and destination that must stay clear.
+        options: Motion search settings.
+        accept: Optional final-layout circulation predicate.
+
+    Returns:
+        Verified sequential return motions, or no safe improvement. Independently
+        parked chairs are never dragged back to their original aisle.
+    """
+    if can_be_carried(initial[object_id]):
+        return None
+    members = _group(initial,object_id)
+    shift = initial[object_id].box.center[:2]-scene[object_id].box.center[:2]
+    if np.linalg.norm(shift)<.2 or any(
+            not np.allclose(initial[i].box.center[:2]-scene[i].box.center[:2],shift,atol=.03)
+            or abs(np.sin(initial[i].box.yaw-scene[i].box.yaw))>.03 for i in members):
+        return None
+    for fraction in (1.,.75,.5,.25):
+        returned = _verified_group(scene,members,shift*fraction,sweep,options)
+        if returned is not None and _accepted(scene,returned,accept):
+            return returned
+    return None
 
 
 def plan_rearrangement(scene: Scene, object_id: int, goal: OrientedBox,
@@ -473,6 +653,12 @@ def _finish(initial: Scene, scene: Scene, object_id: int, goal: OrientedBox,
         if returns:
             names = ", ".join(f"the {scene[s.object_id].label} (#{s.object_id})" for s in returns)
             message += f" Then {names} put back as close as possible to its place."
+    final_scene = initial
+    for step in steps:
+        final_scene = final_scene.moved(step.object_id, step.waypoints[-1])
+    if not preserves_doors(initial, final_scene):
+        return Rearrangement(False, message="The proposed rearrangement would obstruct a "
+                             "door; no moves executed.", blockers=blockers)
     return Rearrangement(True, steps, message, blockers)
 
 

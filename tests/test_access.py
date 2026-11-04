@@ -42,12 +42,14 @@ def test_furniture_half_in_front_of_a_door_is_named_even_if_one_squeezes_past() 
     clear = json.loads(call_tool(session, "check_access", "{}"))
     assert clear["doors_clear"] and not clear["doors_with_furniture_in_front"]
     stool = SceneObject(4, "stool", box((1.4, 0.5, 0.25), (0.4, 0.4, 0.5)))
-    session.record(Scene.from_objects([*session.scene.objects.values(), stool],
-                                      session.scene.floor), [])
+    # This obstruction was present in the capture, not introduced by an edit:
+    # Session.record now rejects newly obstructing a door.
+    session = Session(Scene.from_objects([*session.scene.objects.values(), stool],
+                                         session.scene.floor))
     result = json.loads(call_tool(session, "check_access", "{}"))
     assert not result["blocked_doors"] and not result["doors_clear"]
     assert result["doors_with_furniture_in_front"] == [{"id": 1, "label": "door", "in_front": [
-        {"id": 4, "label": "stool", "there_before_any_move": False}]}]
+        {"id": 4, "label": "stool", "there_before_any_move": True}]}]
 
 
 def test_the_agent_tool_reports_passages() -> None:

@@ -281,6 +281,8 @@ class FloorMap:
             "resolution": self.resolution,
             "floor": [np.flatnonzero(row).tolist() for row in self.floor],
             "cols": self.shape[1],
+            **({"walls": [np.flatnonzero(row).tolist() for row in self.walls]}
+               if self.walls is not None else {}),
         }
 
     @classmethod
@@ -296,4 +298,10 @@ class FloorMap:
         floor = np.zeros((len(data["floor"]), int(data["cols"])), dtype=bool)
         for row, cols in enumerate(data["floor"]):
             floor[row, cols] = True
-        return cls(np.asarray(data["origin"], dtype=np.float64), float(data["resolution"]), floor)
+        walls = None
+        if "walls" in data:
+            walls = np.zeros_like(floor)
+            for row, cols in enumerate(data["walls"]):
+                walls[row, cols] = True
+        return cls(np.asarray(data["origin"], dtype=np.float64), float(data["resolution"]),
+                   floor, walls)

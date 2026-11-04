@@ -517,19 +517,89 @@ def clean_openings(objects: list[SceneObject], points: dict[int, FloatArray], wa
     snapped.sort(key=lambda o: -len(points[o.object_id]))
     kept: list[SceneObject] = []
     for item in snapped:
+        # A wall mistaken for a door must not absorb a genuine smaller door
+        # and make both disappear at the final plausibility check.
+        if item.label.lower() == "door" and (item.box.size[0] > MAX_DOOR_WIDTH
+                                             or item.box.size[2] > MAX_DOOR_HEIGHT):
+            continue
         match = next((k for k in kept if _same_object(k, item, min_overlap)), None)
         if match is None:
             kept.append(item)
             continue
         union = _union_along(match.box, item.box)
         # Pieces too wide together for one door are two openings: the surer one stays.
-        if match.label.lower() != "door" or union.size[0] <= MAX_DOOR_WIDTH:
+        if match.label.lower() != "door" or (union.size[0] <= MAX_DOOR_WIDTH
+                                              and union.size[2] <= MAX_DOOR_HEIGHT):
             kept[kept.index(match)] = replace(match, box=union)
+        elif _walkable_door(item.box,walls) and not _walkable_door(match.box,walls):
+            kept[kept.index(match)] = item
     kept = [o for o in kept if (not is_opening(o) or o.box.size[0] >= min_width)
             and (o.label.lower() != "door"
                  or (_walkable_door(o.box, walls) and not _on_a_window(o, kept)))
             and walls.faces_floor(o.box)]
-    return others + sorted(kept, key=lambda o: o.object_id)
+    return others + sorted(kept, key=lambda o: o.object_id) + _door_leaves(objects, kept, points)
+
+
+def _door_leaves(objects: list[SceneObject], kept: list[SceneObject],
+                 points: dict[int, FloatArray] | None = None) -> list[SceneObject]:
+    """Keeps thin observed open panels as obstacles distinct from wall openings.
+
+    Args:
+        objects: Original observed objects, before snapping to walls.
+        kept: Surviving wall openings.
+        points: Observed clouds used to distinguish a solid panel from an empty frame.
+
+    Returns:
+        Fixed panels supported by a thin, door-sized observed box; none for
+        deep or ambiguous detections. No hinge angle is invented.
+    """
+    leaves: list[SceneObject] = []
+    next_id = max((o.object_id for o in objects), default=0) + 1
+    for original in objects:
+        if original.label.lower() != "door":
+            continue
+        opening = next((o for o in kept if o.object_id == original.object_id), None)
+        width, depth = sorted(original.box.size[:2], reverse=True)
+        panel_yaw = original.box.yaw + (math.pi / 2 if original.box.size[1]
+                                       > original.box.size[0] else 0.)
+        angle = abs(math.sin(panel_yaw - opening.box.yaw)) if opening is not None else 0.
+        if 0.5 <= width <= MAX_DOOR_WIDTH and 0.02 <= depth <= 0.15 \
+                and MIN_DOOR_HEIGHT <= original.box.size[2] <= MAX_DOOR_HEIGHT \
+                and -.2 <= original.box.z_min <= .3:
+            if opening is None and _on_a_window(original, kept):
+                continue
+            if points is not None:
+                if not _panel_supported(original, points.get(original.object_id)):
+                    continue
+            elif angle <= .25:
+                continue
+            if any(_same_opening(original.box, leaf.box, .5) for leaf in leaves):
+                continue
+            leaves.append(replace(original, object_id=next_id, label="door leaf",
+                                  movable=False, shape=None))
+            next_id += 1
+    return leaves
+
+
+def _panel_supported(obj: SceneObject, cloud: FloatArray | None) -> bool:
+    """Requires observed surface support across a panel, rather than just its frame.
+
+    Args:
+        obj: Thin candidate door panel before wall snapping.
+        cloud: Fused observed points belonging to that detection.
+
+    Returns:
+        True if at least half of the panel's 10 cm surface bins were observed.
+    """
+    if cloud is None or len(cloud) < 30:
+        return False
+    axes = [int(obj.box.size[1] > obj.box.size[0]), 2]
+    local = obj.box.to_local(cloud)
+    local = local[np.all(np.abs(local) <= .5 * obj.box.size + .03, axis=1)]
+    grid = np.floor((local[:, axes] + .5 * obj.box.size[axes]) / .1).astype(int)
+    counts = np.ceil(obj.box.size[axes] / .1).astype(int)
+    grid = grid[((grid >= 0) & (grid < counts)).all(axis=1)]
+    return len(np.unique(grid, axis=0)) >= .5 * int(np.prod(counts))
 
 
 def _union_along(a: OrientedBox, b: OrientedBox) -> OrientedBox:

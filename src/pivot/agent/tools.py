@@ -26,7 +26,9 @@ from pivot.geometry.collision import (
     box_distance, footprint_overlap, polygon_distance, polygon_penetration,
 )
 from pivot.meta.products import LookUp
-from pivot.planning.access import WALKING_WIDTH, check_access
+from pivot.planning.access import WALKING_WIDTH, check_access, preserves_doors
+from pivot.planning.access_options import suggest_places
+from pivot.planning.bottlenecks import route_gaps
 from pivot.planning.arrival import arrive, boxed, doors_passed, hang, with_new_object
 from pivot.planning.handling import can_be_carried, people_needed
 from pivot.planning.lift import carry_height, plan_carried_motion, resting_box
@@ -36,7 +38,7 @@ from pivot.planning.roll import ROLL_DIAMETER, plan_rolled_motion
 from pivot.planning.placement import check_placement, opening_warnings, propose_placements
 from pivot.planning.rearrange import plan_rearrangement
 from pivot.planning.snap import nearest_feasible_pose
-from pivot.planning.way import plan_way
+from pivot.planning.way import clear_way, plan_way
 from pivot.scene.graph import (
     WALL_MOUNTED_LABELS, Scene, SceneObject, carried_objects, is_flat, is_opening, is_wall_mounted,
     support_parents,
@@ -64,6 +66,7 @@ class Session:
         look_up: Looks a product's published size up on the web, if the
             Meta API is used (see :mod:`pivot.meta.products`).
         spent: Dollars spent by tools themselves (web searches), for billing.
+        access_goals: Confirmed targets and their passage, place and facing constraints.
     """
 
     scene: Scene
@@ -72,6 +75,23 @@ class Session:
     motion_counts: list[int] = field(default_factory=list)
     look_up: Callable[[str, str], LookUp] | None = None
     spent: float = 0.0
+    access_goals: dict[int, tuple[float, float, float, int | None]] = field(default_factory=dict)
+
+    def access_routes(self) -> list[JsonDict]:
+        """Returns only routes revalidated against the current scene.
+
+        Returns:
+            Serialized verified routes, excluding removed targets and stale proposals.
+        """
+        routes = []
+        for target, (width, depth, breadth, facing) in self.access_goals.items():
+            if target not in self.scene.objects or facing is not None \
+                    and facing not in self.scene.objects:
+                continue
+            way = clear_way(self.scene, target, width, (depth, breadth), facing)
+            if way.success:
+                routes.append({"object_id": target, **way.to_dict(self.scene, width)})
+        return routes
 
     def record(self, scene: Scene, motions: list[MotionPlan]) -> None:
         """Executes a verified move: keeps the current scene for ``undo``.
@@ -79,11 +99,24 @@ class Session:
         Args:
             scene: The scene after the move.
             motions: The motions that lead to it.
+
+        Raises:
+            ValueError: If the layout introduces a door obstruction or loses a confirmed route.
         """
+        if not preserves_doors(self.scene, scene):
+            raise ValueError("The proposed change would newly obstruct a door; nothing changed.")
+        for target, (width, depth, breadth, facing) in self.access_goals.items():
+            if target in scene.objects and (facing is None or facing in scene.objects) \
+                    and not clear_way(scene, target, width, (depth, breadth), facing).success:
+                raise ValueError("The proposed change would block a confirmed access route; "
+                                 "nothing changed.")
         self.history.append(self.scene)
         self.motion_counts.append(len(self.motions))
         self.scene = scene
         self.motions.extend(motions)
+        self.access_goals = {target: goal for target, goal in self.access_goals.items()
+                             if target in scene.objects and (goal[3] is None
+                                                             or goal[3] in scene.objects)}
 
 
 def _round(value: float, digits: int = 3) -> float:
@@ -498,6 +531,33 @@ def _route_notes(scene: Scene, plan: MotionPlan) -> JsonDict:
     return {"rooms_crossed": names, "doorways": [d.to_dict() for d in doorways]}
 
 
+def _failure_notes(scene: Scene, object_id: int, goal: OrientedBox,
+                    clearance: float, plan: MotionPlan) -> JsonDict:
+    """Measures candidate-route gaps after a failed motion search.
+
+    Args:
+        scene: Unchanged scene.
+        object_id: Object that could not be moved.
+        goal: Requested destination.
+        clearance: Requested obstacle margin in meters.
+        plan: Failed or successful motion result.
+
+    Returns:
+        Local gap measurements on the direct candidate, explicitly not a proof
+        that every possible route or orientation is blocked.
+    """
+    if plan.status is MotionStatus.SUCCESS:
+        return {}
+    start = scene[object_id].box.center[:2]
+    count = max(2, min(80, int(np.ceil(np.linalg.norm(goal.center[:2] - start) / .2)) + 1))
+    path = np.linspace(start, goal.center[:2], count)
+    width = float(min(scene[object_id].box.size[:2])) + 2 * clearance
+    return {"candidate_bottlenecks": route_gaps(scene, path, width, object_id),
+            "failure_interpretation": "The bounded search found no verified route. Candidate "
+            "gaps are local measurements of bounding footprints on the direct route, not "
+            "proof that every alternative is impossible."}
+
+
 def plan_path(session: Session, **arguments: Any) -> JsonDict:
     """Checks whether an object can be moved to a pose, and how.
 
@@ -513,7 +573,8 @@ def plan_path(session: Session, **arguments: Any) -> JsonDict:
         return _rehung(session, request)[1].to_dict()
     goal, notes = _goal(session, request)
     plan = _plan(session, request, goal)
-    return {**plan.to_dict(), **notes, **_route_notes(session.scene, plan)}
+    return {**plan.to_dict(), **notes, **_route_notes(session.scene, plan),
+            **_failure_notes(session.scene, request.object_id, goal, request.clearance_m, plan)}
 
 
 def _rehung(session: Session, request: MoveRequest) -> tuple[OrientedBox, MotionPlan]:
@@ -557,10 +618,17 @@ def move_object(session: Session, **arguments: Any) -> JsonDict:
         goal, notes = _goal(session, request)
         plan = _plan(session, request, goal)
     result: JsonDict = {"moved": plan.status is MotionStatus.SUCCESS, "plan": plan.to_dict(),
-                        **notes, **_route_notes(session.scene, plan)}
+                        **notes, **_route_notes(session.scene, plan),
+                        **_failure_notes(session.scene, request.object_id, goal,
+                                         request.clearance_m, plan)}
     if plan.status is MotionStatus.SUCCESS:
+        destination = session.scene.moved(request.object_id, goal)
+        if not preserves_doors(session.scene, destination):
+            result["moved"] = False
+            result["message"] = "This destination would newly obstruct a door; nothing moved."
+            return result
         result["carried_along"] = carried_objects(session.scene, request.object_id)
-        session.record(session.scene.moved(request.object_id, goal), [plan])
+        session.record(destination, [plan])
     return result
 
 
@@ -659,6 +727,9 @@ def _to_room(session: Session, object_id: int, room: str, clearance_m: float,
                                           math.degrees(spot.yaw), clearance_m, auto_carry=True),
                      goal)
         if plan.status is MotionStatus.SUCCESS:
+            if not preserves_doors(scene, scene.moved(object_id, goal)):
+                tried.append("The candidate destination would obstruct a door.")
+                continue
             result.update({"found": True, "moved": execute, "spot_xy": [
                 _round(v) for v in goal.center[:2]], "yaw_deg": _round(math.degrees(goal.yaw), 1),
                 "plan": plan.to_dict(), **_route_notes(scene, plan), **_warnings(session, goal)})
@@ -753,7 +824,8 @@ def make_room_and_move(session: Session, **arguments: Any) -> JsonDict:
 
 
 def make_way(session: Session, object_id: int, width_m: float = 0.9, spot_width_m: float = 0.8,
-             spot_depth_m: float = 1.0) -> JsonDict:
+             spot_depth_m: float = 1.0, execute: bool = True,
+             facing_object_id: int | None = None) -> JsonDict:
     """Clears a passage from a door to a free spot at an object, moving as few objects as possible.
 
     Args:
@@ -762,14 +834,27 @@ def make_way(session: Session, object_id: int, width_m: float = 0.9, spot_width_
         width_m: Width of the passage, in meters (0.9 for a wheelchair).
         spot_width_m: Width of the spot at the object, along its side.
         spot_depth_m: Depth of the spot, away from the object.
+        execute: Apply a verified plan; false keeps the scene unchanged.
+        facing_object_id: Optional reference for the seated orientation.
+
+    Raises:
+        ValueError: If a requested dimension is not positive.
 
     Returns:
         Whether the way is clear, the spot, the door, and each object moved
         aside with what moved along. One ``undo`` reverts all of them.
     """
     scene = session.scene
-    way = plan_way(scene, object_id, width_m, (spot_depth_m, spot_width_m))
-    result: JsonDict = {**way.to_dict(scene, width_m), "moved": bool(way.success and way.steps)}
+    if min(width_m, spot_width_m, spot_depth_m) <= 0:
+        raise ValueError("Passage and spot dimensions must be positive.")
+    way = plan_way(scene, object_id, width_m, (spot_depth_m, spot_width_m),
+                   facing_object_id=facing_object_id)
+    result: JsonDict = {**way.to_dict(scene, width_m),
+                        "moved": bool(execute and way.success and way.steps),
+                        "executed": bool(execute and way.success)}
+    if not way.success:
+        result.update(suggest_places(scene, object_id, width_m,
+                                     (spot_depth_m, spot_width_m), facing_object_id))
     if way.success and way.steps:
         steps = []
         for step in way.steps:
@@ -777,8 +862,41 @@ def make_way(session: Session, object_id: int, width_m: float = 0.9, spot_width_
                           "carried_along": carried_objects(scene, step.object_id)})
             scene = scene.moved(step.object_id, step.waypoints[-1])
         result["steps"] = steps
-        session.record(scene, way.steps)
+        if execute:
+            session.record(scene, way.steps)
+    if execute and way.success:
+        session.access_goals = {**session.access_goals,
+                                object_id: (width_m, spot_depth_m, spot_width_m, facing_object_id)}
     return result
+
+
+def suggest_access(session: Session, object_id: int | None = None, width_m: float = .9,
+                   spot_depth_m: float = 1., spot_width_m: float = .8,
+                   facing_object_id: int | None = None, from_initial: bool = False) -> JsonDict:
+    """Compares places without executing any proposed furniture movements.
+
+    Args:
+        session: Scene and user history.
+        object_id: Optional target to find alternatives near.
+        width_m: Passage width in meters.
+        spot_depth_m: Depth of the place in meters.
+        spot_width_m: Width of the place in meters.
+        facing_object_id: Optional facing reference.
+        from_initial: Compare the initial layout without restoring it.
+
+    Returns:
+        Proposals, scope and explicit confirmation requirements; no edits.
+
+    Raises:
+        ValueError: If a requested dimension is not positive.
+    """
+    if min(width_m, spot_width_m, spot_depth_m) <= 0:
+        raise ValueError("Passage and spot dimensions must be positive.")
+    scene = session.history[0] if from_initial and session.history else session.scene
+    return {**suggest_places(scene, object_id, width_m,
+                             (spot_depth_m, spot_width_m), facing_object_id),
+            "source_layout": "initial" if from_initial else "current",
+            "requires_restore_confirmation": from_initial and scene is not session.scene}
 
 
 def check_passages(session: Session, width_m: float = WALKING_WIDTH) -> JsonDict:
@@ -925,6 +1043,8 @@ def _added(session: Session, scene: Scene, object_id: int, aside: list[MotionPla
         moved_aside.append({**step.to_dict(),
                             "carried_along": carried_objects(scene, step.object_id)})
         scene = scene.moved(step.object_id, step.waypoints[-1])
+    if not preserves_doors(session.scene, scene):
+        return {"added": False, "reason": "This placement would obstruct a door; nothing added."}
     session.record(scene, aside)
     asked = (new.x, new.y) if new.x is not None and new.y is not None else pose.center[:2]
     return {"added": True, "object_id": object_id, "label": new.label,
@@ -1022,6 +1142,7 @@ def undo(session: Session) -> JsonDict:
         return {"undone": False, "reason": "Nothing to undo."}
     session.scene = session.history.pop()
     del session.motions[session.motion_counts.pop():]
+    session.access_goals = {}
     return {"undone": True}
 
 
@@ -1135,12 +1256,28 @@ TOOLS = [
          _object_schema({"width_m": {"type": "number"}}, []), check_passages),
     Tool("make_way", "Make room for a person or a wheelchair at an object (a pupil in a "
          "wheelchair at a table, a walker by a bed): finds the spot at the object and the "
-         "passage from a door that move the fewest objects, pushes them aside (a table with "
-         "its chairs, as one), and checks the way is clear. One call does it all; one undo "
-         "reverts it. width_m: 0.9 for a wheelchair.",
+         "passage from a door using a bounded search favoring fewer, shorter moves. "
+         "It plans furniture and nearby chairs together, verifies their individual motions "
+         "and the final route before executing. Failure automatically compares alternative "
+         "places and bounded rearrangements; propose these without executing them. "
+         "Set execute=false for a preview. Set facing_object_id when facing a board or other "
+         "identified object is requested; this checks orientation only, not knee clearance. "
+         "One undo reverts it. width_m: 0.9 for a wheelchair.",
          _object_schema({"object_id": _ID, "width_m": {"type": "number"},
-                         "spot_width_m": {"type": "number"}, "spot_depth_m": {"type": "number"}},
+                         "spot_width_m": {"type": "number"}, "spot_depth_m": {"type": "number"},
+                         "execute": {"type": "boolean"}, "facing_object_id": _ID},
                         ["object_id"]), make_way),
+    Tool("suggest_access", "Compare accessible tables without changing the scene. Checks "
+         "existing routes first, then at most four rearrangements, ranked by handling effort, "
+         "moved furniture and distance. Use for the easiest place, or alternatives; "
+         "object_id optionally names the preferred table to find alternatives near. "
+         "from_initial=true compares the initial layout read-only; ask permission to undo "
+         "existing changes before using such a proposal. "
+         "Show a verified option and ask permission before executing its furniture moves.",
+         _object_schema({"object_id": _ID, "width_m": {"type": "number"},
+                         "spot_width_m": {"type": "number"}, "spot_depth_m": {"type": "number"},
+                         "facing_object_id": _ID, "from_initial": {"type": "boolean"}},
+                        []), suggest_access),
     Tool("undo", "Revert the last move or removal.", _object_schema({}, []), undo),
     Tool("add_object", "Bring a new object into the room (one the user wants to buy or to bring "
          "from elsewhere), with its size. With x and y it goes exactly there, without a path "

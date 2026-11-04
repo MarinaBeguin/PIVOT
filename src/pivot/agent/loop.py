@@ -125,6 +125,11 @@ SYSTEM_PROMPT += """
   descriptions). Use object identifiers and explicit top-down plan anchors instead.
 - If wheelchair access to the requested table fails, check other suitable tables and
   propose a verified alternative. Do not move furniture for another table without consent.
+- Use suggest_access for the easiest table or a comparison: it does not change the scene.
+  A failed make_way already returns bounded alternative searches; describe these results
+  instead of inferring usable places from check_access's arm-reach report.
+- For facing an identified board or other object, set facing_object_id. If its identity
+  is unknown, ask; never claim an orientation the geometric tools have not checked.
 """
 
 
@@ -273,7 +278,10 @@ class Agent:
             original.spent += trial.spent - spent_before
         if trial.scene is not before_scene and not self._edits_succeeded(run):
             run.finished = False
-        if run.finished and not run.stopped and not self._access_goals_hold(run, trial.scene):
+        if run.finished and not run.stopped and (not all(
+                way_is_clear(trial.scene, target, width, (depth, breadth), facing)
+                for target, (width, depth, breadth, facing) in trial.access_goals.items())
+                or not self._access_goals_hold(run, trial.scene)):
             run.finished = False
             run.answer = self._fallback(run)
             self.messages.append({"role": "assistant", "content": run.answer})
@@ -312,13 +320,15 @@ class Agent:
             True if all claimed access goals still hold in the final layout.
         """
         for step in run.steps:
-            if step.tool != "make_way" or not step.result.get("success"):
+            if step.tool != "make_way" or not step.result.get("success") \
+                    or not step.arguments.get("execute", True):
                 continue
             target = int(step.arguments["object_id"])
             if target not in scene.objects or not way_is_clear(
                     scene, target, float(step.arguments.get("width_m", .9)),
                     (float(step.arguments.get("spot_depth_m", 1.)),
-                     float(step.arguments.get("spot_width_m", .8)))):
+                     float(step.arguments.get("spot_width_m", .8))),
+                    step.arguments.get("facing_object_id")):
                 return False
         return True
 
@@ -364,6 +374,7 @@ class Agent:
             original.history = trial.history
             original.motions = trial.motions
             original.motion_counts = trial.motion_counts
+        original.access_goals = dict(trial.access_goals)
 
     def _ask(self, request: str, language: str | None = None,
              on_step: Callable[[str, dict[str, Any]], None] | None = None,

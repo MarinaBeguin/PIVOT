@@ -18,7 +18,8 @@ again with every object in place.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from functools import partial
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
@@ -30,9 +31,11 @@ from pivot.geometry.collision import polygon_penetration
 from pivot.geometry.floor import FloorMap
 from pivot.geometry.types import BoolArray, FloatArray, IntArray
 from pivot.planning.handling import can_be_carried
+from pivot.planning.access import check_access, obstacle_mask, preserves_doors
+from pivot.planning.bottlenecks import route_gaps
 from pivot.planning.motion import MotionOptions, MotionPlan
-from pivot.planning.placement import front_zone
-from pivot.planning.rearrange import park_aside
+from pivot.planning.placement import OPENING_REACH, front_zone
+from pivot.planning.rearrange import park_aside, restore_group
 from pivot.scene.graph import Scene, SceneObject, is_flat, is_opening, support_parents
 
 WHEELCHAIR_SPOT = (1.0, 0.8)
@@ -72,6 +75,7 @@ class Way:
         moved: Objects parked out of the way, in order.
         steps: Their verified motions; empty on failure.
         door_id: The door the passage starts from.
+        restored: Group members returned towards their original pose while retaining access.
     """
 
     success: bool
@@ -81,6 +85,7 @@ class Way:
     moved: list[int] = field(default_factory=list)
     steps: list[MotionPlan] = field(default_factory=list)
     door_id: int | None = None
+    restored: list[int] = field(default_factory=list)
 
     def to_dict(self, scene: Scene, width: float) -> dict[str, Any]:
         """Serializes the result for tool-call responses.
@@ -93,6 +98,9 @@ class Way:
             A JSON-compatible dictionary.
         """
         result: dict[str, Any] = {"success": self.success, "message": self.message,
+                                  "returned_toward_original": self.restored,
+                                  "validation_scope": "Reconstruction and grid; disk passage "
+                                  "and reserved spot, not complete wheelchair ergonomics.",
                                   "passage_width_m": width,
                                   "moved_aside": [{"id": i, "label": scene[i].label}
                                                   for i in self.moved]}
@@ -101,9 +109,18 @@ class Way:
                               "yaw_deg": round(math.degrees(self.spot.yaw), 1),
                               "size_m": [round(float(v), 2) for v in self.spot.size[:2]]}
         if len(self.path):
+            path = self.path
+            if self.door_id is not None:
+                path = np.vstack([scene[self.door_id].box.center[:2], path])
+            if self.spot is not None:
+                path = np.vstack([path, self.spot.center[:2]])
+            result["path_xy"] = path.tolist()
             result["path_length_m"] = round(float(np.linalg.norm(
-                np.diff(self.path, axis=0), axis=1).sum()), 2)
+                np.diff(path, axis=0), axis=1).sum()), 2)
             result["from_door"] = self.door_id
+            if not self.success and self.spot is not None:
+                # Describe the attempted route, not a fabricated universal cause.
+                result["candidate_bottlenecks"] = route_gaps(scene, self.path, width, -1)
         return result
 
 
@@ -143,9 +160,16 @@ def _inflated(floor: FloorMap, obj: SceneObject, radius: float) -> BoolArray:
     Returns:
         A (rows, cols) mask.
     """
-    size = obj.box.size.copy()
-    size[:2] += 2.0 * radius
-    return floor.rasterize(OrientedBox(obj.box.center, size, obj.box.yaw).footprint())
+    if obj.shape is None:
+        size = obj.box.size.copy()
+        size[:2] += 2.0 * radius
+        return floor.rasterize(OrientedBox(obj.box.center, size, obj.box.yaw).footprint())
+    occupied = obstacle_mask(floor, obj, _REACH_HEIGHT)
+    if not occupied.any():
+        return occupied
+    grown: BoolArray = ndimage.maximum_filter(
+        occupied, size=2 * int(np.ceil(radius / floor.resolution)) + 1)
+    return grown
 
 
 def _walkable(floor: FloorMap, radius: float) -> BoolArray:
@@ -210,30 +234,31 @@ def _distances(free: BoolArray, weight: FloatArray, sources: IntArray
     return cost, previous
 
 
-def _spots(target: OrientedBox, size: tuple[float, float]) -> list[OrientedBox]:
+def _spots(target: OrientedBox, size: tuple[float, float], gap: float = _SPOT_GAP
+           ) -> list[OrientedBox]:
     """Lists the spots along the sides of an object, facing it.
 
     Args:
         target: The object's box.
         size: Depth and width of a spot, in meters.
+        gap: Separation from the table, including representation uncertainty.
 
     Returns:
         Boxes on the floor, their depth (x axis) pointing away from the object.
     """
     depth, width = size
     corners = target.footprint()
-    middle = corners.mean(axis=0)
     spots = []
     for start, end in zip(corners, np.roll(corners, -1, axis=0)):
         length = float(np.linalg.norm(end - start))
         along = (end - start) / max(length, 1e-9)
         normal = np.array([along[1], -along[0]])
-        if np.dot(normal, 0.5 * (start + end) - middle) < 0:
+        if np.dot(normal, 0.5 * (start + end) - target.center[:2]) < 0:
             normal = -normal
         offsets = np.arange(0.5 * width, length - 0.5 * width + 1e-9, _SPOT_STEP) \
             if length > width else np.array([0.5 * length])
         for offset in offsets:
-            center = start + offset * along + (_SPOT_GAP + 0.5 * depth) * normal
+            center = start + offset * along + (gap + 0.5 * depth) * normal
             spots.append(OrientedBox(np.array([*center, 0.5 * _REACH_HEIGHT]),
                                      np.array([depth, width, _REACH_HEIGHT]),
                                      math.atan2(normal[1], normal[0])))
@@ -302,21 +327,29 @@ def _corridor(path: FloatArray, spot: OrientedBox, width: float) -> list[Oriente
     return boxes
 
 
-def _in_the_way(movable: list[SceneObject], corridor: list[OrientedBox]) -> list[int]:
+def _in_the_way(movable: list[SceneObject], corridor: list[OrientedBox],
+                 floor: FloorMap | None = None) -> list[int]:
     """Lists the movable objects a passage overlaps, in the order the passage meets them.
 
     Args:
         movable: The movable objects.
         corridor: The passage's boxes, the spot first.
+        floor: Optional grid for conservative occupied-shape intersections.
 
     Returns:
         Their ids.
     """
     found: list[int] = []
+    masks = ({obj.object_id: obstacle_mask(floor, obj, _REACH_HEIGHT)
+              for obj in movable if obj.shape is not None} if floor is not None else {})
     for piece in [*corridor[1:], corridor[0]]:
+        occupied = floor.rasterize(piece.footprint()) if floor is not None and masks else None
         for obj in movable:
             if obj.object_id not in found and polygon_penetration(
                     obj.box.footprint(), piece.footprint()) > 0.01:
+                if occupied is not None and obj.object_id in masks \
+                        and not (masks[obj.object_id] & occupied).any():
+                    continue
                 found.append(obj.object_id)
     return found
 
@@ -354,23 +387,29 @@ def _search(scene: Scene, target_id: int, radius: float) -> _Search | None:
     covered = np.zeros(floor.shape, dtype=np.float64)
     for obj in movable:
         covered += _inflated(floor, obj, radius)
-    doors = _door_cells(scene, free)
+    fixed_area = np.zeros(floor.shape, dtype=bool)
+    for obj in fixed:
+        fixed_area |= obstacle_mask(floor, obj, _REACH_HEIGHT)
+    doors = _door_cells(scene, free, 2 * radius)
+    blocked_doors = {door for door in set(doors.values())
+                     if (floor.rasterize(front_zone(scene[door].box,
+                                                    OPENING_REACH["door"]).footprint())
+                         & fixed_area).any()}
+    doors = {cell: door for cell, door in doors.items() if door not in blocked_doors}
     if not doors:
         return None
     cost, previous = _distances(free, floor.resolution * (1.0 + _MOVE_PENALTY * covered),
                                 np.array(sorted(doors)))
-    fixed_area = np.zeros(floor.shape, dtype=bool)
-    for obj in fixed:
-        fixed_area |= floor.rasterize(obj.box.footprint())
     return _Search(cost, previous, free, movable, fixed_area, doors)
 
 
-def _door_cells(scene: Scene, free: BoolArray) -> dict[int, int]:
+def _door_cells(scene: Scene, free: BoolArray, width: float = 0.0) -> dict[int, int]:
     """Lists the free cells in front of each door, where a passage can start.
 
     Args:
         scene: The scene; must have a floor map.
         free: (rows, cols) cells a passage may use.
+        width: Minimum reconstructed doorway width, in meters.
 
     Returns:
         The door of each such cell, by flat cell index.
@@ -379,6 +418,8 @@ def _door_cells(scene: Scene, free: BoolArray) -> dict[int, int]:
     assert floor is not None
     doors: dict[int, int] = {}
     for door in (o for o in scene.objects.values() if o.label.lower() == "door"):
+        if max(door.box.size[:2]) + 1e-9 < width:
+            continue
         cells = np.flatnonzero(floor.rasterize(front_zone(door.box, 0.8).footprint()) & free)
         doors.update({int(c): door.object_id for c in cells})
     return doors
@@ -405,8 +446,29 @@ def _entry(floor: FloorMap, search: _Search, spot: OrientedBox) -> int | None:
     return flat if np.isfinite(search.cost[flat]) else None
 
 
+def _door_corridor(scene: Scene, path: FloatArray, spot: OrientedBox, width: float,
+                   door: int | None) -> list[OrientedBox]:
+    """Includes the actual door approach, not just an interior route seed.
+
+    Args:
+        scene: Complete scene.
+        path: Proposed route.
+        spot: Destination footprint.
+        width: Passage width in meters.
+        door: Starting door identifier, if known.
+
+    Returns:
+        Route footprint plus the entrance zone that must also be cleared.
+    """
+    corridor = _corridor(path, spot, width)
+    if door is not None:
+        corridor.append(front_zone(scene[door].box, OPENING_REACH["door"]))
+    return corridor
+
+
 def _ranked_spots(scene: Scene, search: _Search, target_id: int, size: tuple[float, float],
-                  width: float) -> list[tuple[OrientedBox, FloatArray, list[int]]]:
+                  width: float, facing_object_id: int | None = None
+                  ) -> list[tuple[OrientedBox, FloatArray, list[int]]]:
     """Ranks the spots by the objects their passage moves, fewest and lightest first.
 
     Args:
@@ -415,6 +477,7 @@ def _ranked_spots(scene: Scene, search: _Search, target_id: int, size: tuple[flo
         target_id: The object the way leads to.
         size: Depth and width of the spot, in meters.
         width: Width of the passage, in meters.
+        facing_object_id: Optional reference the seated person should face.
 
     Returns:
         Each spot with its passage and the objects in the way.
@@ -422,22 +485,87 @@ def _ranked_spots(scene: Scene, search: _Search, target_id: int, size: tuple[flo
     floor = scene.floor
     assert floor is not None
     candidates = []
-    for spot in _spots(scene[target_id].box, size):
+    for spot in _spots(scene[target_id].box, size, _spot_gap(scene[target_id], floor)):
+        if not _faces(scene, spot, facing_object_id):
+            continue
         flat = _entry(floor, search, spot)
         if flat is not None:
             candidates.append((float(search.cost[flat]), flat, spot))
     ranked = []
     for cost, flat, spot in sorted(candidates, key=lambda c: c[0])[:_CANDIDATES]:
         path = _trace(floor, search.previous, flat)
-        blockers = _in_the_way(search.movable, _corridor(path, spot, width))
+        blockers = _in_the_way(search.movable, _door_corridor(
+            scene, path, spot, width,
+            search.doors.get(int(np.ravel_multi_index(_cell(floor, path[0]), floor.shape)))), floor)
         effort = sum(1 if can_be_carried(scene[b]) else _HEAVY for b in blockers)
         ranked.append(((effort, cost), spot, path, blockers))
     ranked.sort(key=lambda item: item[0])
     return [(spot, path, blockers) for _, spot, path, blockers in ranked]
 
 
+def _spot_gap(target: SceneObject, floor: FloorMap) -> float:
+    """Separates a place from the conservative raster margin of its own table.
+
+    Args:
+        target: Furniture at the place.
+        floor: Grid defining spatial uncertainty.
+
+    Returns:
+        Gap in meters without shrinking the obstacle or the wheelchair.
+    """
+    if target.shape is None or not target.shape:
+        return _SPOT_GAP
+    return (_SPOT_GAP + target.shape.resolution * math.sqrt(3) / 2
+            + (1 + math.sqrt(2)) * floor.resolution)
+
+
+def clear_way(scene: Scene, target_id: int, width: float = 0.9,
+              spot_size: tuple[float, float] = WHEELCHAIR_SPOT,
+              facing_object_id: int | None = None) -> Way:
+    """Finds an already clear route and spot without preparing furniture moves.
+
+    A facing reference filters places to those facing within 45 degrees of
+    that object. This tests plan orientation, not ergonomics or knee clearance.
+
+    Args:
+        scene: Current layout.
+        target_id: Furniture to reach.
+        width: Passage width in meters.
+        spot_size: Depth and width of the place.
+        facing_object_id: Optional facing reference.
+
+    Returns:
+        A verified existing route or a failed bounded search, without edits.
+    """
+    failure = Way(False, "No clear route and spot found in the current layout.")
+    if scene.floor is not None and target_id in scene.objects:
+        search = _search(scene, target_id, 0.5 * width)
+        if search is not None:
+            for spot, path, blockers in _ranked_spots(
+                    scene, search, target_id, spot_size, width, facing_object_id):
+                door = search.doors.get(int(np.ravel_multi_index(
+                    _cell(scene.floor, path[0]), scene.floor.shape)))
+                if not blockers:
+                    return Way(True, "Route and spot are clear in the current layout.",
+                               spot, path, door_id=door)
+                if failure.spot is None:
+                    failure = Way(False, "Candidate only: furniture moves have not been verified.",
+                                  spot, path, blockers, door_id=door)
+    return failure
+
+
+def _faces(scene: Scene, spot: OrientedBox, reference: int | None) -> bool:
+    """Checks whether the seated direction points towards an identified reference."""
+    if reference is None:
+        return True
+    direction = scene[reference].box.center[:2] - spot.center[:2]
+    facing = -np.array([math.cos(spot.yaw), math.sin(spot.yaw)])
+    return bool(np.dot(facing, direction) >= np.linalg.norm(direction) / math.sqrt(2))
+
+
 def way_is_clear(scene: Scene, target_id: int, width: float = 0.9,
-                 spot_size: tuple[float, float] = WHEELCHAIR_SPOT) -> bool:
+                 spot_size: tuple[float, float] = WHEELCHAIR_SPOT,
+                 facing_object_id: int | None = None) -> bool:
     """Tests whether a person or a wheelchair already gets to an object, nothing moved.
 
     Args:
@@ -445,21 +573,18 @@ def way_is_clear(scene: Scene, target_id: int, width: float = 0.9,
         target_id: The object to reach (a table).
         width: Width of the passage, in meters.
         spot_size: Depth and width of the spot at the object, in meters.
+        facing_object_id: Optional facing reference.
 
     Returns:
         True if some spot at the object is free and reached by a free passage.
     """
-    if scene.floor is None:
-        return False
-    search = _search(scene, target_id, 0.5 * width)
-    return search is not None and any(
-        not blockers for _, _, blockers in _ranked_spots(scene, search, target_id, spot_size,
-                                                          width))
+    return clear_way(scene, target_id, width, spot_size, facing_object_id).success
 
 
 def plan_way(scene: Scene, target_id: int, width: float = 0.9,
              spot_size: tuple[float, float] = WHEELCHAIR_SPOT,
-             options: MotionOptions | None = None) -> Way:
+             options: MotionOptions | None = None,
+             facing_object_id: int | None = None) -> Way:
     """Plans a passage from a door to a spot at an object, moving as few objects as possible.
 
     Args:
@@ -468,6 +593,7 @@ def plan_way(scene: Scene, target_id: int, width: float = 0.9,
         width: Width of the passage, in meters (0.9 for a wheelchair).
         spot_size: Depth and width of the spot at the object, in meters.
         options: Motion parameters of the objects moved aside.
+        facing_object_id: Optional facing reference.
 
     Returns:
         The way: the spot, the passage, and the verified motions that clear them.
@@ -475,14 +601,16 @@ def plan_way(scene: Scene, target_id: int, width: float = 0.9,
     options = options or MotionOptions()
     if scene.floor is None:
         return Way(False, "This scene has no floor map.")
+    if not any(obj.label.lower() == "door" for obj in scene.objects.values()):
+        return Way(False, "No door was reconstructed; an entrance route cannot be verified.")
     search = _search(scene, target_id, 0.5 * width)
     if search is None:
         return Way(False, "No door has free floor in front of it.")
-    ranked = _ranked_spots(scene, search, target_id, spot_size, width)
+    ranked = _ranked_spots(scene, search, target_id, spot_size, width, facing_object_id)
     if not ranked:
-        return Way(False, f"No spot of {spot_size[1]:.2f} x {spot_size[0]:.2f} m along the "
-                          f"{scene[target_id].label} can be reached from a door, even with "
-                          "every movable object out of the way.")
+        return Way(False, f"No verified candidate route to a {spot_size[1]:.2f} x "
+                          f"{spot_size[0]:.2f} m spot at this {scene[target_id].label} was "
+                          "found with the current reconstruction, grid and orientation.")
     failure = Way(False, "No spot could be cleared.")
     # Objects that could not be parked: spots needing them moved are skipped.
     stuck: set[int] = set()
@@ -490,9 +618,9 @@ def plan_way(scene: Scene, target_id: int, width: float = 0.9,
     for spot, path, blockers in ranked:
         if stuck & set(blockers):
             continue
-        door = search.doors.get(int(np.ravel_multi_index(
-            _cell(scene.floor, path[0]), scene.floor.shape)))
-        way = _clear_way(scene, target_id, Way(False, "", spot, path, blockers, door_id=door),
+        way = _clear_way(scene, target_id, Way(False, "", spot, path, blockers,
+                         door_id=search.doors.get(int(np.ravel_multi_index(
+                             _cell(scene.floor, path[0]), scene.floor.shape)))),
                          width, options)
         if way.success:
             return way
@@ -524,32 +652,100 @@ def _clear_way(scene: Scene, target_id: int, way: Way, width: float,
     if len(way.moved) > _MAX_MOVED:
         return Way(False, f"{len(way.moved)} objects are in the way; at most {_MAX_MOVED} are "
                           "moved aside.", way.spot, way.path, door_id=way.door_id)
-    corridor = _corridor(way.path, way.spot, width)
+    corridor = _door_corridor(scene, way.path, way.spot, width, way.door_id)
     steps: list[MotionPlan] = []
-    cleared = scene
+    # The place is planned at this table's current pose. A pushed row must not
+    # silently take the target along and leave the reserved place behind.
+    cleared = replace(scene, objects={**scene.objects,
+                                     target_id: replace(scene[target_id], movable=False)})
     # Tables first: pushed back with their chairs, they often clear those too.
     for blocker in sorted(way.moved, key=lambda b: can_be_carried(scene[b])):
         if any(step.object_id == blocker for step in steps) \
-                and not _in_the_way([cleared[blocker]], corridor):
+                and not _in_the_way([cleared[blocker]], corridor, cleared.floor):
             # Already pushed out of the way with its table.
             continue
-        parking = park_aside(cleared, blocker, corridor, options)
+        parking = park_aside(cleared, blocker, corridor, options, prefer_edges=True,
+            accept=partial(_keeps_access, scene,
+                           [blocker,*(step.object_id for step in steps)], width))
         if parking is None:
             return Way(False, f"The {scene[blocker].label} (#{blocker}) is in the way and no "
-                              "free spot nearby keeps the passage clear.", way.spot, way.path,
+                              "verified parking place was found nearby preserving the passage "
+                              "and existing circulation.", way.spot, way.path,
                        [s.object_id for s in steps], door_id=way.door_id)
         for motion in parking:
             steps.append(motion)
             cleared = cleared.moved(motion.object_id, motion.waypoints[-1])
-    still = _in_the_way(_obstacles(cleared, target_id)[1], corridor)
+    cleared,steps,restored = _restore_heavy(scene,cleared,steps,corridor,width,options)
+    still = _in_the_way(_obstacles(cleared, target_id)[1], corridor, cleared.floor)
     if still:
         return Way(False, "After moving the objects in the way, the passage is still not "
                           f"clear: {_names(scene, still)} in it.", way.spot, way.path,
                    way.moved, door_id=way.door_id)
     moved = list(dict.fromkeys(step.object_id for step in steps))
+    if not preserves_doors(scene, cleared, width):
+        return Way(False, "Clearing this route would obstruct another door; no moves executed.")
+    lost = _lost_access(scene, cleared, moved, width)
+    if lost:
+        return Way(False, "This layout would lose existing access to "
+                   f"{_names(scene, lost)}; no moves executed.")
     return Way(True, f"Clear passage, {width:.2f} m wide, from door #{way.door_id} to the "
                      f"spot; moved aside: {_names(scene, moved) or 'nothing'}.", way.spot,
-               way.path, moved, steps, way.door_id)
+               way.path, moved, steps, way.door_id, restored)
+
+
+def _restore_heavy(initial: Scene, current: Scene, steps: list[MotionPlan],
+                   corridor: list[OrientedBox], width: float, options: MotionOptions
+                   ) -> tuple[Scene,list[MotionPlan],list[int]]:
+    """Reduces final displacement when furniture can move back without losing access."""
+    moved = list(dict.fromkeys(step.object_id for step in steps))
+    restored: list[int] = []
+    for object_id in reversed(moved):
+        if can_be_carried(initial[object_id]):
+            continue
+        returned = restore_group(current,initial,object_id,corridor,options,
+                                  partial(_keeps_access,initial,moved,width))
+        if returned is not None:
+            for step in returned:
+                current = current.moved(step.object_id,step.waypoints[-1])
+            steps += returned
+            restored.extend(step.object_id for step in returned)
+    return current,steps,list(dict.fromkeys(restored))
+
+
+def _lost_access(initial: Scene, final: Scene, moved: list[int], width: float) -> list[int]:
+    """Finds newly unreachable furniture at walking and requested route widths.
+
+    Args:
+        initial: Layout before rearrangement.
+        final: Proposed layout.
+        moved: Objects parked aside.
+        width: Requested passage width.
+
+    Returns:
+        Lost accessible objects, allowing light blockers to be stored out of reach.
+    """
+    lost: set[int] = set()
+    for access_width in (0.6, width):
+        before, after = check_access(initial, access_width), check_access(final, access_width)
+        assert before is not None and after is not None
+        lost.update(i for i in set(after.unreachable) - set(before.unreachable)
+                    if not can_be_carried(initial[i]) or i not in moved)
+    return sorted(lost)
+
+
+def _keeps_access(initial: Scene, moved: list[int], width: float, final: Scene) -> bool:
+    """Filters candidate parking layouts that would damage existing circulation.
+
+    Args:
+        initial: Original layout.
+        moved: Objects deliberately parked aside.
+        width: Requested passage width.
+        final: Candidate layout before motion execution.
+
+    Returns:
+        Whether door approaches and previous furniture access are preserved.
+    """
+    return preserves_doors(initial,final,width) and not _lost_access(initial,final,moved,width)
 
 
 def _names(scene: Scene, ids: list[int]) -> str:

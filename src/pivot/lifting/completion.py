@@ -447,7 +447,5 @@ def prepared_scene(scene_dir: Path) -> tuple[Scene, FloatArray, UInt8Array]:
     cloud = np.load(scene_dir / "cloud.npz")
     scene, points, colors = complete_rugs(close_windows(Scene.load(scene_dir / "scene.json")),
                                           cloud["points"], cloud["colors"])
-    if scene.floor is not None:
-        # Where the walls stand: paintings hang on them.
-        scene = dataclasses.replace(scene, floor=scene.floor.with_walls(points))
+    scene = scene.with_wall_evidence(points)
     return scene, points, colors

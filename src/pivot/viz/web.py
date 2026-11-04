@@ -34,6 +34,7 @@ def scene_payload(scene: Scene, points: FloatArray, colors: ColorArray,
     Returns:
         A JSON-compatible dictionary; arrays are base64-encoded binary.
     """
+    scene = scene.with_wall_evidence(points)
     payload: dict[str, Any] = {
         "title": title,
         "points": base64.b64encode(points.astype("<f4").tobytes()).decode(),

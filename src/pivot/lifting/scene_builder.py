@@ -19,7 +19,8 @@ from pivot.lifting.objects import (
     split_overlaps,
 )
 from pivot.lifting.openings import Walls, clean_openings
-from pivot.lifting.parts import join_parts
+from pivot.lifting.parts import MAX_EXTENT, join_parts
+from pivot.lifting.instances import InstanceConfig, recover_instances
 from pivot.lifting.plausible import drop_hollow_tops, drop_implausible, separate_pieces
 from pivot.lifting.rows import set_tables_on_rows
 from pivot.lifting.volume import CarveConfig, carve_shapes
@@ -121,7 +122,8 @@ def settle(objects: list[SceneObject], tolerance: float,
 
     Legs and bottoms are thin or occluded, so fitted boxes often float (a
     table reduced to its top, a chair to its seat). An object that rests on
-    no other object is extended down to the floor; one that does is set
+    no other object is extended down to the floor (except display panels,
+    whose unseen supports are not invented); one that does is set
     exactly on its support's top. Objects floating higher than ``max_fall``
     (wall shelves, ceiling lights) are fixed to a wall or the ceiling: they
     are left as fitted and are not moved by the agent. Objects hung on a wall
@@ -143,6 +145,11 @@ def settle(objects: list[SceneObject], tolerance: float,
             box = obj.box
             if box.z_min - base > max_fall:
                 settled.append(replace(obj, movable=False))
+                continue
+            if base == 0.0 and box.z_min > tolerance \
+                    and obj.label.lower() in {"television", "monitor", "screen"}:
+                # A panel does not grow legs when its stand was not segmented.
+                settled.append(obj)
                 continue
             size, center = box.size.copy(), box.center.copy()
             size[2] = box.z_max - base
@@ -172,10 +179,12 @@ def build_scene(recon: Reconstruction, tracks: list[Track],
     walls = _walls(points, objects, room_yaw, config)
     objects = clean_openings(objects, object_points, walls)
 
-    objects = drop_implausible(settle(objects, config.support_tolerance, config.max_fall))
+    objects = drop_implausible(settle(objects, config.support_tolerance, config.max_fall),
+                               upper_margin=0.1)
     # Boxes are refit to agree best with what the camera saw, before volumes are carved in them.
     objects, _ = agree_with_camera(objects, object_points, points, room_yaw=room_yaw,
                                    walls=walls)
+    objects = drop_implausible(objects)  # Final limits apply after camera refinement.
     if config.carve is not None:
         masks = {i: _merged_masks(group) for i, group in object_tracks.items()}
         objects = carve_shapes(leveled, objects, object_points, masks, config.carve)
@@ -359,28 +368,40 @@ def _merged_clouds(recon: Reconstruction, tracks: list[Track],
         Each group of tracks with its fused point cloud, in track order.
     """
     clouds = [lift_track(recon, track, voxel=config.voxel) for track in tracks]
-    boxes = [fit(c) if len(c) else None for c in clouds]
     # A part segmented under another noun is already in the whole's points.
     parts = contained_tracks(tracks)
     merged = []
+    next_id = max((t.track_id for t in tracks),default=0)+1
     for label in dict.fromkeys(t.label for t in tracks):
         indices = [i for i, t in enumerate(tracks) if t.label == label and i not in parts]
         if not indices:
             continue
-        groups = [[indices[i] for i in group] for group in duplicate_groups(
-            [clouds[i] for i in indices], 1.5 * config.voxel, config.merge.duplicate_overlap,
-            [boxes[i] for i in indices], distinct=distinct_pairs([tracks[i] for i in indices]))]
-        # Members are voxel centers on the same grid: duplicates coincide.
-        group_clouds = [np.unique(np.vstack([clouds[i] for i in g]), axis=0) for g in groups]
-        objects = [sorted(i for p in parts for i in groups[p])
-                   for parts in join_parts(group_clouds, label, fit, config.merge.part_gap)]
-        # Tracks are sparse: support is judged over a few voxels around each point.
-        owned = split_overlaps(assign_by_votes(
-            [[clouds[i] for i in members] for members in objects], 3.0 * config.voxel), fit)
-        merged += [([tracks[i] for i in members], cloud)
-                   for members, cloud in zip(objects, owned)]
+        resolved = _label_clouds(recon,[tracks[i] for i in indices],
+                                 [clouds[i] for i in indices],fit,config,next_id)
+        merged += resolved
+        next_id = max(next_id,max(group[0].track_id for group,_ in resolved)+1)
     merged.sort(key=lambda item: item[0][0].track_id)
     return merged
+
+
+def _label_clouds(recon: Reconstruction, tracks: list[Track], clouds: list[FloatArray],
+                  fit: Callable[[FloatArray],OrientedBox], config: BuildConfig,
+                  next_id: int) -> list[tuple[list[Track],FloatArray]]:
+    """Resolves one category, retaining ordinary fusion when instance evidence is ambiguous."""
+    label = tracks[0].label
+    if label.lower() in {"table","desk"}:
+        recovered = recover_instances(recon,tracks,clouds,fit,InstanceConfig(config.voxel,
+            config.min_points,MAX_EXTENT[label.lower()],config.merge.duplicate_overlap),next_id)
+        if recovered is not None:
+            return recovered
+    groups = duplicate_groups(clouds,1.5*config.voxel,config.merge.duplicate_overlap,
+        [fit(c) if len(c) else None for c in clouds],distinct=distinct_pairs(tracks))
+    group_clouds = [np.unique(np.vstack([clouds[i] for i in g]),axis=0) for g in groups]
+    objects = [sorted(i for part in parts for i in groups[part])
+               for parts in join_parts(group_clouds,label,fit,config.merge.part_gap)]
+    owned = split_overlaps(assign_by_votes(
+        [[clouds[i] for i in members] for members in objects],3.*config.voxel),fit)
+    return [([tracks[i] for i in members],cloud) for members,cloud in zip(objects,owned)]
 
 
 def _floor_map(points: FloatArray, objects: list[SceneObject], config: BuildConfig) -> FloorMap:
@@ -405,7 +426,7 @@ def _floor_map(points: FloatArray, objects: list[SceneObject], config: BuildConf
     floor = FloorMap.from_points(np.vstack([floor_xy, *hidden]), config.floor_resolution)
     # Gap filling erases thin walls: take off what stands outside the objects.
     return remove_standing(floor, points, [o.box for o in objects if not is_opening(o)],
-                           config.floor_band)
+                           config.floor_band).with_walls(points, low=1.4, high=2.2)
 
 
 def _fill_polygon(polygon: FloatArray, spacing: float) -> FloatArray:

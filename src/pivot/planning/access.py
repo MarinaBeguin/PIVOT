@@ -19,8 +19,9 @@ from scipy import ndimage
 
 from pivot.geometry.collision import polygon_penetration
 from pivot.geometry.types import BoolArray, IntArray
+from pivot.geometry.floor import FloorMap
 from pivot.planning.placement import OPENING_REACH, front_zone
-from pivot.scene.graph import Scene, is_flat, is_opening, support_parents
+from pivot.scene.graph import Scene, SceneObject, is_flat, is_opening, support_parents
 
 # Walking width of an adult, and of a wheelchair (accessible-route guidelines).
 WALKING_WIDTH = 0.6
@@ -86,6 +87,41 @@ class AccessReport:
         }
 
 
+def obstacle_mask(floor: FloorMap, obj: SceneObject, headroom: float = HEADROOM) -> BoolArray:
+    """Projects observed occupied volumes conservatively onto the accessibility grid.
+
+    Whole boxes remain the fallback when no carved shape exists. Voxel centers
+    are grown by their half diagonal plus grid uncertainty, so a narrow chair
+    is not automatically replaced by its entire bounding rectangle.
+
+    Args:
+        floor: Accessibility grid.
+        obj: Object whose volume is projected.
+        headroom: Highest obstacle height relevant to the route, in meters.
+
+    Returns:
+        Conservative occupied floor cells.
+    """
+    if obj.shape is None or len(obj.shape) == 0:
+        return floor.rasterize(obj.box.footprint())
+    centers = obj.shape.world_centers(obj.box)
+    radius = float(obj.shape.resolution) * np.sqrt(3.) / 2
+    centers = centers[(centers[:, 2] - radius < headroom)
+                      & (centers[:, 2] + radius > 0.03)]
+    result = np.zeros(floor.shape, dtype=bool)
+    if len(centers) == 0:
+        return result
+    cells = np.floor((centers[:, :2] - floor.origin) / floor.resolution).astype(int)
+    inside = ((cells >= 0).all(axis=1) & (cells[:, 0] < floor.shape[1])
+              & (cells[:, 1] < floor.shape[0]))
+    result[cells[inside, 1], cells[inside, 0]] = True
+    if not result.any():
+        return result
+    distance = ndimage.distance_transform_edt(~result) * floor.resolution
+    grown: BoolArray = distance <= radius + np.sqrt(2.) * floor.resolution
+    return grown
+
+
 def _standable(scene: Scene, width: float) -> tuple[BoolArray, BoolArray]:
     """Finds where a person of a given width can stand.
 
@@ -102,7 +138,7 @@ def _standable(scene: Scene, width: float) -> tuple[BoolArray, BoolArray]:
     obstacles = np.zeros(floor.shape, dtype=bool)
     for obj in scene.objects.values():
         if not (is_opening(obj) or is_flat(obj)) and obj.box.z_min < HEADROOM:
-            obstacles |= floor.rasterize(obj.box.footprint())
+            obstacles |= obstacle_mask(floor, obj)
     free = floor.floor & ~obstacles
     # Distance, in meters, from each free cell to the nearest wall or object;
     # beyond the map's edge is no floor either.
@@ -158,6 +194,25 @@ def _obstructed_doors(scene: Scene) -> dict[int, list[int]]:
     return found
 
 
+def preserves_doors(initial: Scene, final: Scene, width: float = WALKING_WIDTH) -> bool:
+    """Checks whether an edit introduces any new door obstruction.
+
+    Args:
+        initial: Scene before the proposed edit.
+        final: Scene after all proposed moves.
+        width: Requested passage width, in meters.
+
+    Returns:
+        True if no door becomes blocked or gains a new obstructing object.
+    """
+    before, after = check_access(initial, width), check_access(final, width)
+    if before is None or after is None:
+        return True
+    return not (set(after.blocked_doors) - set(before.blocked_doors)
+                or any(set(ids) - set(before.obstructed_doors.get(door, []))
+                       for door, ids in after.obstructed_doors.items()))
+
+
 def check_access(scene: Scene, width: float = WALKING_WIDTH) -> AccessReport | None:
     """Finds the floor a person of a given width can reach from the doors.
 
@@ -175,7 +230,7 @@ def check_access(scene: Scene, width: float = WALKING_WIDTH) -> AccessReport | N
     components, _ = ndimage.label(standable)
     starts, blocked = _start_components(scene, components)
     from_doors = bool(starts)
-    if not from_doors:
+    if not from_doors and not any(o.label.lower() == "door" for o in scene.objects.values()):
         # Without a usable door, the walk starts in the largest open area.
         sizes = np.bincount(components.ravel())
         sizes[0] = 0

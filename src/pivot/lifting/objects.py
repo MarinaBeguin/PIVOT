@@ -275,7 +275,8 @@ def _support(points: FloatArray, trees: list[cKDTree], radius: float) -> IntArra
     return counts
 
 
-def contained_tracks(tracks: list[Track], min_inside: float = 0.8) -> set[int]:
+def contained_tracks(tracks: list[Track], min_inside: float = 0.8,
+                     min_coverage: float = 0.5) -> set[int]:
     """Finds the tracks that are parts of an object of another label.
 
     SAM may segment a part of an object under another noun: the flat head of
@@ -287,6 +288,8 @@ def contained_tracks(tracks: list[Track], min_inside: float = 0.8) -> set[int]:
         tracks: Object tracks.
         min_inside: Median fraction of a track's mask inside the other's for
             it to be a part.
+        min_coverage: Minimum share of the part's observed frames with evidence
+            of the whole. An occasional reflection cannot remove a persistent object.
 
     Returns:
         Indices of the part tracks.
@@ -295,7 +298,8 @@ def contained_tracks(tracks: list[Track], min_inside: float = 0.8) -> set[int]:
     for i, part in enumerate(tracks):
         for whole in tracks:
             shared = sorted(set(part.masks) & set(whole.masks))
-            if whole.label == part.label or not shared:
+            if whole.label == part.label or len(shared) < min_coverage * len(part.masks) \
+                    or not shared:
                 continue
             inside = [np.logical_and(part.masks[f], whole.masks[f]).sum()
                       / max(int(part.masks[f].sum()), 1) for f in shared]

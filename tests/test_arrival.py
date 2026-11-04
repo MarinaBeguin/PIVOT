@@ -30,7 +30,7 @@ def test_a_new_sofa_goes_exactly_where_asked_and_says_which_doors_it_passes() ->
     assert sofa["added"] and (sofa["x"], sofa["y"], sofa["shift_m"]) == (3.5, 1.0, 0.0)
     assert sofa["doors"] == [{"id": 9, "width_m": 0.8, "fits_assembled": False}]
     stool = call(session, "add_object", label="stool", width_m=0.4, depth_m=0.4, height_m=0.5,
-                 x=1.0, y=0.5)
+                 x=1.1, y=0.4)  # Outside the door's protected approach zone.
     assert stool["doors"][0]["fits_assembled"]
 
 
