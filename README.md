@@ -14,16 +14,53 @@ rearrange it.** PIVOT rebuilds the room in 3D, finds every object with **SAM 3.1
 collisions on the real shapes, room to pass, ceiling height, a complete collision-free path.
 The language model never makes up geometry: every answer is backed by a computation.
 
-Built for the **Meta Global AI Hackathon 2026** (October 26 to November 4, 2026),
-**Indie developer track, "Push the Frontier" theme**. It gives assistants and robots a new capability,
-reasoning about real space with answers they can prove. The repository was created on October 27.
+Built for the **Meta Global AI Hackathon 2026** (October 26 to November 4, 2026), Indie
+Developer category, problem statement **"Push the Frontier"**. It gives assistants and robots a
+new capability, reasoning about real space with answers they can prove.
+
+![The PIVOT viewer: the reconstructed office, its 23 objects, and the "Ask PIVOT" panel](assets/viewer.jpg)
+
+## For the Judges
 
 | | |
 |---|---|
-| **Live demo** | **[marina-beguin--pivot-demo-web.modal.run](https://marina-beguin--pivot-demo-web.modal.run)**: the scanned office, the agent and the voice, in the browser, nothing to install |
-| **Video walkthrough (3 min)** | *coming soon* |
+| **Live demo** | **[marina-beguin--pivot-demo-web.modal.run](https://marina-beguin--pivot-demo-web.modal.run)**: four scanned rooms, the agent and the voice, in the browser, nothing to install |
+| **Video (3 min)** | *coming soon* |
+| **Built during the event** | Everything here: the repository was created on October 27, 2026, and its [history](https://github.com/MarinaBeguin/PIVOT/commits/main) shows each step. The rooms are public ScanNet++ captures |
+| **Problem statement** | Push the Frontier: [why](#why-this-is-push-the-frontier) |
+| **Evaluation** | [eval/](eval): 36 development requests on the office and three held-out rooms, with the script that runs them |
 
-![The PIVOT viewer: the reconstructed office, its 23 objects, and the "Ask PIVOT" panel](assets/viewer.jpg)
+**Try it in two minutes.** Open the demo (the first visit after a quiet period takes about 10 s).
+Ask *"Can chair 5 go under table 72?"*, then *"Put trash can 102 next to door 26 without
+blocking any door"*: the chair and the can move along verified paths, and the answers quote the
+measurements. Ask for something impossible (*"Put the shelf on table 72"*): PIVOT refuses, with
+the numbers. Pick the classroom and ask to make room for a wheelchair at a table, then open
+**Moving plan** for the printable steps. The language menu switches everything, the agent's
+answers included, to French, German, Spanish, Italian or Chinese.
+
+**Where to look, by criterion.**
+
+| Criterion | In PIVOT |
+|---|---|
+| **Impact** | Spatial hallucination is the first thing that fails when an assistant looks at the real world. PIVOT's answers are proved, not guessed: on the office, Muse alone wrongly claims a move works in 15 of 36 requests, PIVOT in none ([results](#results)). For people furnishing a home, wheelchair users and their therapists, wearers of Meta glasses, robots ([who it is for](#who-it-is-for)) |
+| **Meta AI tooling** | Meta models along the whole chain: SAM 3.1 to see (videos, photos, and blurring faces and plates), Muse Spark to list the objects and as the agent, Muse Voice Transcribe to listen, Llama with open weights for the same agent without a key, Llama Guard to screen requests, CoTracker3 and MapAnything ([table](#meta-ai-models)) |
+| **Demo** | Live and public, on a phone too, in six languages; every visitor gets their own copy of the rooms |
+| **Technical depth** | SAM 3.1 masks lifted to carved 3D volumes; A* in (x, y, rotation) with exact re-validation; making room by moving the fewest objects; a judge that replays every motion; SAM 3.1's masks decoded by compiled code, over 100 times faster than the reference parser ([how it works](#how-it-works), [engineering](#engineering)) |
+
+**Agentic.** One request becomes a multi-step plan the agent carries out alone: it lists the
+objects, checks candidate spots, plans paths, moves what is in the way and puts it back, checks
+that the doors are still clear and that a wheelchair still gets through, then answers, revising
+its plan whenever a tool says no. It has 18 tools and may state nothing a tool did not compute.
+
+## Why this is Push the Frontier
+
+Language models can describe a room but cannot be trusted with its geometry; geometric planners
+can prove a move but cannot read a request. No assistant today can be asked, in words, "can this
+sofa get to the window?" and answer with a proof. PIVOT gives a machine that capability: from a
+phone video, it builds a 3D model of the room an agent can act on, and every answer it gives is
+a computation on that model: a collision-free path, a measured clearance, a passage wide enough
+for a wheelchair. The same verification layer is what assistants on glasses and home robots
+need before they talk about the physical world, or act in it.
 
 ---
 
@@ -139,6 +176,8 @@ tools on this scene):
 | **Muse Voice Transcribe 1.0** | Spoken requests, with the scene's object names as keywords | Meta Model API | |
 | **Muse Spark 1.3** (vision) and **SAM 3.1** (image) | Name and size an object from a photo, and cut it out | Meta Model API | |
 | **Llama Prompt Guard 2** (86M) and **Llama Guard 3** (1B) | Optional screening of the public demo's requests, on the CPU, before any API call | | Hugging Face transformers, on the CPU |
+| **SAM 3.1** (video) | Blurs people, faces, plates and writing in a visitor's own video, before anything else sees it | Meta Model API | |
+| **MapAnything** | Cameras and metric depth from a plain phone video, without a depth sensor | | Apache 2.0 weights, on the GPU |
 | **CoTracker3** | Optional: follows an object's pixels across the cut between two pieces of video tracked in parallel, to join its tracks | | PyTorch, on the GPU or the CPU |
 | **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
 | **MMS-TTS** | Optional: answers read aloud in one voice on every device, in English, French, German and Spanish (`PIVOT_TTS=mms`; non-commercial licence) | Server's CPU | Server's CPU |
@@ -213,7 +252,9 @@ refusal. Muse alone, when wrong, puts objects through others by 15 cm on average
 studied and their causes fixed (a planner bug, a tool result the agent misread, and a judge
 stricter than the planner), then all four variants were run again. Since the tasks guided the
 fixes, 36/36 is an optimistic estimate, and with 36 tasks the 95% interval still reaches 90%. A
-held-out test, on rooms not used during development and run once, will follow.
+held-out test on three other rooms, with five more kinds of requests (into another room, a
+quarter turn, clearing a door, against a wall, a wheelchair's way to a table), is in
+[eval/](eval), with the script that runs it.
 
 The geometric search alone comes close **only on requests it can parse by construction**: the
 task labels come from the same planner. It cannot take a request in words, nor constraints that
@@ -236,15 +277,16 @@ GPUs. The Meta API key is never sent to the local model server either.
 
 ### Input
 
-A capture with color frames, depth and camera poses. Today this is a **ScanNet++ iPhone capture**
-(RGB, LiDAR depth, ARKit poses) and its video (one frame out of 10). Rebuilding a room from a
-plain phone video without depth is on the [roadmap](#limitations-and-roadmap).
+A capture with color frames, depth and camera poses: a **ScanNet++ iPhone capture** (RGB,
+LiDAR depth, ARKit poses) and its video (one frame out of 10), or **any phone video**, from
+which Meta's MapAnything computes the cameras and the depth (see
+[your own video](#your-own-video)).
 
 ### API version
 
 ```bash
 git clone https://github.com/MarinaBeguin/PIVOT.git && cd PIVOT
-pip install -e ".[serve]"
+pip install -e ".[serve,fast]"  # fast: numba, which decodes SAM 3.1's masks 100 times faster
 cp .env.example .env            # then set META_API_KEY in .env (never committed)
 
 bash scripts/run_api.sh <scannetpp_scene_dir> <video.mp4> <out_dir>
@@ -279,7 +321,8 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 | `PIVOT_SAM_WORKERS` | 32 (API), 3 (GPU) | Requests (API) or GPU jobs at the same time |
 | `PIVOT_KEYFRAMES` | 0 | 1: through the API, track only the frames where the camera moved by 8 cm or turned by 5° (half the frames of the apartment, but small objects change: off by default) |
 | `PIVOT_CHUNK_FRAMES` | 0 | N: through the API, track the video in pieces of N frames, joined afterwards. SAM 3.1 follows at most 16 objects of one kind per request: crowded rooms (a classroom's chairs) need pieces, e.g. 200 |
-| `PIVOT_PARSE_WORKERS` | cores, up to 16 | processes decoding SAM 3.1's responses (Meta's parser decodes about three masks a second, in pure Python: this, not the API, sets the time of a run) |
+| `PIVOT_PARSE_WORKERS` | cores, up to 16 | Processes reading SAM 3.1's responses. Meta's parser decodes each mask in pure Python, and twice (once to check it); with numba installed (`.[fast]`), PIVOT decodes them with compiled code, once, giving the same pixels: a 1.7 MB response is read in 1.2 s instead of 170 s |
+| `PIVOT_SAM_WIDTH` | 0 | W: SAM 3.1 tracks the video scaled to W pixels wide (480: a quarter of the pixels of 960). 0 keeps the video's size |
 | `PIVOT_MAX_OBJECTS_API` / `PIVOT_MAX_OBJECTS_OPEN` | 20 / 8 | Most kinds of objects listed |
 | `PIVOT_AGENT_MODEL` | `muse-spark-1.3` | Agent model, e.g. `muse-wonder-1.0` for the stronger preview model |
 | `PIVOT_OPEN_AGENT` | `llama` | Open-weight agent: `llama` (Llama 3.1 8B) or `glimmer` (Muse Glimmer 30B, two GPUs) |
@@ -293,6 +336,32 @@ bash scripts/run_api.sh <scene> <video> <out> sofa bed "coffee table"   # your o
 
 Settings of your machine can go in `scripts/site.env` (never committed), which the scripts read
 first, e.g. `PIVOT_SCRATCH=/data/me` and `SLURM_CONF=...`.
+
+### Your own video
+
+Any video filmed with a phone, walking slowly around the room, becomes a room PIVOT can reason
+about. No depth sensor is needed: Meta's [MapAnything](https://github.com/facebookresearch/map-anything)
+(Apache 2.0 weights) computes the camera of every frame and a metric depth map from the images
+alone, on a GPU, and writes them in the layout of a ScanNet++ capture; the rest of the pipeline
+is the same.
+
+```bash
+bash scripts/gpu/setup_mapanything_env.sh          # once: MapAnything environment and weights
+bash scripts/run_video.sh my_room.mp4 <out_dir>     # cameras and depth, privacy, objects, scene
+```
+
+**Privacy.** A video filmed at home or in a staircase shows more than furniture: faces, names
+on letter boxes and door bells, parcel labels, a car's plate through a window. Before anything
+else sees the frames, SAM 3.1 tracks people, faces, plates and writing through the video, and
+every pixel it finds is blurred, with a margin; the cloud, the viewer and the moving plan never
+show them (`PIVOT_PRIVACY=0` turns it off). Meta's [EgoBlur](https://github.com/facebookresearch/EgoBlur)
+would blur faces and plates without the API.
+
+A running server can also take videos from the page ("Send your video", `PIVOT_UPLOADS=1`):
+the pipeline runs in the background and the room joins the room menu once built. It needs a GPU
+for MapAnything and tens of minutes, so it is off on the public demo; on a server where it is
+on, only the owner's browser may send a video (opened once with `?owner=<key>`, see
+`PIVOT_OWNER_KEY`).
 
 ### The public demo
 
@@ -397,8 +466,8 @@ however many questions follow.
 
 ## Engineering
 
-- **266 tests** (geometry, lifting on synthetic rooms rendered exactly, planning, agent with a
-  scripted model, server, evaluation), **mypy strict**,
+- **Over 300 tests** (geometry, lifting on synthetic rooms rendered exactly, planning, agent with
+  a scripted model, server, evaluation, the mask decoder against Meta's), **mypy strict**,
   **pylint 10/10**, Google-style docstrings, all run by one script (scripts/check.sh).
 - **CI** on every pull request: install in a fresh environment, tests, mypy, pylint, and the
   Docker image is built. The main branch is protected: changes land only through pull requests with green
@@ -409,16 +478,19 @@ however many questions follow.
 ```text
 src/pivot/
 ├── geometry/     boxes, voxel shapes, collisions, floor map
-├── data/         ScanNet++ loader, video encoding
+├── data/         capture loader (ScanNet++ layout), video encoding
+├── reconstruction/ cameras and depth from a plain phone video (MapAnything)
 ├── perception/   object inventory, SAM 3.1 (self-hosted), detections and tracks
-├── meta/         Meta Model API client, SAM 3.1 through the API, objects from a photo
+├── meta/         Meta Model API client, SAM 3.1 through the API and its compiled mask decoder,
+│                 objects from a photo
 ├── lifting/      masks to 3D: fusion, carved volumes, hidden parts, doors and windows
 ├── scene/        scene graph, supports, rooms and doorways, example scenes
 ├── planning/     placement, motion planning, make room, carry, passages, moving plan
 ├── agent/        tool-calling agent (Muse or Llama) and its 18 tools (check, move, remove, add...)
 ├── server/       FastAPI server: viewer, chat, speech, visitors' rooms, budget, request screening
 ├── viz/          3D viewer (three.js) in six languages, printable plan
-└── eval/         task suite, variants, judge, metrics
+├── eval/         task suite, variants, judge, metrics (sets and results in eval/)
+└── privacy.py    blurring people, faces, plates and writing in a video (SAM 3.1)
 ```
 
 ## Limitations and roadmap
@@ -442,15 +514,18 @@ Known limitations:
   told from the doors' widths, not from a planned path. Something standing on it in the photo
   (a vase on a sideboard) is cut away by SAM 3.1, and the notch it leaves is filled by a geometric
   rule, which can leave a trace of it.
-- Languages: the page, the objects and the agent's answers follow the six languages, but the
-  printable moving plan is still in English, wav2vec 2.0 (the open-weight voice) understands
-  English only, and the evaluation was run in English.
+- Languages: the page, the objects, the agent's answers and the printable moving plan follow
+  the six languages, but wav2vec 2.0 (the open-weight voice) understands English only, and the
+  evaluation was run in English.
+- A room from a plain video has the scale MapAnything estimates, without a depth sensor to
+  check it: measurements are less exact than on a LiDAR capture.
 - Request screening (Llama Prompt Guard 2, Llama Guard 3) is tested with stand-in classifiers;
   it has not yet been run with the real weights on the public demo.
 
 Next:
 
-- **Any phone video**, without depth sensor: poses and depth from Meta's [VGGT](https://github.com/facebookresearch/vggt) or [MapAnything](https://github.com/facebookresearch/map-anything).
+- **Videos sent from the public demo**, built on a GPU of the hosting service instead of a
+  cluster job.
 
 ## Possible extensions, and the Meta models for them
 
@@ -479,7 +554,8 @@ computation, and static questions such as "does this van fit in this garage?".
 ## Acknowledgements
 
 - **Meta**, for the models PIVOT is built on (SAM 3.1, Muse Spark, Muse Voice Transcribe,
-  Llama, Llama Prompt Guard and Llama Guard, Muse Glimmer, CoTracker3, MMS-TTS, SceneScript, wav2vec 2.0), the access to the Meta
+  Llama, Llama Prompt Guard and Llama Guard, Muse Glimmer, CoTracker3, MapAnything, MMS-TTS,
+  SceneScript, wav2vec 2.0), the access to the Meta
   Model API, and the Global AI Hackathon.
 - **Modal**, which hosts the live demo.
 - **Cyber Valley**, for its support.
