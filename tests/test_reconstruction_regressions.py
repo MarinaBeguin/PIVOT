@@ -25,6 +25,14 @@ def test_valid_door_survives_a_larger_wall_misclassified_as_a_door():
 
 
 def outer_wall_cloud(scene):
+    """Builds repeated points along the floor's outer border.
+
+    Args:
+        scene (pivot.scene.graph.Scene): Synthetic scene with a floor map.
+
+    Returns:
+        numpy.ndarray: Border points with shape (N, 3), in meters.
+    """
     floor = scene.floor
     border = np.zeros(floor.shape,dtype=bool)
     border[[0,-1],:] = True
