@@ -284,7 +284,14 @@ def _within_walls(box: OrientedBox, walls: Walls) -> OrientedBox:
         return box
     turn = (box.yaw - walls.yaw) % (2 * np.pi)
     if min(abs(np.cos(turn)), abs(np.sin(turn))) < np.sin(np.radians(5.0)):
-        return _moved_box(box, _sides_in(turn, over_low, over_high))
+        sides = _sides_in(turn, over_low, over_high)
+        remaining = box.size[:2] + np.array([sides[0] + sides[1], sides[2] + sides[3]])
+        # A thin or wholly external detection may have no intersection with
+        # the room. Clamping it to zero fabricates a surface on the wall.
+        # Keep the observed box for scoring instead of creating invalid geometry.
+        if np.any(remaining <= 1e-9):
+            return box
+        return _moved_box(box, sides)
     shift_room = over_low - over_high
     cw, sw = np.cos(walls.yaw), np.sin(walls.yaw)
     center = box.center.copy()
