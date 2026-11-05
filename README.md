@@ -2,7 +2,7 @@
 
 *From seeing a room to proving how to change it.*
 
-[![Live demo](https://img.shields.io/badge/live%20demo-try%20PIVOT-2f9e6b)](https://marina-beguin--pivot-demo-web.modal.run)
+[![Live demo](https://img.shields.io/badge/live%20demo-try%20PIVOT-2f9e6b)](https://marina-beguin--pivot-demo-web.us-east.modal.run)
 [![CI](https://github.com/MarinaBeguin/PIVOT/actions/workflows/ci.yml/badge.svg)](https://github.com/MarinaBeguin/PIVOT/actions/workflows/ci.yml)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-blue)
 ![Meta models](https://img.shields.io/badge/Meta-SAM%203.1%20·%20Muse%20·%20Llama-0866FF)
@@ -24,7 +24,7 @@ new capability, reasoning about real space with answers they can prove.
 
 | | |
 |---|---|
-| **Live demo** | **[marina-beguin--pivot-demo-web.modal.run](https://marina-beguin--pivot-demo-web.modal.run)**: four scanned rooms, the agent and the voice, in the browser, nothing to install |
+| **Live demo** | **[marina-beguin--pivot-demo-web.us-east.modal.run](https://marina-beguin--pivot-demo-web.us-east.modal.run)**: four scanned rooms, the agent and the voice, in the browser, nothing to install |
 | **Video (3 min)** | *coming soon* |
 | **Built during the event** | Everything here: the repository was created on October 27, 2026, and its [history](https://github.com/MarinaBeguin/PIVOT/commits/main) shows each step. The rooms are public ScanNet++ captures |
 | **Problem statement** | Push the Frontier: [why](#why-this-is-push-the-frontier) |
@@ -180,7 +180,7 @@ tools on this scene):
 | **MapAnything** | Cameras and metric depth from a plain phone video, without a depth sensor | | Apache 2.0 weights, on the GPU |
 | **CoTracker3** | Optional: follows an object's pixels across the cut between two pieces of video tracked in parallel, to join its tracks | | PyTorch, on the GPU or the CPU |
 | **wav2vec 2.0** (large, 960 h) | Spoken requests (English) | | Hugging Face transformers, on the CPU |
-| **MMS-TTS** | Optional: answers read aloud in one voice on every device, in English, French, German and Spanish (`PIVOT_TTS=mms`; non-commercial licence) | Server's CPU | Server's CPU |
+| **MMS-TTS** | Default on the Modal demo; optional for local hosting: answers read aloud in one voice on every device, in English, French, German and Spanish (`PIVOT_TTS=mms`; non-commercial licence) | Server's CPU | Server's CPU |
 | **SceneScript** | Optional: doors and windows read from the point cloud, to compare with PIVOT's own (non-commercial licence) | | Its own environment, on a CUDA GPU |
 
 Two of these come under a non-commercial licence: **MMS-TTS** (CC-BY-NC 4.0) and **SceneScript**
@@ -357,18 +357,26 @@ every pixel it finds is blurred, with a margin; the cloud, the viewer and the mo
 show them (`PIVOT_PRIVACY=0` turns it off). Meta's [EgoBlur](https://github.com/facebookresearch/EgoBlur)
 would blur faces and plates without the API.
 
-A running server can also take videos from the page ("Send your video", `PIVOT_UPLOADS=1`):
-the pipeline runs in the background and the room joins the room menu once built. It needs a GPU
-for MapAnything and tens of minutes, so it is off on the public demo; on a server where it is
-on, only the owner's browser may send a video (opened once with `?owner=<key>`, see
-`PIVOT_OWNER_KEY`).
+The **Upload your video** tab lets visitors send a personal phone video to the Modal demo.
+MapAnything estimates cameras and depth on a GPU, followed by Meta API processing and
+PIVOT scene construction. The uploading browser can follow progress, open its private room
+and delete the uploaded data. Upload quotas, retention and processing notices are shown in
+the tab; see the [deployment guide](deploy/VIDEO_UPLOADS.md) for details.
+For local hosting, enable `PIVOT_UPLOADS=1` and configure the GPU pipeline; on a public local
+server, this backend is restricted to the owner's browser (`PIVOT_OWNER_KEY`).
 
 ### The public demo
 
-The [live demo](https://marina-beguin--pivot-demo-web.modal.run) serves the office of the results above, and other rooms in its room menu, on Modal. Click an object then a
+Open the [live demo](https://marina-beguin--pivot-demo-web.us-east.modal.run) directly in a browser:
+no terminal, installation or personal API key is needed. The room menu offers four
+ScanNet++ scenes: **Office**, **Bedroom**, **Classroom** and **Apartment**.
+Click an object then a
 spot to move it, or ask PIVOT in words or by voice (button "Speak"; answers can be read aloud);
 "Remove" takes an object out, "Add from a photo" brings a new one in, and "Moving plan" opens the printable steps. A menu sets the language, and a
-short tour introduces the page on the first visit. Each visitor works on their own copy of the
+short tour introduces the page on the first visit. Modal deployments use Meta MMS-TTS by
+default for reading answers in English, French, German and Spanish; select “Read answers aloud”
+to listen. Set `PIVOT_TTS=browser` at deployment time to use device voices instead.
+Each visitor works on their own copy of the
 room, kept across reloads.
 
 Requests cost real API calls, so the demo has a budget: per visitor and per day, 20 requests and
