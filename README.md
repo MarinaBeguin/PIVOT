@@ -25,7 +25,7 @@ new capability, reasoning about real space with answers they can prove.
 | | |
 |---|---|
 | **Live demo** | **[marina-beguin--pivot-demo-web.modal.run](https://marina-beguin--pivot-demo-web.modal.run)**: four scanned rooms, the agent and the voice, in the browser, nothing to install |
-| **Video (3 min)** | *coming soon* |
+| **Video (3 min)** | (https://youtu.be/gtm9Vj5FZgY) |
 | **Built during the event** | Everything here: the repository was created on October 27, 2026, and its [history](https://github.com/MarinaBeguin/PIVOT/commits/main) shows each step. The rooms are public ScanNet++ captures |
 | **Problem statement** | Push the Frontier: [why](#why-this-is-push-the-frontier) |
 | **Evaluation** | [eval/](eval): 36 development requests on the office and three held-out rooms, with the script that runs them |
