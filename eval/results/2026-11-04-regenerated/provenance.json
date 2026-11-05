@@ -1,0 +1,9 @@
+{
+  "run_id": "eval_20261104_155715",
+  "documented_on": "2026-11-05",
+  "source": "outputs/eval_20261104_155715",
+  "scene_snapshot_sha256_verified": true,
+  "evaluation_code_commit": "not recorded in run artifacts",
+  "model_version": "not recorded in result rows; API variant names preserved",
+  "note": "Scene fingerprints were checked against archived scene.json files before publication. Original results and summaries are unchanged. Explicit errors are failures only in audit.json; original success counts remain available."
+}

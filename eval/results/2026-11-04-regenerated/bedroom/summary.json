@@ -1,0 +1,229 @@
+{
+ "tasks": 25,
+ "variants": {
+  "llm_only": {
+   "tasks": 25,
+   "success": 0.28,
+   "success_ci95": [
+    0.143,
+    0.476
+   ],
+   "success_feasible": {
+    "n": 8,
+    "success": 0.375
+   },
+   "success_infeasible": {
+    "n": 17,
+    "success": 0.235
+   },
+   "false_claims": 18,
+   "false_refusals": 0,
+   "checks_mean": 0.0,
+   "latency_s_p50": 28.85,
+   "latency_s_p95": 74.47,
+   "model_calls_mean": 1.0,
+   "by_kind": {
+    "at_point": {
+     "n": 4,
+     "success": 0.75
+    },
+    "tuck_under": {
+     "n": 3,
+     "success": 0.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 0.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 0.5
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 0.25
+    },
+    "clear_door": {
+     "n": 1,
+     "success": 0.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 0.0
+    },
+    "wheelchair_way": {
+     "n": 1,
+     "success": 1.0
+    }
+   }
+  },
+  "planner_only": {
+   "tasks": 25,
+   "success": 1.0,
+   "success_ci95": [
+    0.867,
+    1.0
+   ],
+   "success_feasible": {
+    "n": 8,
+    "success": 1.0
+   },
+   "success_infeasible": {
+    "n": 17,
+    "success": 1.0
+   },
+   "false_claims": 0,
+   "false_refusals": 0,
+   "checks_mean": 1.0,
+   "latency_s_p50": 0.18,
+   "latency_s_p95": 2.67,
+   "model_calls_mean": 0.0,
+   "by_kind": {
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 3,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 1.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 1.0
+    },
+    "clear_door": {
+     "n": 1,
+     "success": 1.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 1.0
+    },
+    "wheelchair_way": {
+     "n": 1,
+     "success": 1.0
+    }
+   }
+  },
+  "llm_check": {
+   "tasks": 25,
+   "success": 0.72,
+   "success_ci95": [
+    0.524,
+    0.857
+   ],
+   "success_feasible": {
+    "n": 8,
+    "success": 0.625
+   },
+   "success_infeasible": {
+    "n": 17,
+    "success": 0.765
+   },
+   "false_claims": 5,
+   "false_refusals": 2,
+   "checks_mean": 3.0,
+   "latency_s_p50": 170.38,
+   "latency_s_p95": 815.2,
+   "model_calls_mean": 3.6,
+   "by_kind": {
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 3,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 0.5
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 0.75
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 0.75
+    },
+    "clear_door": {
+     "n": 1,
+     "success": 1.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 0.25
+    },
+    "wheelchair_way": {
+     "n": 1,
+     "success": 1.0
+    }
+   }
+  },
+  "pivot": {
+   "tasks": 25,
+   "success": 1.0,
+   "success_ci95": [
+    0.867,
+    1.0
+   ],
+   "success_feasible": {
+    "n": 8,
+    "success": 1.0
+   },
+   "success_infeasible": {
+    "n": 17,
+    "success": 1.0
+   },
+   "false_claims": 0,
+   "false_refusals": 0,
+   "checks_mean": 8.04,
+   "latency_s_p50": 26.65,
+   "latency_s_p95": 118.1,
+   "model_calls_mean": 8.88,
+   "by_kind": {
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 3,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 1.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 1.0
+    },
+    "clear_door": {
+     "n": 1,
+     "success": 1.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 1.0
+    },
+    "wheelchair_way": {
+     "n": 1,
+     "success": 1.0
+    }
+   }
+  }
+ }
+}

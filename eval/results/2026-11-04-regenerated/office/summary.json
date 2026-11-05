@@ -1,0 +1,261 @@
+{
+ "tasks": 39,
+ "variants": {
+  "llm_only": {
+   "tasks": 39,
+   "success": 0.462,
+   "success_ci95": [
+    0.316,
+    0.614
+   ],
+   "success_feasible": {
+    "n": 14,
+    "success": 0.929
+   },
+   "success_infeasible": {
+    "n": 25,
+    "success": 0.2
+   },
+   "false_claims": 21,
+   "false_refusals": 0,
+   "checks_mean": 0.0,
+   "latency_s_p50": 29.46,
+   "latency_s_p95": 204.02,
+   "model_calls_mean": 1.0,
+   "by_kind": {
+    "next_to": {
+     "n": 4,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 4,
+     "success": 0.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 0.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 0.5
+    },
+    "to_room": {
+     "n": 4,
+     "success": 0.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 0.25
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 0.75
+    },
+    "wheelchair_way": {
+     "n": 3,
+     "success": 0.0
+    }
+   }
+  },
+  "planner_only": {
+   "tasks": 39,
+   "success": 1.0,
+   "success_ci95": [
+    0.91,
+    1.0
+   ],
+   "success_feasible": {
+    "n": 14,
+    "success": 1.0
+   },
+   "success_infeasible": {
+    "n": 25,
+    "success": 1.0
+   },
+   "false_claims": 0,
+   "false_refusals": 0,
+   "checks_mean": 1.31,
+   "latency_s_p50": 0.62,
+   "latency_s_p95": 8.43,
+   "model_calls_mean": 0.0,
+   "by_kind": {
+    "next_to": {
+     "n": 4,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 4,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 1.0
+    },
+    "to_room": {
+     "n": 4,
+     "success": 1.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 1.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 1.0
+    },
+    "wheelchair_way": {
+     "n": 3,
+     "success": 1.0
+    }
+   }
+  },
+  "llm_check": {
+   "tasks": 39,
+   "success": 0.769,
+   "success_ci95": [
+    0.617,
+    0.874
+   ],
+   "success_feasible": {
+    "n": 14,
+    "success": 0.786
+   },
+   "success_infeasible": {
+    "n": 25,
+    "success": 0.76
+   },
+   "false_claims": 9,
+   "false_refusals": 0,
+   "checks_mean": 2.26,
+   "latency_s_p50": 106.89,
+   "latency_s_p95": 654.61,
+   "model_calls_mean": 2.69,
+   "by_kind": {
+    "next_to": {
+     "n": 4,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 4,
+     "success": 0.75
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 0.75
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 0.75
+    },
+    "to_room": {
+     "n": 4,
+     "success": 1.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 0.5
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 0.25
+    },
+    "wheelchair_way": {
+     "n": 3,
+     "success": 0.667
+    }
+   }
+  },
+  "pivot": {
+   "tasks": 39,
+   "success": 0.974,
+   "success_ci95": [
+    0.868,
+    0.995
+   ],
+   "success_feasible": {
+    "n": 14,
+    "success": 0.929
+   },
+   "success_infeasible": {
+    "n": 25,
+    "success": 1.0
+   },
+   "false_claims": 1,
+   "false_refusals": 0,
+   "checks_mean": 2.92,
+   "latency_s_p50": 27.03,
+   "latency_s_p95": 41.41,
+   "model_calls_mean": 4.95,
+   "by_kind": {
+    "next_to": {
+     "n": 4,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 4,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 1.0
+    },
+    "to_room": {
+     "n": 4,
+     "success": 1.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 1.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 0.75
+    },
+    "wheelchair_way": {
+     "n": 3,
+     "success": 1.0
+    }
+   }
+  }
+ }
+}
