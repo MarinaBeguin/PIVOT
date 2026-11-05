@@ -1,0 +1,313 @@
+[
+ {
+  "task_id": "t002",
+  "kind": "at_point",
+  "prompt": "Move the bag (#69) so that its center is at x = 2.88 m, y = 3.05 m.",
+  "object_id": 69,
+  "anchor_id": null,
+  "point": [
+   2.88,
+   3.05
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t003",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#15) under the desk (#10), with at least a third of it under the table top.",
+  "object_id": 15,
+  "anchor_id": 10,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t004",
+  "kind": "on_surface",
+  "prompt": "Put the bag (#58) on the desk (#10).",
+  "object_id": 58,
+  "anchor_id": 10,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t005",
+  "kind": "at_point_blocked",
+  "prompt": "Move the vase (#73) so that its center is at x = 4.27 m, y = 1.25 m. Other objects may be moved out of the way.",
+  "object_id": 73,
+  "anchor_id": null,
+  "point": [
+   4.27,
+   1.25
+  ],
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t007",
+  "kind": "turn_in_place",
+  "prompt": "Turn the bag (#69) a quarter turn (90 degrees) where it stands.",
+  "object_id": 69,
+  "anchor_id": null,
+  "point": [
+   2.8,
+   2.94
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": 192.5
+ },
+ {
+  "task_id": "t008",
+  "kind": "clear_door",
+  "prompt": "The bag (#62) stands in front of a door: move it so that it no longer blocks any door.",
+  "object_id": 62,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t009",
+  "kind": "against_wall",
+  "prompt": "Put the chair (#15) against a wall.",
+  "object_id": 15,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t010",
+  "kind": "wheelchair_way",
+  "prompt": "Make room for a person in a wheelchair at the desk (#10): a clear passage 90 cm wide from a door, and a free spot at the table.",
+  "object_id": 10,
+  "anchor_id": 10,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t013",
+  "kind": "at_point",
+  "prompt": "Move the chair (#17) so that its center is at x = 5.76 m, y = 2.06 m.",
+  "object_id": 17,
+  "anchor_id": null,
+  "point": [
+   5.76,
+   2.06
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t014",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#16) under the desk (#10), with at least a third of it under the table top.",
+  "object_id": 16,
+  "anchor_id": 10,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t015",
+  "kind": "on_surface",
+  "prompt": "Put the bag (#69) on the desk (#10).",
+  "object_id": 69,
+  "anchor_id": 10,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t016",
+  "kind": "at_point_blocked",
+  "prompt": "Move the bag (#62) so that its center is at x = 0.32 m, y = 1.8 m. Other objects may be moved out of the way.",
+  "object_id": 62,
+  "anchor_id": null,
+  "point": [
+   0.32,
+   1.8
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t018",
+  "kind": "turn_in_place",
+  "prompt": "Turn the trash can (#71) a quarter turn (90 degrees) where it stands.",
+  "object_id": 71,
+  "anchor_id": null,
+  "point": [
+   2.88,
+   3.05
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": 192.5
+ },
+ {
+  "task_id": "t020",
+  "kind": "against_wall",
+  "prompt": "Put the lamp (#41) against a wall.",
+  "object_id": 41,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t024",
+  "kind": "at_point",
+  "prompt": "Move the lamp (#41) so that its center is at x = 3.11 m, y = 3.29 m.",
+  "object_id": 41,
+  "anchor_id": null,
+  "point": [
+   3.11,
+   3.29
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t025",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#17) under the desk (#10), with at least a third of it under the table top.",
+  "object_id": 17,
+  "anchor_id": 10,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t026",
+  "kind": "on_surface",
+  "prompt": "Put the trash can (#71) on the desk (#10).",
+  "object_id": 71,
+  "anchor_id": 10,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t027",
+  "kind": "at_point_blocked",
+  "prompt": "Move the lamp (#41) so that its center is at x = 5.17 m, y = 1.1 m. Other objects may be moved out of the way.",
+  "object_id": 41,
+  "anchor_id": null,
+  "point": [
+   5.17,
+   1.1
+  ],
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t029",
+  "kind": "turn_in_place",
+  "prompt": "Turn the bag (#62) a quarter turn (90 degrees) where it stands.",
+  "object_id": 62,
+  "anchor_id": null,
+  "point": [
+   6.54,
+   1.78
+  ],
+  "feasible": true,
+  "room": null,
+  "yaw_deg": 192.5
+ },
+ {
+  "task_id": "t031",
+  "kind": "against_wall",
+  "prompt": "Put the bag (#62) against a wall.",
+  "object_id": 62,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t035",
+  "kind": "at_point",
+  "prompt": "Move the vase (#73) so that its center is at x = 3.07 m, y = 3.05 m.",
+  "object_id": 73,
+  "anchor_id": null,
+  "point": [
+   3.07,
+   3.05
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t037",
+  "kind": "on_surface",
+  "prompt": "Put the vase (#73) on the desk (#10).",
+  "object_id": 73,
+  "anchor_id": 10,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t038",
+  "kind": "at_point_blocked",
+  "prompt": "Move the chair (#17) so that its center is at x = 3.27 m, y = 2.0 m. Other objects may be moved out of the way.",
+  "object_id": 17,
+  "anchor_id": null,
+  "point": [
+   3.27,
+   2.0
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t040",
+  "kind": "turn_in_place",
+  "prompt": "Turn the chair (#17) a quarter turn (90 degrees) where it stands.",
+  "object_id": 17,
+  "anchor_id": null,
+  "point": [
+   1.87,
+   2.66
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": 164.5
+ },
+ {
+  "task_id": "t042",
+  "kind": "against_wall",
+  "prompt": "Put the rug (#7) against a wall.",
+  "object_id": 7,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ }
+]

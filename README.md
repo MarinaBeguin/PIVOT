@@ -24,11 +24,14 @@ new capability, reasoning about real space with answers they can prove.
 
 | | |
 |---|---|
-| **Live demo** | **[marina-beguin--pivot-demo-web.modal.run](https://marina-beguin--pivot-demo-web.modal.run)**: four scanned rooms, the agent and the voice, in the browser, nothing to install |
-| **Video (3 min)** | (https://youtu.be/gtm9Vj5FZgY) |
+| **Live demo** | **[marina-beguin--pivot-demo-web.us-east.modal.run](https://marina-beguin--pivot-demo-web.us-east.modal.run)**: four scanned rooms, the agent and the voice, in the browser, nothing to install |
+| **Video (3 min)** | **[Watch the correct, complete PIVOT! demo](https://youtu.be/XLgffcd7El4)** |
 | **Built during the event** | Everything here: the repository was created on October 27, 2026, and its [history](https://github.com/MarinaBeguin/PIVOT/commits/main) shows each step. The rooms are public ScanNet++ captures |
 | **Problem statement** | Push the Frontier: [why](#why-this-is-push-the-frontier) |
-| **Evaluation** | [eval/](eval): 36 development requests on the office and three held-out rooms, with the script that runs them |
+| **Evaluation** | [eval/](eval): 139 requests on four regenerated scenes, four variants, and archived results |
+
+> **Video link correction:** the original hackathon submission accidentally linked the wrong video.
+> Please use the [correct, complete demo](https://youtu.be/XLgffcd7El4) for judging.
 
 **Try it in two minutes.** Open the demo (the first visit after a quiet period takes about 10 s).
 Ask *"Can chair 5 go under table 72?"*, then *"Put trash can 102 next to door 26 without
@@ -42,7 +45,7 @@ answers included, to French, German, Spanish, Italian or Chinese.
 
 | Criterion | In PIVOT |
 |---|---|
-| **Impact** | Spatial hallucination is the first thing that fails when an assistant looks at the real world. PIVOT's answers are proved, not guessed: on the office, Muse alone wrongly claims a move works in 15 of 36 requests, PIVOT in none ([results](#results)). For people furnishing a home, wheelchair users and their therapists, wearers of Meta glasses, robots ([who it is for](#who-it-is-for)) |
+| **Impact** | Spatial hallucination is the first thing that fails when an assistant looks at the real world. On 139 requests across four regenerated scenes, PIVOT succeeds on 134, versus 47 for Muse alone; erroneous success claims fall from 91 to 3 ([results](#results)). Checks apply to the reconstructed geometry. For people furnishing a home, wheelchair users and their therapists, wearers of Meta glasses, robots ([who it is for](#who-it-is-for)) |
 | **Meta AI tooling** | Meta models along the whole chain: SAM 3.1 to see (videos, photos, and blurring faces and plates), Muse Spark to list the objects and as the agent, Muse Voice Transcribe to listen, Llama with open weights for the same agent without a key, Llama Guard to screen requests, CoTracker3 and MapAnything ([table](#meta-ai-models)) |
 | **Demo** | Live and public, on a phone too, in six languages; every visitor gets their own copy of the rooms |
 | **Technical depth** | SAM 3.1 masks lifted to carved 3D volumes; A* in (x, y, rotation) with exact re-validation; making room by moving the fewest objects; a judge that replays every motion; SAM 3.1's masks decoded by compiled code, over 100 times faster than the reference parser ([how it works](#how-it-works), [engineering](#engineering)) |
@@ -79,9 +82,10 @@ clearance, path length); the model revises its proposal until a verified solutio
 explains with the measured numbers why it is impossible and proposes the closest feasible
 alternative.
 
-On a real office scanned with a phone, Muse alone wrongly claims a move is feasible in
-**15 of 36** requests; with PIVOT's verification, **none**, with no false refusal
-([results](#results), development set).
+Across **139 requests on four regenerated ScanNet++ scenes**, PIVOT succeeds on
+**134/139 (96.4%)**, compared with **47/139 (33.8%)** for Muse alone when explicit errors
+count as failures. PIVOT still makes **3 erroneous success claims and 2 false refusals**:
+verification reduces errors but does not eliminate them ([results](#results)).
 
 ## Who it is for
 
@@ -233,33 +237,77 @@ flowchart LR
 
 ## Results
 
-36 requests generated on the real office: "put X next to Y", the same "keeping doors and windows
-clear", "put X exactly at (x, y)", "tuck X under Y", "put X on Y", and "at (x, y)" where other
-objects are in the way. 19 are feasible, 17 are not (the right answer is then to refuse). A
-judge replays every executed motion with exact geometry. Four variants share the same tasks:
+### Regenerated-scene evaluation
 
-| Variant | Success (95% CI) | False claims | False refusals | Expected cost* | Latency p50 |
+The run `eval_20261104_155715` contains **139 requests on four regenerated ScanNet++
+scenes**, each evaluated with four variants: **556 task/variant records**, with no missing
+or duplicate pairs. There are **46 feasible and 93 infeasible requests** under the
+benchmark's geometric search and task criteria. Tasks include placement, moving between
+rooms, turning, clearing doors, wall placement and wheelchair access; available kinds
+vary by scene. [Archived records, task lists and audit](eval/results/2026-11-04-regenerated)
+were documented on **November 5, 2026**; the original records are preserved.
+
+| Variant | Success (95% Wilson CI) | Feasible tasks | Infeasible tasks | Erroneous success claims | False refusals |
 |---|---|---|---|---|---|
-| Muse alone | 53% (37–68%) | 15/36 | 2/36 | 4.22 | 20 s |
-| Muse + a final feasibility check | 86% (71–94%) | 3/36 | 2/36 | 0.89 | 41 s |
-| **PIVOT: Muse + verifying tools** | **100% (90–100%)** | **0/36** | **0/36** | **0.00** | 14 s |
-| Geometric search alone | 97% (86–100%) | 1/36 | 0/36 | 0.28 | 2 s |
+| Muse alone | 47/139 — 33.8% (26.5–42.0%) | 25/46 | 22/93 | 91/139 | 0/139 |
+| Muse + a final feasibility check | 115/139 — 82.7% (75.6–88.1%) | 34/46 | 81/93 | 19/139 | 5/139 |
+| **PIVOT: Muse + verifying tools** | **134/139 — 96.4% (91.9–98.5%)** | **41/46** | **93/93** | **3/139** | **2/139** |
+| Geometric search alone | 139/139 — 100% (97.3–100%) | 46/46 | 93/93 | 0/139 | 0/139 |
 
-\*A false claim (saying a move works when it does not) is counted as 10 times worse than a false
-refusal. Muse alone, when wrong, puts objects through others by 15 cm on average.
+An **erroneous success claim** means the system returned a placement or movement that
+failed the judge's route or task checks, including a wrong final position; it does not
+necessarily mean a collision. A **false refusal** means no placement was returned for a
+request labelled feasible. All geometric checks concern the reconstruction, not physical
+measurements of the real room.
 
-**These 36 tasks are a development set.** PIVOT first got 33 of them right; its 3 errors were
-studied and their causes fixed (a planner bug, a tool result the agent misread, and a judge
-stricter than the planner), then all four variants were run again. Since the tasks guided the
-fixes, 36/36 is an optimistic estimate, and with 36 tasks the 95% interval still reaches 90%. A
-held-out test on three other rooms, with five more kinds of requests (into another room, a
-quarter turn, clearing a door, against a wall, a wheelchair's way to a table), is in
-[eval/](eval), with the script that runs it.
+**One reporting correction:** the original classroom summary counts a Muse-alone API
+timeout (`t021`, `wheelchair_way`) as a correct refusal because that task is labelled
+infeasible. The table above counts that explicit error as a failure: **47/139**, rather
+than the original **48/139**. No rows are dropped, and PIVOT's score is unaffected. The
+original JSONL and summaries remain unchanged alongside the separate [audit](eval/results/2026-11-04-regenerated/audit.json).
 
-The geometric search alone comes close **only on requests it can parse by construction**: the
-task labels come from the same planner. It cannot take a request in words, nor constraints that
-exist only in the sentence ("without blocking the door"). PIVOT keeps the planner's reliability
-while understanding language. The evaluation can be reproduced from the command line (see below).
+| Scene | Requests | Muse alone | Muse + final check | PIVOT | PIVOT erroneous success claims | PIVOT latency p50 |
+|---|---|---|---|---|---|---|
+| Office | 39 | 18/39 | 30/39 | **38/39** | 1 | 27.0 s |
+| Bedroom | 25 | 7/25 | 18/25 | **25/25** | 0 | 26.6 s |
+| Classroom | 40 | 12/40* | 36/40 | **39/40** | 0 | 46.6 s |
+| Apartment | 35 | 10/35 | 31/35 | **32/35** | 2 | 27.5 s |
+
+\*Counts the timeout as a failed request. Latencies come from the recorded benchmark,
+not the hosted demo; hardware, API load and deployment configuration can change them.
+The geometric-only variant scores 100% in every scene.
+
+**Remaining PIVOT failures:** three wall-placement requests returned positions that did
+not satisfy the benchmark's wall criterion (one office, two apartment); one classroom
+wall-placement request and one apartment tuck-under request were refused despite their
+feasible labels. The bedroom/classroom/apartment subset totals **96/100**, with two
+erroneous success claims and two false refusals.
+
+**Protocol limits.** The office was already used for development, and reconstruction was
+tuned on the other rooms too. This rerun is therefore not evidence of generalization to
+unseen rooms. Scene fingerprints were verified against the archived scene snapshots;
+the artifacts do not record a launch code commit or exact model version, so a frozen-code
+held-out protocol cannot be established. Geometric search receives structured tasks,
+and the labels come from that same planner: its 100% checks internal consistency, not
+independent physical ground truth. Wilson intervals summarize requests in these four
+rooms; they do not establish performance across arbitrary buildings. These results cover
+the API variants, not an end-to-end open-weight evaluation.
+
+### Separate safety contracts
+
+The recorded CPU-only safety run reports **41 passed, 1 expected failure**, with no
+unexpected failures. It covers route/doorway checks, scripted alternative → confirmation
+→ undo dialogue, rollback and search-budget reporting. The expected failure tracks undo
+of a route confirmed without any furniture movement. These synthetic/scripted contracts
+are separate from the live-model benchmark and do not establish real-world accessibility
+or browser correctness. [Recorded safety report](eval/results/2026-11-04-regenerated/safety/safety.log).
+
+### Earlier development result
+
+The previous **36-request office development set** produced 36/36 successes for PIVOT
+and 19/36 for Muse alone after three PIVOT errors had been studied and fixed. Those tasks
+guided development, so the old 100% is optimistic and is not the latest four-scene result.
+See [evaluation protocol and reproduction commands](eval/README.md).
 
 ## Two versions: with or without an API key
 
@@ -472,7 +520,8 @@ with no API cost. On a GPU you already own, the open-weight version costs nothin
 | Bringing in furniture from a photo | about $0.01 to $0.02 (estimated), budgeted $0.05 | One Muse Spark call on the image, one SAM 3.1 image segmentation ($0.0025) per noun tried, up to four |
 | Screening a request (Llama Guard) | No API cost | On the server's CPU |
 
-For comparison, Muse alone answers for $0.02 a question, and is wrong in 15 of 36 cases: PIVOT
+These cost figures refer to the earlier 36-request office experiment, not the regenerated-scene run above.
+In that earlier experiment, Muse alone answers for $0.02 a question and is wrong in 15 of 36 cases: PIVOT
 spends about 3 times more tokens to be right.
 
 **Scenarios.**

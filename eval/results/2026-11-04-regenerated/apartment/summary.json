@@ -1,0 +1,245 @@
+{
+ "tasks": 35,
+ "variants": {
+  "llm_only": {
+   "tasks": 35,
+   "success": 0.286,
+   "success_ci95": [
+    0.163,
+    0.451
+   ],
+   "success_feasible": {
+    "n": 13,
+    "success": 0.231
+   },
+   "success_infeasible": {
+    "n": 22,
+    "success": 0.318
+   },
+   "false_claims": 25,
+   "false_refusals": 0,
+   "checks_mean": 0.0,
+   "latency_s_p50": 23.89,
+   "latency_s_p95": 83.14,
+   "model_calls_mean": 1.0,
+   "by_kind": {
+    "next_to": {
+     "n": 4,
+     "success": 0.0
+    },
+    "next_to_clear": {
+     "n": 4,
+     "success": 0.25
+    },
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 4,
+     "success": 0.25
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 0.25
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 0.25
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 0.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 0.0
+    },
+    "wheelchair_way": {
+     "n": 3,
+     "success": 0.667
+    }
+   }
+  },
+  "planner_only": {
+   "tasks": 35,
+   "success": 1.0,
+   "success_ci95": [
+    0.901,
+    1.0
+   ],
+   "success_feasible": {
+    "n": 13,
+    "success": 1.0
+   },
+   "success_infeasible": {
+    "n": 22,
+    "success": 1.0
+   },
+   "false_claims": 0,
+   "false_refusals": 0,
+   "checks_mean": 1.54,
+   "latency_s_p50": 0.29,
+   "latency_s_p95": 8.22,
+   "model_calls_mean": 0.0,
+   "by_kind": {
+    "next_to": {
+     "n": 4,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 4,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 1.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 1.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 1.0
+    },
+    "wheelchair_way": {
+     "n": 3,
+     "success": 1.0
+    }
+   }
+  },
+  "llm_check": {
+   "tasks": 35,
+   "success": 0.886,
+   "success_ci95": [
+    0.74,
+    0.955
+   ],
+   "success_feasible": {
+    "n": 13,
+    "success": 0.846
+   },
+   "success_infeasible": {
+    "n": 22,
+    "success": 0.909
+   },
+   "false_claims": 3,
+   "false_refusals": 1,
+   "checks_mean": 2.8,
+   "latency_s_p50": 150.91,
+   "latency_s_p95": 854.43,
+   "model_calls_mean": 3.34,
+   "by_kind": {
+    "next_to": {
+     "n": 4,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 4,
+     "success": 1.0
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 1.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 0.75
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 0.5
+    },
+    "wheelchair_way": {
+     "n": 3,
+     "success": 0.667
+    }
+   }
+  },
+  "pivot": {
+   "tasks": 35,
+   "success": 0.914,
+   "success_ci95": [
+    0.776,
+    0.97
+   ],
+   "success_feasible": {
+    "n": 13,
+    "success": 0.769
+   },
+   "success_infeasible": {
+    "n": 22,
+    "success": 1.0
+   },
+   "false_claims": 2,
+   "false_refusals": 1,
+   "checks_mean": 4.83,
+   "latency_s_p50": 27.52,
+   "latency_s_p95": 78.34,
+   "model_calls_mean": 6.46,
+   "by_kind": {
+    "next_to": {
+     "n": 4,
+     "success": 1.0
+    },
+    "next_to_clear": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point": {
+     "n": 4,
+     "success": 1.0
+    },
+    "tuck_under": {
+     "n": 4,
+     "success": 0.75
+    },
+    "on_surface": {
+     "n": 4,
+     "success": 1.0
+    },
+    "at_point_blocked": {
+     "n": 4,
+     "success": 1.0
+    },
+    "turn_in_place": {
+     "n": 4,
+     "success": 1.0
+    },
+    "against_wall": {
+     "n": 4,
+     "success": 0.5
+    },
+    "wheelchair_way": {
+     "n": 3,
+     "success": 1.0
+    }
+   }
+  }
+ }
+}

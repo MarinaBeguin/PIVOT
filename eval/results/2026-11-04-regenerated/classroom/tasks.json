@@ -1,0 +1,478 @@
+[
+ {
+  "task_id": "t000",
+  "kind": "next_to",
+  "prompt": "Move the chair (#167) next to the table (#13).",
+  "object_id": 167,
+  "anchor_id": 13,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t001",
+  "kind": "next_to_clear",
+  "prompt": "Move the chair (#219) next to the table (#461). Keep doors and windows clear.",
+  "object_id": 219,
+  "anchor_id": 461,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t002",
+  "kind": "at_point",
+  "prompt": "Move the table (#4) so that its center is at x = 1.41 m, y = 5.37 m.",
+  "object_id": 4,
+  "anchor_id": null,
+  "point": [
+   1.41,
+   5.37
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t003",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#286) under the table (#104), with at least a third of it under the table top.",
+  "object_id": 286,
+  "anchor_id": 104,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t004",
+  "kind": "on_surface",
+  "prompt": "Put the chair (#164) on the table (#6).",
+  "object_id": 164,
+  "anchor_id": 6,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t005",
+  "kind": "at_point_blocked",
+  "prompt": "Move the chair (#229) so that its center is at x = 6.76 m, y = 2.84 m. Other objects may be moved out of the way.",
+  "object_id": 229,
+  "anchor_id": null,
+  "point": [
+   6.76,
+   2.84
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t007",
+  "kind": "turn_in_place",
+  "prompt": "Turn the chair (#166) a quarter turn (90 degrees) where it stands.",
+  "object_id": 166,
+  "anchor_id": null,
+  "point": [
+   6.09,
+   7.31
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": 178.5
+ },
+ {
+  "task_id": "t008",
+  "kind": "clear_door",
+  "prompt": "The chair (#229) stands in front of a door: move it so that it no longer blocks any door.",
+  "object_id": 229,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t009",
+  "kind": "against_wall",
+  "prompt": "Put the table (#52) against a wall.",
+  "object_id": 52,
+  "anchor_id": null,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t010",
+  "kind": "wheelchair_way",
+  "prompt": "Make room for a person in a wheelchair at the table (#7): a clear passage 90 cm wide from a door, and a free spot at the table.",
+  "object_id": 7,
+  "anchor_id": 7,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t011",
+  "kind": "next_to",
+  "prompt": "Move the table (#52) next to the table (#11).",
+  "object_id": 52,
+  "anchor_id": 11,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t012",
+  "kind": "next_to_clear",
+  "prompt": "Move the table (#460) next to the table (#4). Keep doors and windows clear.",
+  "object_id": 460,
+  "anchor_id": 4,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t013",
+  "kind": "at_point",
+  "prompt": "Move the chair (#156) so that its center is at x = 4.19 m, y = 5.22 m.",
+  "object_id": 156,
+  "anchor_id": null,
+  "point": [
+   4.19,
+   5.22
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t014",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#154) under the table (#460), with at least a third of it under the table top.",
+  "object_id": 154,
+  "anchor_id": 460,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t015",
+  "kind": "on_surface",
+  "prompt": "Put the chair (#162) on the table (#13).",
+  "object_id": 162,
+  "anchor_id": 13,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t016",
+  "kind": "at_point_blocked",
+  "prompt": "Move the chair (#161) so that its center is at x = 2.26 m, y = 4.99 m. Other objects may be moved out of the way.",
+  "object_id": 161,
+  "anchor_id": null,
+  "point": [
+   2.26,
+   4.99
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t018",
+  "kind": "turn_in_place",
+  "prompt": "Turn the chair (#223) a quarter turn (90 degrees) where it stands.",
+  "object_id": 223,
+  "anchor_id": null,
+  "point": [
+   1.3,
+   7.6
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": 88.5
+ },
+ {
+  "task_id": "t019",
+  "kind": "clear_door",
+  "prompt": "The chair (#166) stands in front of a door: move it so that it no longer blocks any door.",
+  "object_id": 166,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t020",
+  "kind": "against_wall",
+  "prompt": "Put the chair (#199) against a wall.",
+  "object_id": 199,
+  "anchor_id": null,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t021",
+  "kind": "wheelchair_way",
+  "prompt": "Make room for a person in a wheelchair at the table (#54): a clear passage 90 cm wide from a door, and a free spot at the table.",
+  "object_id": 54,
+  "anchor_id": 54,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t022",
+  "kind": "next_to",
+  "prompt": "Move the trash can (#448) next to the table (#11).",
+  "object_id": 448,
+  "anchor_id": 11,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t023",
+  "kind": "next_to_clear",
+  "prompt": "Move the table (#8) next to the table (#52). Keep doors and windows clear.",
+  "object_id": 8,
+  "anchor_id": 52,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t024",
+  "kind": "at_point",
+  "prompt": "Move the chair (#172) so that its center is at x = 5.96 m, y = 0.42 m.",
+  "object_id": 172,
+  "anchor_id": null,
+  "point": [
+   5.96,
+   0.42
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t025",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#166) under the table (#11), with at least a third of it under the table top.",
+  "object_id": 166,
+  "anchor_id": 11,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t026",
+  "kind": "on_surface",
+  "prompt": "Put the chair (#176) on the table (#3).",
+  "object_id": 176,
+  "anchor_id": 3,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t027",
+  "kind": "at_point_blocked",
+  "prompt": "Move the chair (#201) so that its center is at x = 9.16 m, y = 5.99 m. Other objects may be moved out of the way.",
+  "object_id": 201,
+  "anchor_id": null,
+  "point": [
+   9.16,
+   5.99
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t029",
+  "kind": "turn_in_place",
+  "prompt": "Turn the chair (#272) a quarter turn (90 degrees) where it stands.",
+  "object_id": 272,
+  "anchor_id": null,
+  "point": [
+   0.58,
+   7.41
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": 268.5
+ },
+ {
+  "task_id": "t030",
+  "kind": "clear_door",
+  "prompt": "The table (#44) stands in front of a door: move it so that it no longer blocks any door.",
+  "object_id": 44,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t031",
+  "kind": "against_wall",
+  "prompt": "Put the chair (#186) against a wall.",
+  "object_id": 186,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t032",
+  "kind": "wheelchair_way",
+  "prompt": "Make room for a person in a wheelchair at the table (#104): a clear passage 90 cm wide from a door, and a free spot at the table.",
+  "object_id": 104,
+  "anchor_id": 104,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t033",
+  "kind": "next_to",
+  "prompt": "Move the chair (#148) next to the table (#8).",
+  "object_id": 148,
+  "anchor_id": 8,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t034",
+  "kind": "next_to_clear",
+  "prompt": "Move the chair (#262) next to the table (#44). Keep doors and windows clear.",
+  "object_id": 262,
+  "anchor_id": 44,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t035",
+  "kind": "at_point",
+  "prompt": "Move the chair (#171) so that its center is at x = 3.26 m, y = 5.34 m.",
+  "object_id": 171,
+  "anchor_id": null,
+  "point": [
+   3.26,
+   5.34
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t036",
+  "kind": "tuck_under",
+  "prompt": "Push the chair (#294) under the table (#13), with at least a third of it under the table top.",
+  "object_id": 294,
+  "anchor_id": 13,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t037",
+  "kind": "on_surface",
+  "prompt": "Put the chair (#146) on the table (#54).",
+  "object_id": 146,
+  "anchor_id": 54,
+  "point": null,
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t038",
+  "kind": "at_point_blocked",
+  "prompt": "Move the table (#44) so that its center is at x = 8.46 m, y = 4.39 m. Other objects may be moved out of the way.",
+  "object_id": 44,
+  "anchor_id": null,
+  "point": [
+   8.46,
+   4.39
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t040",
+  "kind": "turn_in_place",
+  "prompt": "Turn the chair (#257) a quarter turn (90 degrees) where it stands.",
+  "object_id": 257,
+  "anchor_id": null,
+  "point": [
+   6.46,
+   0.9
+  ],
+  "feasible": false,
+  "room": null,
+  "yaw_deg": 268.5
+ },
+ {
+  "task_id": "t041",
+  "kind": "clear_door",
+  "prompt": "The chair (#171) stands in front of a door: move it so that it no longer blocks any door.",
+  "object_id": 171,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t042",
+  "kind": "against_wall",
+  "prompt": "Put the chair (#219) against a wall.",
+  "object_id": 219,
+  "anchor_id": null,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ },
+ {
+  "task_id": "t043",
+  "kind": "wheelchair_way",
+  "prompt": "Make room for a person in a wheelchair at the table (#459): a clear passage 90 cm wide from a door, and a free spot at the table.",
+  "object_id": 459,
+  "anchor_id": 459,
+  "point": null,
+  "feasible": true,
+  "room": null,
+  "yaw_deg": null
+ }
+]

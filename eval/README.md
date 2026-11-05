@@ -4,23 +4,25 @@ Does PIVOT answer requests about a real room correctly, and does it ever claim a
 move works when it does not? Every request below has a known answer, computed on
 the room's geometry; every answer is replayed by a judge with exact geometry.
 
-## Sets
+## Recorded sets
 
-| Set | Room | Requests | Used for |
+| Set | Room | Requests | Status |
 |---|---|---|---|
-| [dev/office](dev/office) | The office of the demo | 36, 6 kinds | Developing PIVOT: its 3 errors on a first run were studied and fixed, so its score is optimistic |
-| heldout/bedroom | Bedroom | About 40, 10 kinds | Testing only |
-| heldout/classroom | Classroom | About 40, 10 kinds | Testing only |
-| heldout/apartment | Apartment (several rooms) | About 40, 10 kinds | Testing only |
+| [dev/office](dev/office) | Earlier office | 36, 6 kinds | Development set; errors were studied and fixed |
+| [Regenerated office](results/2026-11-04-regenerated/office) | Office | 39 | Included in the latest four-scene run |
+| [Regenerated bedroom](results/2026-11-04-regenerated/bedroom) | Bedroom | 25 | Included in the latest four-scene run |
+| [Regenerated classroom](results/2026-11-04-regenerated/classroom) | Classroom | 40 | Included in the latest four-scene run |
+| [Regenerated apartment](results/2026-11-04-regenerated/apartment) | Apartment | 35 | Included in the latest four-scene run |
 
-The held-out requests were generated once (seed 1; a request drawn twice is
-replaced or dropped) and are run once, after the last change to PIVOT's agent
-and tools: no code changes after seeing how they were answered. The three rooms
-are in the demo, and the 3D building was tuned on them; the requests, and how
-the agent answers them, were never seen during development.
+The latest archive contains 139 tasks and 556 unique task/variant records. Request ids
+refer to particular objects, so tasks must use their matching scene. Scene fingerprints
+were checked against the run's archived `scene.json` files before copying results here.
+Do not substitute a freshly reconstructed scene, even if its room name is the same.
 
-The requests name objects by number, so they only hold for the scene they were
-made on: `scene.sha256` records it, and the script refuses another one.
+The office was used during development and the other rooms were used for reconstruction
+tuning. The run has no recorded launch code commit or exact model version; do not describe
+it as a verified frozen-code held-out experiment. The `heldout` names used by the launcher
+express the intended task split, not proof of an independently unseen-room protocol.
 
 ## Kinds of requests
 
@@ -63,17 +65,31 @@ model calls and tokens per request. `summary.json` holds them all, by kind too.
 
 ## Results
 
-Development set (office, 36 requests):
+See the [main results tables](../README.md#results) and the
+[archived run](results/2026-11-04-regenerated) for all original records and the audit:
 
-| Variant | Success (95% CI) | False claims | False refusals | Latency p50 |
-|---|---|---|---|---|
-| Muse alone | 53% (37–68%) | 15/36 | 2/36 | 20 s |
-| Muse + a final check | 86% (71–94%) | 3/36 | 2/36 | 41 s |
-| **PIVOT** | **100% (90–100%)** | **0/36** | **0/36** | 14 s |
-| Geometric search alone | 97% (86–100%) | 1/36 | 0/36 | 2 s |
+- PIVOT: **134/139 (96.4%)**, three erroneous success claims, two false refusals.
+- Muse alone: **47/139 (33.8%)** with explicit errors counted as failures; the unmodified
+  original summaries report 48/139 because one timeout is counted as a correct refusal.
+- Muse + final check: **115/139 (82.7%)**.
+- Geometric search alone: **139/139**, with structured tasks and planner-derived labels.
+- Separate recorded safety contracts: **41 passed, 1 expected failure**; synthetic scenes
+  and scripted dialogue, not a live-model or browser evaluation.
 
-Held-out set: made and run once on the rooms of the demo as they are finally
-built, every variant at the same time, with Muse and with open weights.
+Open-weight launchers are provided below, but this archive contains only the API variants.
+No open-weight performance is inferred from these numbers. The earlier 36-task office
+result is historical and development-biased; it is not substituted for the latest run.
+
+Recompute the archived audit without API calls:
+
+```bash
+python eval/results/2026-11-04-regenerated/audit.py
+```
+
+The audit validates complete task/variant coverage, task kinds/labels and original summary
+counts. Its adjusted aggregate counts explicit `error:` outcomes as failures without
+modifying the original records. It writes `audit.json` and file checksums. Scene/cloud
+snapshots are not included in the Git archive; `scene.sha256` identifies each required scene.
 
 The demo itself is checked by hand before a release or a recording, on a laptop
 and on a phone: [demo-checklist.md](demo-checklist.md).
